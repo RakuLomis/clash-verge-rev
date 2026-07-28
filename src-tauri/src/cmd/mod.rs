@@ -16,11 +16,11 @@ pub mod runtime;
 pub mod save_profile;
 pub mod service;
 pub mod system;
+pub mod tracing;
 pub mod uwp;
 pub mod validate;
 pub mod verge;
 pub mod webdav;
-pub mod tracing;
 
 // Re-export all command functions for backwards compatibility
 pub use app::*;
@@ -35,11 +35,11 @@ pub use runtime::*;
 pub use save_profile::*;
 pub use service::*;
 pub use system::*;
+pub use tracing::*;
 pub use uwp::*;
 pub use validate::*;
 pub use verge::*;
 pub use webdav::*;
-pub use tracing::*;
 
 pub trait StringifyErr<T> {
     fn stringify_err(self) -> CmdResult<T>;

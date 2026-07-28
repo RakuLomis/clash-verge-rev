@@ -297,7 +297,11 @@ impl IVerge {
         if let Some(ref core) = config.clash_core {
             let core_str = core.trim();
             if core_str.is_empty() {
-                logging!(warn, Type::Config, "启动时发现clash_core配置为空, 将自动修正为 'verge-mihomo'");
+                logging!(
+                    warn,
+                    Type::Config,
+                    "启动时发现clash_core配置为空, 将自动修正为 'verge-mihomo'"
+                );
                 config.clash_core = Some("verge-mihomo".into());
                 needs_fix = true;
             }

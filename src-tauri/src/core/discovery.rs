@@ -1,6 +1,17 @@
 use std::path::{Path, PathBuf};
 
-const TARGET_TRIPLE: &str = env!("TARGET");
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+const TARGET_TRIPLE: &str = "x86_64-unknown-linux-gnu";
+#[cfg(all(target_arch = "aarch64", target_os = "linux", target_env = "gnu"))]
+const TARGET_TRIPLE: &str = "aarch64-unknown-linux-gnu";
+#[cfg(all(target_arch = "x86_64", target_os = "macos"))]
+const TARGET_TRIPLE: &str = "x86_64-apple-darwin";
+#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+const TARGET_TRIPLE: &str = "aarch64-apple-darwin";
+#[cfg(all(target_arch = "x86_64", target_os = "windows"))]
+const TARGET_TRIPLE: &str = "x86_64-pc-windows-msvc";
+#[cfg(all(target_arch = "aarch64", target_os = "windows"))]
+const TARGET_TRIPLE: &str = "aarch64-pc-windows-msvc";
 
 pub fn sidecar_dir() -> PathBuf {
     if cfg!(debug_assertions) {
@@ -52,11 +63,7 @@ pub fn resolve_core_path(name: &str) -> Option<PathBuf> {
     let filename = format!("{}-{}", name, TARGET_TRIPLE);
 
     let path = dir.join(&filename);
-    if path.exists() {
-        Some(path)
-    } else {
-        None
-    }
+    if path.exists() { Some(path) } else { None }
 }
 
 pub fn is_valid_core(name: &str) -> bool {

@@ -9,7 +9,7 @@ pub struct TracingState {
     pub output: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TracingPatch {
     pub enabled: Option<bool>,
     pub output: Option<String>,
@@ -31,7 +31,7 @@ pub async fn get_tracing_state() -> CmdResult<TracingState> {
     }
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
-        return Err(format!("mihomo returned {}", resp.status()));
+        return Err(format!("mihomo returned {}", resp.status()).into());
     }
     let state: TracingState = resp.json().await.map_err(|e| e.to_string())?;
     Ok(state)
@@ -48,7 +48,7 @@ pub async fn patch_tracing_state(payload: TracingPatch) -> CmdResult<TracingStat
     let body = serde_json::to_value(&payload).map_err(|e| e.to_string())?;
     let resp = req.json(&body).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
-        return Err(format!("mihomo returned {}", resp.status()));
+        return Err(format!("mihomo returned {}", resp.status()).into());
     }
     let state: TracingState = resp.json().await.map_err(|e| e.to_string())?;
     Ok(state)

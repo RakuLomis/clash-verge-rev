@@ -339,11 +339,10 @@ impl CoreConfigValidator {
         let app_dir = dirs::app_home_dir()?;
         let app_dir_str = dirs::path_to_str(&app_dir)?;
 
-        let command =
-            app_handle
-                .shell()
-                .command(core_path)
-                .args(["-t", "-d", app_dir_str, "-f", config_path]);
+        let command = app_handle
+            .shell()
+            .command(core_path)
+            .args(["-t", "-d", app_dir_str, "-f", config_path]);
         let output = command.output().await?;
 
         let status = &output.status;
