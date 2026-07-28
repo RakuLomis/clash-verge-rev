@@ -12,11 +12,17 @@ export const useTracing = () => {
   })
 
   const patchTracing = async (payload: ITracingPatch) => {
+    const previous = queryClient.getQueryData<ITracingState>(['getTracingState'])
     queryClient.setQueryData(['getTracingState'], (old: ITracingState | undefined) =>
       old ? { ...old, ...payload } : old
     )
-    await patchTracingState(payload)
-    await mutateTracing()
+    try {
+      await patchTracingState(payload)
+      await mutateTracing()
+    } catch (e) {
+      queryClient.setQueryData(['getTracingState'], previous)
+      throw e
+    }
   }
 
   return { tracing, mutateTracing, patchTracing, isError, error }

@@ -166,7 +166,7 @@ export function ClashCoreViewer({ ref }: { ref?: Ref<DialogRef> }) {
             <ListItemText
               primary={core}
               secondary={
-                clash_core === core ? 'Current' : undefined
+                clash_core === core ? t('settings.modals.clashCore.currentCore') : undefined
               }
             />
             {changingCore === core ? (
@@ -175,7 +175,7 @@ export function ClashCoreViewer({ ref }: { ref?: Ref<DialogRef> }) {
               clash_core === core && (
                 <Chip
                   size="small"
-                  label="Current"
+                  label={t('settings.modals.clashCore.currentCore')}
                   color="primary"
                 />
               )

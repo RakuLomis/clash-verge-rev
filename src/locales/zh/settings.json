@@ -294,7 +294,8 @@
       "variants": {
         "release": "正式版",
         "alpha": "预览版"
-      }
+      },
+      "currentCore": "当前"
     },
     "liteMode": {
       "title": "轻量模式设置",

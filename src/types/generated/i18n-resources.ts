@@ -789,6 +789,7 @@ export interface TranslationResources {
           }
         }
         clashCore: {
+          currentCore: string
           variants: {
             alpha: string
             release: string
