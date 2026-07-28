@@ -1090,3 +1090,13 @@ interface ITrafficWorkerLogMessage {
 type TrafficWorkerResponseMessage =
   | ITrafficWorkerSnapshotMessage
   | ITrafficWorkerLogMessage
+
+interface ITracingState {
+  enabled: boolean
+  output: string
+}
+
+interface ITracingPatch {
+  enabled?: boolean
+  output?: string
+}
