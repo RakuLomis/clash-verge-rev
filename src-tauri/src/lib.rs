@@ -159,6 +159,8 @@ mod app_init {
             cmd::is_service_available,
             cmd::get_clash_info,
             cmd::patch_clash_config,
+            cmd::get_tracing_state,
+            cmd::patch_tracing_state,
             cmd::patch_clash_mode,
             cmd::change_clash_core,
             cmd::get_runtime_config,
