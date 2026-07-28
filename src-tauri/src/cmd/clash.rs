@@ -247,3 +247,10 @@ pub async fn get_clash_logs() -> CmdResult<Vec<CompactString>> {
     let logs = CoreManager::global().get_clash_logs().await.unwrap_or_default();
     Ok(logs)
 }
+
+/// 列出所有可用的核心
+#[tauri::command]
+pub async fn list_available_cores() -> CmdResult<Vec<String>> {
+    use crate::core::discovery;
+    Ok(discovery::discover_cores().into_iter().map(String::from).collect())
+}
