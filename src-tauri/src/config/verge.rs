@@ -284,9 +284,6 @@ pub struct IVergeTheme {
 }
 
 impl IVerge {
-    /// 有效的clash核心名称
-    pub const VALID_CLASH_CORES: &'static [&'static str] = &["verge-mihomo", "verge-mihomo-alpha"];
-
     /// 验证并修正配置文件中的clash_core值
     pub async fn validate_and_fix_config() -> Result<()> {
         let config_path = dirs::verge_path()?;
@@ -299,13 +296,8 @@ impl IVerge {
 
         if let Some(ref core) = config.clash_core {
             let core_str = core.trim();
-            if core_str.is_empty() || !Self::VALID_CLASH_CORES.contains(&core_str) {
-                logging!(
-                    warn,
-                    Type::Config,
-                    "启动时发现无效的clash_core配置: '{}', 将自动修正为 'verge-mihomo'",
-                    core
-                );
+            if core_str.is_empty() {
+                logging!(warn, Type::Config, "启动时发现clash_core配置为空, 将自动修正为 'verge-mihomo'");
                 config.clash_core = Some("verge-mihomo".into());
                 needs_fix = true;
             }

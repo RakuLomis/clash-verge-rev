@@ -1,4 +1,6 @@
 mod config;
+#[path = "../discovery.rs"]
+pub mod discovery;
 mod lifecycle;
 mod state;
 
