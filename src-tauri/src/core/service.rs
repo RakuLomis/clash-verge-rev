@@ -1,6 +1,6 @@
 use crate::{
     config::{Config, IClashTemp},
-    core::{logger::Logger, tray::Tray},
+    core::{logger::Logger, manager::discovery, tray::Tray},
     utils::dirs,
 };
 use anyhow::{Context as _, Result, bail};
@@ -357,6 +357,12 @@ pub(super) async fn start_with_existing_service(config_file: &PathBuf) -> Result
 
     let bin_ext = if cfg!(windows) { ".exe" } else { "" };
     let bin_path = current_exe()?.with_file_name(format!("{clash_core}{bin_ext}"));
+    let bin_path = if bin_path.exists() {
+        bin_path
+    } else {
+        discovery::resolve_core_path(&clash_core)
+            .ok_or_else(|| anyhow::anyhow!("Core binary not found: {clash_core}"))?
+    };
 
     let payload = clash_verge_service_ipc::ClashConfig {
         core_config: CoreConfig {

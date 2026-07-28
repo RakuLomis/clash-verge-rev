@@ -11,6 +11,7 @@ use tokio::fs;
 
 use crate::config::{Config, ConfigType};
 use crate::core::handle;
+use crate::core::manager::discovery;
 use crate::singleton;
 use crate::utils::dirs;
 use clash_verge_logging::{Type, logging};
@@ -332,18 +333,16 @@ impl CoreConfigValidator {
         logging!(info, Type::Validate, "开始验证配置文件: {}", config_path);
 
         let clash_core = Config::verge().await.latest_arc().get_valid_clash_core();
-        logging!(info, Type::Validate, "使用内核: {}", clash_core);
-
+        let core_path = discovery::resolve_core_path(&clash_core)
+            .ok_or_else(|| anyhow::anyhow!("Core binary not found: {}", clash_core))?;
         let app_handle = handle::Handle::app_handle();
         let app_dir = dirs::app_home_dir()?;
         let app_dir_str = dirs::path_to_str(&app_dir)?;
-        logging!(info, Type::Validate, "验证目录: {}", app_dir_str);
 
-        // 使用子进程运行clash验证配置
         let command =
             app_handle
                 .shell()
-                .sidecar(clash_core.as_str())?
+                .command(core_path)
                 .args(["-t", "-d", app_dir_str, "-f", config_path]);
         let output = command.output().await?;
 

@@ -13,6 +13,8 @@ use log::Level;
 use scopeguard::defer;
 use tauri_plugin_shell::ShellExt as _;
 
+use crate::core::manager::discovery;
+
 impl CoreManager {
     pub async fn get_clash_logs(&self) -> Result<Vec<CompactString>> {
         match *self.get_running_mode() {
@@ -28,13 +30,15 @@ impl CoreManager {
         let config_file = Config::generate_file(crate::config::ConfigType::Run).await?;
         let app_handle = handle::Handle::app_handle();
         let clash_core = Config::verge().await.latest_arc().get_valid_clash_core();
+        let core_path = discovery::resolve_core_path(&clash_core)
+            .ok_or_else(|| anyhow::anyhow!("Core binary not found: {}", clash_core))?;
         let config_dir = dirs::app_home_dir()?;
 
         #[cfg(unix)]
         let previous_mask = unsafe { tauri_plugin_clash_verge_sysinfo::libc::umask(0o007) };
         let (mut rx, child) = app_handle
             .shell()
-            .sidecar(clash_core.as_str())?
+            .command(core_path)
             .args([
                 "-d",
                 dirs::path_to_str(&config_dir)?,
