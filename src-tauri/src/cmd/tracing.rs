@@ -1,7 +1,6 @@
 use super::CmdResult;
 use crate::config::Config;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TracingState {
@@ -16,15 +15,15 @@ pub struct TracingPatch {
     pub output: Option<String>,
 }
 
-async fn tracing_url() -> Result<(String, Option<String>), String> {
+async fn tracing_url() -> (String, Option<String>) {
     let clash_info = Config::clash().await.data_arc().get_client_info();
     let url = format!("http://{}/experimental/tracing", clash_info.server);
-    Ok((url, clash_info.secret))
+    (url, clash_info.secret)
 }
 
 #[tauri::command]
 pub async fn get_tracing_state() -> CmdResult<TracingState> {
-    let (url, secret) = tracing_url().await.map_err(|e| e.to_string())?;
+    let (url, secret) = tracing_url().await;
     let client = reqwest::Client::new();
     let mut req = client.get(&url);
     if let Some(ref s) = secret {
@@ -40,7 +39,7 @@ pub async fn get_tracing_state() -> CmdResult<TracingState> {
 
 #[tauri::command]
 pub async fn patch_tracing_state(payload: TracingPatch) -> CmdResult<TracingState> {
-    let (url, secret) = tracing_url().await.map_err(|e| e.to_string())?;
+    let (url, secret) = tracing_url().await;
     let client = reqwest::Client::new();
     let mut req = client.patch(&url);
     if let Some(ref s) = secret {
