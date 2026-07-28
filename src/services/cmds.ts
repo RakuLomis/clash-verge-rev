@@ -585,3 +585,11 @@ export const isPortInUse = async (port: number) => {
     return false
   }
 }
+
+export async function getTracingState() {
+  return invoke<ITracingState>('get_tracing_state')
+}
+
+export async function patchTracingState(payload: ITracingPatch) {
+  return invoke<ITracingState>('patch_tracing_state', { payload })
+}
