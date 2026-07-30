@@ -184,6 +184,16 @@ fn install_service() -> Result<()> {
         bail!(format!("installer not found: {install_path:?}"));
     }
 
+    let metadata = install_path
+        .metadata()
+        .with_context(|| format!("failed to inspect installer: {install_path:?}"))?;
+    if !metadata.is_file() || metadata.len() == 0 {
+        bail!(
+            "installer is empty or invalid: {}. Run `pnpm prebuild` and restart Clash Verge",
+            install_path.display()
+        );
+    }
+
     let install_shell: String = install_path.to_string_lossy().replace(" ", "\\ ");
 
     let elevator = crate::utils::help::linux_elevator();

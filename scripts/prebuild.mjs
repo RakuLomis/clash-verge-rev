@@ -6,8 +6,8 @@ import path from 'path'
 import zlib from 'zlib'
 
 import AdmZip from 'adm-zip'
+import axios from 'axios'
 import { glob } from 'glob'
-import { HttpsProxyAgent } from 'https-proxy-agent'
 import { extract } from 'tar'
 
 import { log_debug, log_error, log_info, log_success } from './utils.mjs'
@@ -217,24 +217,13 @@ async function getLatestAlphaVersion() {
       return
     }
   }
-  const options = {}
-  const httpProxy =
-    process.env.HTTP_PROXY ||
-    process.env.http_proxy ||
-    process.env.HTTPS_PROXY ||
-    process.env.https_proxy
-  if (httpProxy) options.agent = new HttpsProxyAgent(httpProxy)
 
   try {
-    const response = await fetch(META_ALPHA_VERSION_URL, {
-      ...options,
-      method: 'GET',
+    const response = await axios.get(META_ALPHA_VERSION_URL, {
+      responseType: 'text',
+      timeout: 30_000,
     })
-    if (!response.ok)
-      throw new Error(
-        `Failed to fetch ${META_ALPHA_VERSION_URL}: ${response.status}`,
-      )
-    META_ALPHA_VERSION = (await response.text()).trim()
+    META_ALPHA_VERSION = String(response.data).trim()
     log_info(`Latest alpha version: ${META_ALPHA_VERSION}`)
     await setCachedVersion('META_ALPHA_VERSION', META_ALPHA_VERSION)
   } catch (err) {
@@ -251,22 +240,13 @@ async function getLatestReleaseVersion() {
       return
     }
   }
-  const options = {}
-  const httpProxy =
-    process.env.HTTP_PROXY ||
-    process.env.http_proxy ||
-    process.env.HTTPS_PROXY ||
-    process.env.https_proxy
-  if (httpProxy) options.agent = new HttpsProxyAgent(httpProxy)
 
   try {
-    const response = await fetch(META_VERSION_URL, {
-      ...options,
-      method: 'GET',
+    const response = await axios.get(META_VERSION_URL, {
+      responseType: 'text',
+      timeout: 30_000,
     })
-    if (!response.ok)
-      throw new Error(`Failed to fetch ${META_VERSION_URL}: ${response.status}`)
-    META_VERSION = (await response.text()).trim()
+    META_VERSION = String(response.data).trim()
     log_info(`Latest release version: ${META_VERSION}`)
     await setCachedVersion('META_VERSION', META_VERSION)
   } catch (err) {
@@ -318,28 +298,21 @@ function clashMeta() {
 // download helper (增强：status + magic bytes)
 // =======================
 async function downloadFile(url, outPath) {
-  const options = {}
-  const httpProxy =
-    process.env.HTTP_PROXY ||
-    process.env.http_proxy ||
-    process.env.HTTPS_PROXY ||
-    process.env.https_proxy
-  if (httpProxy) options.agent = new HttpsProxyAgent(httpProxy)
-
-  const response = await fetch(url, {
-    ...options,
-    method: 'GET',
+  const response = await axios.get(url, {
     headers: { 'Content-Type': 'application/octet-stream' },
+    maxRedirects: 10,
+    responseType: 'arraybuffer',
+    timeout: 120_000,
+    validateStatus: () => true,
   })
-  if (!response.ok) {
-    const body = await response.text().catch(() => '')
+  const buf = Buffer.from(response.data ?? '')
+  if (response.status < 200 || response.status >= 300) {
     // 将 body 写到文件以便排查（可通过临时目录查看）
     await fsp.mkdir(path.dirname(outPath), { recursive: true })
-    await fsp.writeFile(outPath, body)
+    await fsp.writeFile(outPath, buf)
     throw new Error(`Failed to download ${url}: status ${response.status}`)
   }
 
-  const buf = Buffer.from(await response.arrayBuffer())
   await fsp.mkdir(path.dirname(outPath), { recursive: true })
 
   // 简单 magic 字节检查
@@ -623,6 +596,17 @@ const SERVICE_BINARIES = [
   'clash-verge-service-uninstall',
 ]
 
+const MIN_SERVICE_BINARY_SIZE = 1024
+
+function isUsableServiceBinary(filePath) {
+  try {
+    const stat = fs.statSync(filePath)
+    return stat.isFile() && stat.size >= MIN_SERVICE_BINARY_SIZE
+  } catch {
+    return false
+  }
+}
+
 function serviceFileInfo(name) {
   const ext = platform === 'win32' ? '.exe' : ''
   const suffix = platform === 'linux' ? '-' + SIDECAR_HOST : ''
@@ -646,29 +630,18 @@ async function getLatestServiceVersion() {
     }
   }
 
-  const options = {}
-  const httpProxy =
-    process.env.HTTP_PROXY ||
-    process.env.http_proxy ||
-    process.env.HTTPS_PROXY ||
-    process.env.https_proxy
-  if (httpProxy) options.agent = new HttpsProxyAgent(httpProxy)
-
   try {
-    const response = await fetch(SERVICE_LATEST_URL, {
-      ...options,
-      method: 'GET',
-      redirect: 'follow',
+    const response = await axios.get(SERVICE_LATEST_URL, {
+      maxRedirects: 10,
+      responseType: 'text',
+      timeout: 30_000,
     })
-    if (!response.ok)
-      throw new Error(
-        `Failed to fetch ${SERVICE_LATEST_URL}: ${response.status}`,
-      )
+    const responseUrl = response.request?.res?.responseUrl ?? SERVICE_LATEST_URL
 
-    SERVICE_VERSION = parseServiceVersionFromUrl(response.url)
+    SERVICE_VERSION = parseServiceVersionFromUrl(responseUrl)
     if (!SERVICE_VERSION)
       throw new Error(
-        `Unable to resolve service release tag from ${response.url}`,
+        `Unable to resolve service release tag from ${responseUrl}`,
       )
 
     log_info(`Latest service version: ${SERVICE_VERSION}`)
@@ -701,7 +674,10 @@ async function resolveServiceBundle() {
     }
   })
 
-  if (!FORCE && files.every(({ targetPath }) => fs.existsSync(targetPath))) {
+  if (
+    !FORCE &&
+    files.every(({ targetPath }) => isUsableServiceBinary(targetPath))
+  ) {
     log_success('"clash-verge-service-ipc" already exists, skipping download')
     return
   }
@@ -736,6 +712,11 @@ async function resolveServiceBundle() {
       const extractedFile = await findExtractedFile(tempDir, sourceFile)
       if (!extractedFile) {
         throw new Error(`Expected binary ${sourceFile} not found in archive`)
+      }
+      if (!isUsableServiceBinary(extractedFile)) {
+        throw new Error(
+          `Extracted service binary ${sourceFile} is empty or invalid`,
+        )
       }
 
       await fsp.copyFile(extractedFile, targetPath)
