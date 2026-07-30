@@ -13,7 +13,7 @@ use log::Level;
 use scopeguard::defer;
 use tauri_plugin_shell::ShellExt as _;
 
-use crate::core::manager::discovery;
+use crate::core::discovery;
 
 impl CoreManager {
     pub async fn get_clash_logs(&self) -> Result<Vec<CompactString>> {

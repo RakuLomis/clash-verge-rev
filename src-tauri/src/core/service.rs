@@ -1,6 +1,6 @@
 use crate::{
     config::{Config, IClashTemp},
-    core::{logger::Logger, manager::discovery, tray::Tray},
+    core::{discovery, logger::Logger, tray::Tray},
     utils::dirs,
 };
 use anyhow::{Context as _, Result, bail};

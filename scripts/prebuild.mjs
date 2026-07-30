@@ -61,11 +61,10 @@ const { platform, arch } = target
   ? { platform: PLATFORM_MAP[target], arch: ARCH_MAP[target] }
   : process
 
-const SIDECAR_HOST = target
-  ? target
-  : execSync('rustc -vV')
-      .toString()
-      .match(/(?<=host: ).+(?=\s*)/g)[0]
+const RUST_HOST = execSync('rustc -vV')
+  .toString()
+  .match(/(?<=host: ).+(?=\s*)/g)[0]
+const SIDECAR_HOST = target ?? RUST_HOST
 
 const RESOURCES_DIR = path.join(cwd, 'src-tauri', 'resources')
 const SIDECAR_DIR = path.join(cwd, 'src-tauri', 'sidecar')
@@ -458,6 +457,42 @@ async function resolveSidecar(binInfo) {
   }
 }
 
+async function resolveTrafficTracer() {
+  const targetPath = path.join(SIDECAR_DIR, `verge-mihomo-tt-${SIDECAR_HOST}`)
+  if (!FORCE && fs.existsSync(targetPath)) {
+    log_success('"verge-mihomo-tt" already exists, skipping copy')
+    return
+  }
+
+  const configuredSource = process.env.MIHOMO_TRAFFIC_TRACER_BIN
+  const localCandidates =
+    SIDECAR_HOST === RUST_HOST
+      ? [
+          path.resolve(cwd, '..', 'mihomo', 'bin', 'mihomo-traffictracer-v2'),
+          path.resolve(cwd, '..', 'mihomo', 'bin', 'mihomo-traffictracer'),
+        ]
+      : []
+  const sourcePath = [configuredSource, ...localCandidates].find(
+    (candidate) =>
+      candidate && fs.statSync(candidate, { throwIfNoEntry: false })?.isFile(),
+  )
+
+  if (!sourcePath) {
+    throw new Error(
+      [
+        `TrafficTracer core for ${SIDECAR_HOST} was not found.`,
+        'Set MIHOMO_TRAFFIC_TRACER_BIN to the matching executable,',
+        `or place it at ${targetPath}.`,
+      ].join(' '),
+    )
+  }
+
+  await fsp.mkdir(SIDECAR_DIR, { recursive: true })
+  await fsp.copyFile(sourcePath, targetPath)
+  await fsp.chmod(targetPath, 0o755)
+  log_success(`copied "verge-mihomo-tt" from ${sourcePath}`)
+}
+
 async function resolveResource(binInfo) {
   const { file, downloadURL, localPath, dir } = binInfo
   const baseDir = dir ?? RESOURCES_DIR
@@ -762,6 +797,12 @@ const tasks = [
     func: () =>
       getLatestReleaseVersion().then(() => resolveSidecar(clashMeta())),
     retry: 5,
+  },
+  {
+    name: 'verge-mihomo-tt',
+    func: resolveTrafficTracer,
+    retry: 1,
+    linuxOnly: true,
   },
   { name: 'plugin', func: resolvePlugin, retry: 5, winOnly: true },
   { name: 'service', func: resolveServiceBundle, retry: 5 },

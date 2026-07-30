@@ -89,6 +89,8 @@ pnpm run prebuild
 pnpm dev
 ```
 
+TrafficTracer UI users can follow the [TrafficTracer UI Quickstart](./docs/TRAFFIC_TRACER_QUICKSTART.md).
+
 ## Contributions
 
 Issue and PR welcome!

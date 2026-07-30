@@ -1,5 +1,5 @@
 import { LanRounded, SettingsRounded } from '@mui/icons-material'
-import { MenuItem, Select, TextField, Typography } from '@mui/material'
+import { Alert, MenuItem, Select, TextField, Typography } from '@mui/material'
 import { invoke } from '@tauri-apps/api/core'
 import { useLockFn } from 'ahooks'
 import { useRef, useState } from 'react'
@@ -37,7 +37,12 @@ const SettingClash = ({ onError }: Props) => {
 
   const { clash, version, mutateClash, patchClash } = useClash()
   const { verge, patchVerge } = useVerge()
-  const { tracing, patchTracing } = useTracing()
+  const {
+    tracing,
+    patchTracing,
+    isError: tracingIsError,
+    error: tracingError,
+  } = useTracing()
   const [, setClashLog] = useClashLog()
 
   const {
@@ -288,9 +293,7 @@ const SettingClash = ({ onError }: Props) => {
         onClick={() => tunnelRef.current?.open()}
       />
 
-      <SettingItem
-        label={t('settings.sections.clash.form.fields.tracing')}
-      >
+      <SettingItem label={t('settings.sections.clash.form.fields.tracing')}>
         <GuardState
           value={tracing?.enabled ?? false}
           valueProps="checked"
@@ -302,6 +305,14 @@ const SettingClash = ({ onError }: Props) => {
           <Switch edge="end" />
         </GuardState>
       </SettingItem>
+
+      {tracingIsError && (
+        <Alert severity="error" sx={{ mx: 2, my: 1 }}>
+          {tracingError instanceof Error
+            ? tracingError.message
+            : String(tracingError)}
+        </Alert>
+      )}
 
       {tracing?.enabled && (
         <SettingItem
@@ -321,7 +332,12 @@ const SettingClash = ({ onError }: Props) => {
             sx={{ width: 250, input: { py: '7.5px' } }}
             onBlur={(e) => {
               if (e.target.value !== tracing?.output) {
-                patchTracing({ output: e.target.value || '' })
+                void patchTracing({ output: e.target.value || '' }).catch(
+                  (error) =>
+                    onError(
+                      error instanceof Error ? error : new Error(String(error)),
+                    ),
+                )
               }
             }}
           />

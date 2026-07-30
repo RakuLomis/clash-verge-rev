@@ -46,7 +46,7 @@ impl CoreManager {
     }
 
     pub async fn change_core(&self, clash_core: &String) -> Result<(), String> {
-        if !super::discovery::is_valid_core(&clash_core) {
+        if !crate::core::discovery::is_valid_core(&clash_core) {
             return Err(format!("Invalid clash core: {}", clash_core).into());
         }
 

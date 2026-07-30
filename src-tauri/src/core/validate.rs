@@ -10,8 +10,8 @@ use tauri_plugin_shell::ShellExt as _;
 use tokio::fs;
 
 use crate::config::{Config, ConfigType};
+use crate::core::discovery;
 use crate::core::handle;
-use crate::core::manager::discovery;
 use crate::singleton;
 use crate::utils::dirs;
 use clash_verge_logging::{Type, logging};

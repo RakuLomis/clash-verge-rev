@@ -3,6 +3,7 @@ import {
   SwitchAccessShortcutRounded,
 } from '@mui/icons-material'
 import {
+  Alert,
   Box,
   Button,
   Chip,
@@ -11,11 +12,11 @@ import {
   ListItemButton,
   ListItemText,
 } from '@mui/material'
+import { invoke } from '@tauri-apps/api/core'
 import { useLockFn } from 'ahooks'
 import type { Ref } from 'react'
 import { useImperativeHandle, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { invoke } from '@tauri-apps/api/core'
 import { closeAllConnections, upgradeCore } from 'tauri-plugin-mihomo-api'
 
 import { BaseDialog, DialogRef } from '@/components/base'
@@ -35,14 +36,18 @@ export function ClashCoreViewer({ ref }: { ref?: Ref<DialogRef> }) {
   const [restarting, setRestarting] = useState(false)
   const [changingCore, setChangingCore] = useState<string | null>(null)
   const [availableCores, setAvailableCores] = useState<string[]>([])
+  const [coreLoadError, setCoreLoadError] = useState<string | null>(null)
 
   useImperativeHandle(ref, () => ({
     open: async () => {
+      setCoreLoadError(null)
       try {
         const cores = await invoke<string[]>('list_available_cores')
         setAvailableCores(cores)
-      } catch {
-        setAvailableCores(['verge-mihomo', 'verge-mihomo-alpha'])
+        if (cores.length === 0) setCoreLoadError(t('shared.statuses.empty'))
+      } catch (error) {
+        setAvailableCores([])
+        setCoreLoadError(String(error))
       }
       setOpen(true)
     },
@@ -155,6 +160,11 @@ export function ClashCoreViewer({ ref }: { ref?: Ref<DialogRef> }) {
       onClose={() => setOpen(false)}
       onCancel={() => setOpen(false)}
     >
+      {coreLoadError && (
+        <Alert severity="error" sx={{ mb: 1 }}>
+          {coreLoadError}
+        </Alert>
+      )}
       <List component="nav">
         {availableCores.map((core) => (
           <ListItemButton
@@ -166,7 +176,9 @@ export function ClashCoreViewer({ ref }: { ref?: Ref<DialogRef> }) {
             <ListItemText
               primary={core}
               secondary={
-                clash_core === core ? t('settings.modals.clashCore.currentCore') : undefined
+                clash_core === core
+                  ? t('settings.modals.clashCore.currentCore')
+                  : undefined
               }
             />
             {changingCore === core ? (

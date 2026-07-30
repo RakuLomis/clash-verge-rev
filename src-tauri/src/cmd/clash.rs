@@ -252,5 +252,9 @@ pub async fn get_clash_logs() -> CmdResult<Vec<CompactString>> {
 #[tauri::command]
 pub async fn list_available_cores() -> CmdResult<Vec<String>> {
     use crate::core::discovery;
-    Ok(discovery::discover_cores().into_iter().map(String::from).collect())
+    let cores = discovery::discover_cores();
+    if cores.is_empty() {
+        return Err(format!("No core binaries found in {}", discovery::sidecar_dir().display()).into());
+    }
+    Ok(cores.into_iter().map(String::from).collect())
 }
