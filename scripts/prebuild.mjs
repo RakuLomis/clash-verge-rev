@@ -11,6 +11,7 @@ import { glob } from 'glob'
 import { extract } from 'tar'
 
 import { log_debug, log_error, log_info, log_success } from './utils.mjs'
+import { resolveTrafficTracerWorkerSidecar } from './traffictracer-worker-resolver.mjs'
 
 /**
  * Prebuild script with optimization features:
@@ -466,6 +467,22 @@ async function resolveTrafficTracer() {
   log_success(`copied "verge-mihomo-tt" from ${sourcePath}`)
 }
 
+async function resolveTrafficTracerWorker() {
+  const result = await resolveTrafficTracerWorkerSidecar({
+    cwd,
+    sidecarDir: SIDECAR_DIR,
+    targetTriple: SIDECAR_HOST,
+    configuredSource: process.env.TRAFFICTRACER_WORKER_BIN,
+    force: FORCE,
+  })
+
+  if (result.status === 'skipped') {
+    log_success('"traffictracer-worker" already exists, skipping copy')
+  } else {
+    log_success('copied "traffictracer-worker" from ' + result.sourcePath)
+  }
+}
+
 async function resolveResource(binInfo) {
   const { file, downloadURL, localPath, dir } = binInfo
   const baseDir = dir ?? RESOURCES_DIR
@@ -782,6 +799,12 @@ const tasks = [
   {
     name: 'verge-mihomo-tt',
     func: resolveTrafficTracer,
+    retry: 1,
+    linuxOnly: true,
+  },
+  {
+    name: 'traffictracer-worker',
+    func: resolveTrafficTracerWorker,
     retry: 1,
     linuxOnly: true,
   },
