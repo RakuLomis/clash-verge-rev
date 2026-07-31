@@ -15,7 +15,8 @@ use tokio::sync::{broadcast, oneshot};
 
 use super::{
     protocol::{
-        NotificationMethod, Request, RequestId, RequestMethod, WORKER_API_VERSION, WorkerError, WorkerErrorCode,
+        EmptyParams, FLOW_SCHEMA_VERSION, JOB_SCHEMA_VERSION, NotificationMethod, Request, RequestId, RequestMethod,
+        SESSION_SCHEMA_VERSION, WORKER_API_VERSION, WorkerError, WorkerErrorCode,
     },
     worker::{WorkerEvent, WorkerProcess},
 };
@@ -33,6 +34,11 @@ pub enum ClientError {
     Protocol(String),
     Transport(String),
     Timeout(RequestId),
+    VersionMismatch {
+        component: &'static str,
+        supported: u32,
+        actual: u32,
+    },
     WorkerExited,
     Worker {
         code: WorkerErrorCode,
@@ -50,6 +56,14 @@ impl fmt::Display for ClientError {
             Self::Protocol(message) => write!(formatter, "invalid Worker response: {message}"),
             Self::Transport(message) => write!(formatter, "Worker transport failed: {message}"),
             Self::Timeout(id) => write!(formatter, "Worker request timed out: {id:?}"),
+            Self::VersionMismatch {
+                component,
+                supported,
+                actual,
+            } => write!(
+                formatter,
+                "incompatible {component} version: application supports {supported}, Worker reported {actual}"
+            ),
             Self::WorkerExited => write!(formatter, "TrafficTracer Worker exited"),
             Self::Worker { code, message, .. } => {
                 write!(formatter, "Worker returned {code:?}: {message}")
@@ -60,26 +74,95 @@ impl fmt::Display for ClientError {
 
 impl std::error::Error for ClientError {}
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+pub struct HelloResult {
+    pub product: String,
+    pub version: String,
+    pub api_version: u32,
+    pub job_schema_version: u32,
+    pub session_schema_version: u32,
+    pub flow_schema_version: u32,
+    pub methods: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum HandshakeState {
+    NotStarted,
+    Negotiating,
+    Ready(HelloResult),
+    Failed(ClientError),
+}
+
 pub struct WorkerClient {
     process: Arc<WorkerProcess>,
     pending: Arc<Mutex<HashMap<RequestId, PendingSender>>>,
     next_request_id: AtomicU64,
     request_timeout: Duration,
+    handshake: Arc<Mutex<HandshakeState>>,
     router: tauri::async_runtime::JoinHandle<()>,
 }
 
 impl WorkerClient {
     pub fn new(process: Arc<WorkerProcess>, request_timeout: Duration) -> Self {
         let pending = Arc::new(Mutex::new(HashMap::new()));
-        let router = Self::spawn_router(process.subscribe(), Arc::clone(&pending));
+        let handshake = Arc::new(Mutex::new(HandshakeState::NotStarted));
+        let router = Self::spawn_router(process.subscribe(), Arc::clone(&pending), Arc::clone(&handshake));
 
         Self {
             process,
             pending,
             next_request_id: AtomicU64::new(1),
             request_timeout,
+            handshake,
             router,
         }
+    }
+
+    pub fn handshake_state(&self) -> HandshakeState {
+        self.handshake.lock().clone()
+    }
+
+    pub async fn hello(&self) -> Result<HelloResult, ClientError> {
+        {
+            let mut state = self.handshake.lock();
+            match &*state {
+                HandshakeState::Ready(result) => return Ok(result.clone()),
+                HandshakeState::Negotiating => {
+                    return Err(ClientError::Protocol("Worker hello is already in progress".to_owned()));
+                }
+                HandshakeState::NotStarted | HandshakeState::Failed(_) => {
+                    *state = HandshakeState::Negotiating;
+                }
+            }
+        }
+
+        let result = self
+            .request::<_, HelloResult>(RequestMethod::Hello, EmptyParams::default())
+            .await
+            .and_then(Self::validate_hello);
+        *self.handshake.lock() = match &result {
+            Ok(hello) => HandshakeState::Ready(hello.clone()),
+            Err(error) => HandshakeState::Failed(error.clone()),
+        };
+        result
+    }
+
+    fn validate_hello(hello: HelloResult) -> Result<HelloResult, ClientError> {
+        for (component, supported, actual) in [
+            ("Worker API", WORKER_API_VERSION, hello.api_version),
+            ("Job schema", JOB_SCHEMA_VERSION, hello.job_schema_version),
+            ("Session schema", SESSION_SCHEMA_VERSION, hello.session_schema_version),
+            ("Flow schema", FLOW_SCHEMA_VERSION, hello.flow_schema_version),
+        ] {
+            if actual != supported {
+                return Err(ClientError::VersionMismatch {
+                    component,
+                    supported,
+                    actual,
+                });
+            }
+        }
+        Ok(hello)
     }
 
     pub async fn request<P, R>(&self, method: RequestMethod, params: P) -> Result<R, ClientError>
@@ -129,6 +212,7 @@ impl WorkerClient {
     fn spawn_router(
         mut events: broadcast::Receiver<WorkerEvent>,
         pending: Arc<Mutex<HashMap<RequestId, PendingSender>>>,
+        handshake: Arc<Mutex<HandshakeState>>,
     ) -> tauri::async_runtime::JoinHandle<()> {
         tauri::async_runtime::spawn(async move {
             loop {
@@ -137,19 +221,22 @@ impl WorkerClient {
                         Self::route_line(&pending, &line);
                     }
                     Ok(WorkerEvent::TransportError { error, .. }) => {
-                        Self::fail_all(&pending, ClientError::Transport(error));
+                        let error = ClientError::Transport(error);
+                        *handshake.lock() = HandshakeState::Failed(error.clone());
+                        Self::fail_all(&pending, error);
                     }
                     Ok(WorkerEvent::Exited { .. }) => {
+                        *handshake.lock() = HandshakeState::Failed(ClientError::WorkerExited);
                         Self::fail_all(&pending, ClientError::WorkerExited);
                     }
                     Ok(WorkerEvent::MalformedStdout { .. } | WorkerEvent::Stderr { .. }) => {}
                     Err(broadcast::error::RecvError::Lagged(count)) => {
-                        Self::fail_all(
-                            &pending,
-                            ClientError::Transport(format!("missed {count} Worker process events")),
-                        );
+                        let error = ClientError::Transport(format!("missed {count} Worker process events"));
+                        *handshake.lock() = HandshakeState::Failed(error.clone());
+                        Self::fail_all(&pending, error);
                     }
                     Err(broadcast::error::RecvError::Closed) => {
+                        *handshake.lock() = HandshakeState::Failed(ClientError::WorkerExited);
                         Self::fail_all(&pending, ClientError::WorkerExited);
                         break;
                     }
@@ -326,6 +413,104 @@ mod tests {
     #[derive(Deserialize, Debug, PartialEq, Eq)]
     struct Reply {
         value: String,
+    }
+
+    fn valid_hello() -> Value {
+        serde_json::json!({
+            "product": "TrafficTracer Complete Worker",
+            "version": "0.1.0",
+            "api_version": WORKER_API_VERSION,
+            "job_schema_version": JOB_SCHEMA_VERSION,
+            "session_schema_version": SESSION_SCHEMA_VERSION,
+            "flow_schema_version": FLOW_SCHEMA_VERSION,
+            "methods": ["hello", "environment.diagnose"]
+        })
+    }
+
+    async fn negotiate(harness: &Harness, hello: Value) -> Result<HelloResult, ClientError> {
+        let client = Arc::clone(&harness.client);
+        let negotiation = tokio::spawn(async move { client.hello().await });
+        wait_for_writes(&harness.writes, 1).await;
+        let request: Request<EmptyParams> = serde_json::from_slice(&harness.writes.lock()[0]).unwrap();
+        harness
+            .events
+            .send(CommandEvent::Stdout(
+                serde_json::to_vec(&serde_json::json!({
+                    "api_version": WORKER_API_VERSION,
+                    "type": "response",
+                    "id": request.id,
+                    "result": hello
+                }))
+                .unwrap(),
+            ))
+            .await
+            .unwrap();
+        negotiation.await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn hello_marks_matching_worker_ready() {
+        let harness = harness(Duration::from_secs(1));
+        let hello = negotiate(&harness, valid_hello()).await.unwrap();
+
+        assert_eq!(harness.client.handshake_state(), HandshakeState::Ready(hello));
+        harness.process.stop().unwrap();
+    }
+
+    #[tokio::test]
+    async fn hello_rejects_older_schema() {
+        let harness = harness(Duration::from_secs(1));
+        let mut hello = valid_hello();
+        hello["session_schema_version"] = serde_json::json!(0);
+        let error = negotiate(&harness, hello).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            ClientError::VersionMismatch {
+                component: "Session schema",
+                supported: SESSION_SCHEMA_VERSION,
+                actual: 0,
+            }
+        ));
+        assert!(matches!(
+            harness.client.handshake_state(),
+            HandshakeState::Failed(ClientError::VersionMismatch { .. })
+        ));
+        harness.process.stop().unwrap();
+    }
+
+    #[tokio::test]
+    async fn hello_rejects_newer_schema() {
+        let harness = harness(Duration::from_secs(1));
+        let mut hello = valid_hello();
+        hello["flow_schema_version"] = serde_json::json!(FLOW_SCHEMA_VERSION + 1);
+        let error = negotiate(&harness, hello).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            ClientError::VersionMismatch {
+                component: "Flow schema",
+                supported: FLOW_SCHEMA_VERSION,
+                actual,
+            } if actual == FLOW_SCHEMA_VERSION + 1
+        ));
+        assert!(!matches!(harness.client.handshake_state(), HandshakeState::Ready(_)));
+        harness.process.stop().unwrap();
+    }
+
+    #[tokio::test]
+    async fn hello_rejects_missing_version_field() {
+        let harness = harness(Duration::from_secs(1));
+        let mut hello = valid_hello();
+        hello.as_object_mut().unwrap().remove("flow_schema_version");
+        let error = negotiate(&harness, hello).await.unwrap_err();
+
+        assert!(matches!(error, ClientError::Decode(_)));
+        assert!(matches!(
+            harness.client.handshake_state(),
+            HandshakeState::Failed(ClientError::Decode(_))
+        ));
+        harness.process.stop().unwrap();
     }
 
     #[tokio::test]
