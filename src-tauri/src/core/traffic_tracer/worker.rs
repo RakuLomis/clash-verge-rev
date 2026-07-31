@@ -33,14 +33,19 @@ pub enum WorkerEvent {
     Exited { instance_id: u64, status: WorkerExit },
 }
 
-trait ManagedChild: Send {
+pub(super) trait ManagedChild: Send {
     fn pid(&self) -> u32;
+    fn write(&mut self, bytes: &[u8]) -> Result<()>;
     fn kill(self: Box<Self>) -> Result<()>;
 }
 
 impl ManagedChild for CommandChild {
     fn pid(&self) -> u32 {
         CommandChild::pid(self)
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> Result<()> {
+        CommandChild::write(self, bytes).context("failed to write to TrafficTracer Worker")
     }
 
     fn kill(self: Box<Self>) -> Result<()> {
@@ -128,6 +133,12 @@ impl WorkerProcess {
         Ok(true)
     }
 
+    pub fn write(&self, bytes: &[u8]) -> Result<()> {
+        let mut state = self.state.lock();
+        let running = state.child.as_mut().context("TrafficTracer Worker is not running")?;
+        running.child.write(bytes)
+    }
+
     pub fn is_running(&self) -> bool {
         self.state.lock().child.is_some()
     }
@@ -136,7 +147,7 @@ impl WorkerProcess {
         self.events.subscribe()
     }
 
-    fn attach(&self, receiver: mpsc::Receiver<CommandEvent>, child: Box<dyn ManagedChild>) -> Result<u64> {
+    pub(super) fn attach(&self, receiver: mpsc::Receiver<CommandEvent>, child: Box<dyn ManagedChild>) -> Result<u64> {
         let mut state = self.state.lock();
         if state.child.is_some() {
             bail!("TrafficTracer Worker is already running");
@@ -256,6 +267,10 @@ mod tests {
     impl ManagedChild for FakeChild {
         fn pid(&self) -> u32 {
             self.pid
+        }
+
+        fn write(&mut self, _bytes: &[u8]) -> Result<()> {
+            Ok(())
         }
 
         fn kill(self: Box<Self>) -> Result<()> {
