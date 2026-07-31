@@ -13,6 +13,7 @@ use tauri_plugin_shell::{
 };
 use tokio::sync::{broadcast, mpsc};
 
+use super::events::TauriEventBridge;
 use crate::logging;
 
 const WORKER_SIDECAR_NAME: &str = "traffictracer-worker";
@@ -145,6 +146,28 @@ impl WorkerProcess {
 
     pub fn subscribe(&self) -> broadcast::Receiver<WorkerEvent> {
         self.events.subscribe()
+    }
+
+    pub fn bridge_to_tauri(&self, app_handle: AppHandle) -> tauri::async_runtime::JoinHandle<()> {
+        let mut receiver = self.subscribe();
+        let bridge = TauriEventBridge::new(app_handle);
+        tauri::async_runtime::spawn(async move {
+            loop {
+                match receiver.recv().await {
+                    Ok(WorkerEvent::Stdout { line, .. }) => bridge.handle_line(&line),
+                    Ok(_) => {}
+                    Err(broadcast::error::RecvError::Lagged(count)) => {
+                        logging!(
+                            warn,
+                            Type::Frontend,
+                            "TrafficTracer event bridge missed {} process events",
+                            count
+                        );
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        })
     }
 
     pub(super) fn attach(&self, receiver: mpsc::Receiver<CommandEvent>, child: Box<dyn ManagedChild>) -> Result<u64> {
