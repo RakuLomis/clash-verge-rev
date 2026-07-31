@@ -240,6 +240,7 @@ pub fn run() {
                 .expect("failed to set global app handle");
 
             resolve::init_work_dir_and_logger()?;
+            let _ = core::traffic_tracer::manager::WorkerManager::global();
 
             logging!(info, Type::Setup, "开始应用初始化...");
             if let Err(e) = app_init::setup_autostart(app) {
