@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 
+import { useTrafficTracerCaptureLock } from '@/hooks/use-traffic-tracer-worker'
 import { restartCore, stopCore, uninstallService } from '@/services/cmds'
 import { showNotice } from '@/services/notice-service'
 
@@ -23,9 +24,13 @@ const executeWithErrorHandling = async (
 }
 
 export const useServiceUninstaller = () => {
+  const { captureLock, captureLockReason } = useTrafficTracerCaptureLock()
   const { mutateSystemState } = useSystemState()
 
   const uninstallServiceAndRestartCore = useCallback(async () => {
+    if (captureLock?.locked) {
+      throw new Error(captureLockReason ?? 'TrafficTracer capture is active')
+    }
     try {
       await executeWithErrorHandling(
         () => stopCore(),
@@ -45,7 +50,7 @@ export const useServiceUninstaller = () => {
       )
       await mutateSystemState()
     }
-  }, [mutateSystemState])
+  }, [captureLock?.locked, captureLockReason, mutateSystemState])
 
   return { uninstallServiceAndRestartCore }
 }

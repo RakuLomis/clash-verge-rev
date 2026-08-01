@@ -1,5 +1,12 @@
 use super::{CmdResult, StringifyErr as _};
-use crate::core::service::{self, SERVICE_MANAGER, ServiceStatus};
+use crate::core::{
+    service::{self, SERVICE_MANAGER, ServiceStatus},
+    traffic_tracer::lock::CaptureLock,
+};
+
+fn guard_service_change(action: &str) -> CmdResult {
+    CaptureLock::global().ensure_unlocked(action).stringify_err()
+}
 
 async fn execute_service_operation_sync(status: ServiceStatus, op_type: &str) -> CmdResult {
     SERVICE_MANAGER
@@ -10,21 +17,25 @@ async fn execute_service_operation_sync(status: ServiceStatus, op_type: &str) ->
 
 #[tauri::command]
 pub async fn install_service() -> CmdResult {
+    guard_service_change("installing the TUN service")?;
     execute_service_operation_sync(ServiceStatus::InstallRequired, "Install").await
 }
 
 #[tauri::command]
 pub async fn uninstall_service() -> CmdResult {
+    guard_service_change("uninstalling the TUN service")?;
     execute_service_operation_sync(ServiceStatus::UninstallRequired, "Uninstall").await
 }
 
 #[tauri::command]
 pub async fn reinstall_service() -> CmdResult {
+    guard_service_change("reinstalling the TUN service")?;
     execute_service_operation_sync(ServiceStatus::ReinstallRequired, "Reinstall").await
 }
 
 #[tauri::command]
 pub async fn repair_service() -> CmdResult {
+    guard_service_change("repairing the TUN service")?;
     execute_service_operation_sync(ServiceStatus::ForceReinstallRequired, "Repair").await
 }
 

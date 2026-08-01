@@ -1,6 +1,6 @@
 use crate::{
     config::{Config, IVerge},
-    core::handle,
+    core::{handle, traffic_tracer::lock::CaptureLock},
 };
 use clash_verge_logging::{Type, logging};
 use std::env;
@@ -10,6 +10,10 @@ use tauri_plugin_clipboard_manager::ClipboardExt as _;
 pub async fn toggle_system_proxy() -> bool {
     let verge = Config::verge().await;
     let current = verge.latest_arc().enable_system_proxy.unwrap_or(false);
+    if let Err(error) = CaptureLock::global().ensure_unlocked("changing system proxy mode") {
+        logging!(warn, Type::ProxyMode, "{error}");
+        return current;
+    }
     let auto_close_connection = verge.latest_arc().auto_close_connection.unwrap_or(false);
 
     // 如果当前系统代理即将关闭，且自动关闭连接设置为true，则关闭所有连接
@@ -46,6 +50,10 @@ pub async fn toggle_system_proxy() -> bool {
 /// Returns the updated toggle state
 pub async fn toggle_tun_mode(not_save_file: Option<bool>) -> bool {
     let current = Config::verge().await.latest_arc().enable_tun_mode.unwrap_or(false);
+    if let Err(error) = CaptureLock::global().ensure_unlocked("changing TUN mode") {
+        logging!(warn, Type::ProxyMode, "{error}");
+        return current;
+    }
     let enable = !current;
 
     match super::patch_verge(

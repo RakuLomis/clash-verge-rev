@@ -6,7 +6,7 @@ import {
   SettingsRounded,
   WarningRounded,
 } from '@mui/icons-material'
-import { Box, Typography, alpha, useTheme } from '@mui/material'
+import { Alert, Box, Typography, alpha, useTheme } from '@mui/material'
 import { useLockFn } from 'ahooks'
 import React, { useCallback, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -18,6 +18,7 @@ import { useServiceInstaller } from '@/hooks/use-service-installer'
 import { useServiceUninstaller } from '@/hooks/use-service-uninstaller'
 import { useSystemProxyState } from '@/hooks/use-system-proxy-state'
 import { useSystemState } from '@/hooks/use-system-state'
+import { useTrafficTracerCaptureLock } from '@/hooks/use-traffic-tracer-worker'
 import { useVerge } from '@/hooks/use-verge'
 import { showNotice } from '@/services/notice-service'
 
@@ -135,6 +136,8 @@ const ProxyControlSwitches = ({
   const { uninstallServiceAndRestartCore } = useServiceUninstaller()
   const { indicator: systemProxyIndicator, toggleSystemProxy } =
     useSystemProxyState()
+  const { captureLock, captureLockReason } = useTrafficTracerCaptureLock()
+  const captureLocked = captureLock?.locked ?? false
   const { isServiceOk, isTunModeAvailable, mutateSystemState } =
     useSystemState()
 
@@ -149,13 +152,22 @@ const ProxyControlSwitches = ({
   )
 
   const handleTunToggle = async (value: boolean) => {
+    if (captureLocked) {
+      throw new Error(captureLockReason ?? 'TrafficTracer capture is active')
+    }
     if (!isTunModeAvailable) {
       const msgKey = 'settings.sections.proxyControl.tooltips.tunUnavailable'
       showErrorNotice(msgKey)
       throw new Error(t(msgKey))
     }
+    const previous = enable_tun_mode ?? false
     mutateVerge({ ...verge, enable_tun_mode: value }, false)
-    await patchVerge({ enable_tun_mode: value })
+    try {
+      await patchVerge({ enable_tun_mode: value })
+    } catch (error) {
+      mutateVerge({ ...verge, enable_tun_mode: previous }, false)
+      throw error
+    }
   }
 
   const onInstallService = useLockFn(async () => {
@@ -185,6 +197,11 @@ const ProxyControlSwitches = ({
 
   return (
     <Box sx={{ width: '100%', pr: noRightPadding ? 1 : 2 }}>
+      {captureLocked && (
+        <Alert severity="warning" sx={{ mb: 1 }}>
+          {captureLockReason} TUN, system proxy, and service changes are locked.
+        </Alert>
+      )}
       {isSystemProxyMode && (
         <SwitchRow
           label={t('settings.sections.proxyControl.fields.systemProxy')}
@@ -193,6 +210,7 @@ const ProxyControlSwitches = ({
           onInfoClick={() => sysproxyRef.current?.open()}
           onToggle={(value) => toggleSystemProxy(value)}
           onError={onError}
+          disabled={captureLocked}
           highlight={systemProxyIndicator}
         />
       )}
@@ -205,7 +223,7 @@ const ProxyControlSwitches = ({
           onInfoClick={() => tunRef.current?.open()}
           onToggle={handleTunToggle}
           onError={onError}
-          disabled={!isTunModeAvailable}
+          disabled={captureLocked || !isTunModeAvailable}
           highlight={enable_tun_mode || false}
           extraIcons={
             <>
@@ -224,7 +242,7 @@ const ProxyControlSwitches = ({
                     )}
                     icon={BuildRounded}
                     color="primary"
-                    onClick={onInstallService}
+                    onClick={captureLocked ? undefined : onInstallService}
                     sx={{ ml: 1 }}
                   />
                 </>
@@ -236,7 +254,7 @@ const ProxyControlSwitches = ({
                   )}
                   icon={DeleteForeverRounded}
                   color="secondary"
-                  onClick={onUninstallService}
+                  onClick={captureLocked ? undefined : onUninstallService}
                   sx={{ ml: 1 }}
                 />
               )}

@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useRef } from 'react'
 import { closeAllConnections } from 'tauri-plugin-mihomo-api'
 
+import { useTrafficTracerCaptureLock } from '@/hooks/use-traffic-tracer-worker'
 import { useVerge } from '@/hooks/use-verge'
 import { useClashConfigData, useSystemData } from '@/providers/app-data-context'
 import { getAutotemProxy } from '@/services/cmds'
@@ -9,6 +10,8 @@ import { queryClient } from '@/services/query-client'
 
 // 系统代理状态检测统一逻辑
 export const useSystemProxyState = () => {
+  const { captureLock, captureLockReason } = useTrafficTracerCaptureLock()
+  const captureLocked = captureLock?.locked ?? false
   const { verge, mutateVerge, patchVerge } = useVerge()
   const { sysproxy } = useSystemData()
   const { clashConfig } = useClashConfigData()
@@ -45,6 +48,9 @@ export const useSystemProxyState = () => {
   const busyRef = useRef(false)
 
   const toggleSystemProxy = async (enabled: boolean) => {
+    if (captureLocked) {
+      throw new Error(captureLockReason ?? 'TrafficTracer capture is active')
+    }
     mutateVerge(
       (prev) => (prev ? { ...prev, enable_system_proxy: enabled } : prev),
       false,
@@ -63,6 +69,16 @@ export const useSystemProxyState = () => {
           await closeAllConnections().catch(() => {})
         }
       }
+    } catch (error) {
+      pendingRef.current = null
+      mutateVerge(
+        (prev) =>
+          prev
+            ? { ...prev, enable_system_proxy: enable_system_proxy ?? false }
+            : prev,
+        false,
+      )
+      throw error
     } finally {
       busyRef.current = false
       await Promise.all([

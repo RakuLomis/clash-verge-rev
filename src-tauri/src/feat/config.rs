@@ -1,6 +1,6 @@
 use crate::{
     config::{Config, IVerge},
-    core::{CoreManager, autostart, handle, hotkey, logger::Logger, sysopt, tray},
+    core::{CoreManager, autostart, handle, hotkey, logger::Logger, sysopt, traffic_tracer::lock::CaptureLock, tray},
     module::{auto_backup::AutoBackupManager, lightweight},
 };
 use anyhow::Result;
@@ -268,7 +268,20 @@ async fn process_terminated_flags(update_flags: UpdateFlags, patch: &IVerge) -> 
     Ok(())
 }
 
+fn capture_sensitive_proxy_action(patch: &IVerge) -> Option<&'static str> {
+    if patch.enable_tun_mode.is_some() {
+        Some("changing TUN mode")
+    } else if patch.enable_system_proxy.is_some() {
+        Some("changing system proxy mode")
+    } else {
+        None
+    }
+}
+
 pub async fn patch_verge(patch: &IVerge, not_save_file: bool) -> Result<()> {
+    if let Some(action) = capture_sensitive_proxy_action(patch) {
+        CaptureLock::global().ensure_unlocked(action)?;
+    }
     Config::verge().await.edit_draft(|d| d.patch_config(patch));
 
     let update_flags = determine_update_flags(patch);
@@ -297,4 +310,28 @@ pub async fn fetch_verge_config() -> Result<SharedDraft<IVerge>> {
     let draft = Config::verge().await;
     let data = draft.data_arc();
     Ok(data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_capture_sensitive_proxy_patches() {
+        assert_eq!(
+            capture_sensitive_proxy_action(&IVerge {
+                enable_tun_mode: Some(false),
+                ..IVerge::default()
+            }),
+            Some("changing TUN mode")
+        );
+        assert_eq!(
+            capture_sensitive_proxy_action(&IVerge {
+                enable_system_proxy: Some(false),
+                ..IVerge::default()
+            }),
+            Some("changing system proxy mode")
+        );
+        assert_eq!(capture_sensitive_proxy_action(&IVerge::default()), None);
+    }
 }

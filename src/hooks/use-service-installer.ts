@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 
+import { useTrafficTracerCaptureLock } from '@/hooks/use-traffic-tracer-worker'
 import { installService, restartCore } from '@/services/cmds'
 import { showNotice } from '@/services/notice-service'
 
@@ -23,9 +24,13 @@ const executeWithErrorHandling = async (
 }
 
 export const useServiceInstaller = () => {
+  const { captureLock, captureLockReason } = useTrafficTracerCaptureLock()
   const { mutateSystemState } = useSystemState()
 
   const installServiceAndRestartCore = useCallback(async () => {
+    if (captureLock?.locked) {
+      throw new Error(captureLockReason ?? 'TrafficTracer capture is active')
+    }
     await executeWithErrorHandling(
       () => installService(),
       'settings.statuses.clashService.installing',
@@ -39,6 +44,6 @@ export const useServiceInstaller = () => {
     )
 
     await mutateSystemState()
-  }, [mutateSystemState])
+  }, [captureLock?.locked, captureLockReason, mutateSystemState])
   return { installServiceAndRestartCore }
 }

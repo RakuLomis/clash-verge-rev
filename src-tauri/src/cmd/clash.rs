@@ -93,6 +93,9 @@ pub async fn start_core() -> CmdResult {
 /// 关闭核心
 #[tauri::command]
 pub async fn stop_core() -> CmdResult {
+    CaptureLock::global()
+        .ensure_unlocked("stopping the proxy core")
+        .stringify_err()?;
     logging_error!(Type::Core, Config::profiles().await.data_arc().save_file().await);
     let result = CoreManager::global().stop_core().await.stringify_err();
     if result.is_ok() {
