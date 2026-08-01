@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { BasePage } from '@/components/base'
 import { TrafficTracerCaptureForm } from '@/components/traffic-tracer/capture-form'
 import { TrafficTracerJobProgress } from '@/components/traffic-tracer/job-progress'
+import { TrafficTracerSessionsView } from '@/components/traffic-tracer/sessions-view'
 import { useCaptureJob } from '@/hooks/use-capture-job'
 import { useTrafficTracerWorker } from '@/hooks/use-traffic-tracer-worker'
 import { showNotice } from '@/services/notice-service'
@@ -71,6 +72,9 @@ const TrafficTracerPage = () => {
           onRetryDiagnostics={() => void environmentQuery.refetch()}
           onSubmit={handleStartCapture}
         />
+        <Box sx={{ mt: 2 }}>
+          <TrafficTracerSessionsView enabled={environment !== undefined} />
+        </Box>
       </Box>
     </BasePage>
   )

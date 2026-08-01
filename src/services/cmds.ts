@@ -632,6 +632,10 @@ export function getTrafficTracerSession(sessionId: string) {
   return invoke<TrafficTracer.SessionManifest>('tt_session_get', { sessionId })
 }
 
+export function openTrafficTracerSessionDirectory(sessionId: string) {
+  return invoke<string>('tt_session_open_directory', { sessionId })
+}
+
 export function openTrafficTracerArtifact(
   sessionId: string,
   artifactId: string,

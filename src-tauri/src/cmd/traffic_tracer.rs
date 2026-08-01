@@ -698,6 +698,16 @@ pub async fn tt_session_get(session_id: String) -> CmdResult<SessionManifest> {
 }
 
 #[tauri::command]
+pub async fn tt_session_open_directory(session_id: String) -> CmdResult<String> {
+    validate_session_id(&session_id)?;
+    let manager = WorkerManager::global();
+    let manifest = fetch_session(&session_id).await?;
+    let path = resolve_session_dir(&manager.session_root().stringify_err()?, &manifest)?;
+    open::that_detached(path.as_os_str()).stringify_err()?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 pub async fn tt_session_open_artifact(session_id: String, artifact_id: String) -> CmdResult<String> {
     validate_session_id(&session_id)?;
     if artifact_id.trim().is_empty() {
