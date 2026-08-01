@@ -169,6 +169,8 @@ mod app_init {
             cmd::tt_session_list,
             cmd::tt_session_get,
             cmd::tt_session_open_artifact,
+            cmd::tt_analysis_start,
+            cmd::tt_flow_query,
             cmd::patch_clash_mode,
             cmd::change_clash_core,
             cmd::get_runtime_config,

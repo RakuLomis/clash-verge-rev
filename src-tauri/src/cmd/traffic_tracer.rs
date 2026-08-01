@@ -1,5 +1,6 @@
 use std::{
     fs,
+    net::IpAddr,
     path::{Component, Path, PathBuf},
 };
 
@@ -694,6 +695,16 @@ fn resolve_artifact_path(
         return Err("artifact path must be a normalized relative path".into());
     }
 
+    let session_dir = resolve_session_dir(session_root, manifest)?;
+
+    let target = fs::canonicalize(session_dir.join(relative)).stringify_err()?;
+    if !target.starts_with(&session_dir) || !target.is_file() {
+        return Err("artifact path escapes the Session directory or is not a file".into());
+    }
+    Ok(target)
+}
+
+fn resolve_session_dir(session_root: &Path, manifest: &SessionManifest) -> CmdResult<PathBuf> {
     let root = fs::canonicalize(session_root).stringify_err()?;
     let session_dir = fs::canonicalize(&manifest.session_dir).stringify_err()?;
     if session_dir == root || session_dir.parent() != Some(root.as_path()) {
@@ -706,16 +717,344 @@ fn resolve_artifact_path(
     {
         return Err("Session directory does not match the Session ID".into());
     }
-
-    let target = fs::canonicalize(session_dir.join(relative)).stringify_err()?;
-    if !target.starts_with(&session_dir) || !target.is_file() {
-        return Err("artifact path escapes the Session directory or is not a file".into());
-    }
-    Ok(target)
+    Ok(session_dir)
 }
 
 fn validate_session_id(session_id: &str) -> CmdResult {
     validate_job_id(session_id).map_err(|_| "session_id must be a UUID".into())
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AnalysisOptions {
+    pub split_pcaps: bool,
+    pub write_flow_index: bool,
+    pub overwrite: bool,
+}
+
+impl Default for AnalysisOptions {
+    fn default() -> Self {
+        Self {
+            split_pcaps: true,
+            write_flow_index: true,
+            overwrite: false,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct AnalysisJobParams {
+    job: AnalysisJobSpec,
+}
+
+#[derive(Serialize)]
+struct AnalysisJobSpec {
+    schema_version: u32,
+    kind: &'static str,
+    job_id: String,
+    session_dir: String,
+    output_root: String,
+    options: AnalysisOptions,
+}
+
+#[tauri::command]
+pub async fn tt_analysis_start(session_id: String, options: Option<AnalysisOptions>) -> CmdResult<JobSnapshot> {
+    validate_session_id(&session_id)?;
+    let manager = WorkerManager::global();
+    let manifest = fetch_session(&session_id).await?;
+    let root = manager.session_root().stringify_err()?;
+    let session_dir = resolve_session_dir(&root, &manifest)?;
+    let job_id = new_job_id()?;
+    let client = manager.client().stringify_err()?;
+    manager.mark_busy().stringify_err()?;
+
+    let result = client
+        .request::<_, JobSnapshot>(
+            RequestMethod::AnalysisStart,
+            AnalysisJobParams {
+                job: AnalysisJobSpec {
+                    schema_version: 1,
+                    kind: "analysis",
+                    job_id,
+                    session_dir: session_dir.to_string_lossy().into_owned(),
+                    output_root: root.to_string_lossy().into_owned(),
+                    options: options.unwrap_or_default(),
+                },
+            },
+        )
+        .await;
+
+    match result {
+        Ok(snapshot) => Ok(snapshot),
+        Err(error) => {
+            let _ = manager.mark_ready();
+            Err(error.to_string().into())
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FlowNetwork {
+    Tcp,
+    Udp,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlowQueryRequest {
+    pub session_id: String,
+    pub network: FlowNetwork,
+    pub src_ip: String,
+    pub src_port: u16,
+    pub dst_ip: String,
+    pub dst_port: u16,
+    #[serde(default)]
+    pub offset: u64,
+    #[serde(default = "default_flow_limit")]
+    pub limit: u16,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FlowQueryResult {
+    pub session_id: String,
+    pub offset: u64,
+    pub limit: u16,
+    pub total: u64,
+    pub items: Vec<FlowRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FlowRecord {
+    pub schema_version: u32,
+    pub session_id: String,
+    pub flow_id: String,
+    pub protocol: FlowNetwork,
+    pub pre_flow: NormalizedFlowTuple,
+    pub post_flow: Option<NormalizedFlowTuple>,
+    pub shared: bool,
+    #[serde(rename = "match")]
+    pub match_info: FlowMatch,
+    pub request_ids: Vec<String>,
+    #[serde(default)]
+    pub conn_id: Option<String>,
+    #[serde(default)]
+    pub outer_conn_id: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub resource_type: Option<String>,
+    #[serde(default)]
+    pub relation: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NormalizedFlowTuple {
+    pub network: FlowNetwork,
+    pub src_ip: String,
+    pub src_port: u16,
+    pub dst_ip: String,
+    pub dst_port: u16,
+    #[serde(default)]
+    pub dst_host: Option<String>,
+    pub complete: bool,
+    pub source: String,
+    pub scope: String,
+    pub shared: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FlowMatch {
+    pub status: FlowMatchStatus,
+    pub confidence: f64,
+    pub candidate_count: u64,
+    pub reason: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FlowMatchStatus {
+    Matched,
+    Ambiguous,
+    Unmatched,
+}
+
+#[derive(Serialize)]
+struct FlowQueryParams {
+    session_id: String,
+    network: FlowNetwork,
+    src_ip: String,
+    src_port: u16,
+    dst_ip: String,
+    dst_port: u16,
+    offset: u64,
+    limit: u16,
+}
+
+#[tauri::command]
+pub async fn tt_flow_query(request: FlowQueryRequest) -> CmdResult<FlowQueryResult> {
+    let params = normalize_flow_query(request)?;
+    WorkerManager::global()
+        .client()
+        .stringify_err()?
+        .request(RequestMethod::FlowQuery, params)
+        .await
+        .stringify_err()
+}
+
+fn normalize_flow_query(request: FlowQueryRequest) -> CmdResult<FlowQueryParams> {
+    validate_session_id(&request.session_id)?;
+    if request.src_port == 0 || request.dst_port == 0 {
+        return Err("flow ports must be between 1 and 65535".into());
+    }
+    if !(1..=1000).contains(&request.limit) {
+        return Err("limit must be between 1 and 1000".into());
+    }
+    Ok(FlowQueryParams {
+        session_id: request.session_id,
+        network: request.network,
+        src_ip: normalize_flow_ip(&request.src_ip)?,
+        src_port: request.src_port,
+        dst_ip: normalize_flow_ip(&request.dst_ip)?,
+        dst_port: request.dst_port,
+        offset: request.offset,
+        limit: request.limit,
+    })
+}
+
+fn normalize_flow_ip(value: &str) -> CmdResult<String> {
+    let address: IpAddr = value.parse().map_err(|_| "flow IP address is invalid")?;
+    if address.is_unspecified() {
+        return Err("flow IP address must not be unspecified".into());
+    }
+    Ok(match address {
+        IpAddr::V6(address) => address.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(IpAddr::V6(address)),
+        address => address,
+    }
+    .to_string())
+}
+
+const fn default_flow_limit() -> u16 {
+    100
+}
+
+#[cfg(test)]
+mod flow_tests {
+    use super::*;
+
+    fn request(session_id: &str, src_ip: &str, dst_ip: &str) -> FlowQueryRequest {
+        FlowQueryRequest {
+            session_id: session_id.to_owned(),
+            network: FlowNetwork::Tcp,
+            src_ip: src_ip.to_owned(),
+            src_port: 40_000,
+            dst_ip: dst_ip.to_owned(),
+            dst_port: 443,
+            offset: 0,
+            limit: 100,
+        }
+    }
+
+    #[test]
+    fn normalizes_ipv4_ipv6_and_ipv4_mapped_addresses() {
+        let id = "123e4567-e89b-42d3-a456-426614174000";
+        let ipv4 = normalize_flow_query(request(id, "192.0.2.1", "203.0.113.8")).unwrap();
+        assert_eq!(ipv4.src_ip, "192.0.2.1");
+
+        let ipv6 = normalize_flow_query(request(id, "2001:0db8::1", "2001:db8::2")).unwrap();
+        assert_eq!(ipv6.src_ip, "2001:db8::1");
+
+        let mapped = normalize_flow_query(request(id, "::ffff:192.0.2.1", "203.0.113.8")).unwrap();
+        assert_eq!(mapped.src_ip, "192.0.2.1");
+    }
+
+    #[test]
+    fn rejects_unspecified_ips_and_zero_ports() {
+        let id = "123e4567-e89b-42d3-a456-426614174000";
+        assert!(normalize_flow_query(request(id, "0.0.0.0", "203.0.113.8")).is_err());
+        let mut invalid_port = request(id, "192.0.2.1", "203.0.113.8");
+        invalid_port.src_port = 0;
+        assert!(normalize_flow_query(invalid_port).is_err());
+    }
+
+    #[test]
+    fn no_match_is_a_valid_empty_result() {
+        let result: FlowQueryResult = serde_json::from_value(serde_json::json!({
+            "session_id": "123e4567-e89b-42d3-a456-426614174000",
+            "offset": 0,
+            "limit": 100,
+            "total": 0,
+            "items": []
+        }))
+        .unwrap();
+        assert_eq!(result.total, 0);
+        assert!(result.items.is_empty());
+    }
+
+    #[test]
+    fn queries_remain_scoped_to_the_selected_session() {
+        let first = normalize_flow_query(request(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "192.0.2.1",
+            "203.0.113.8",
+        ))
+        .unwrap();
+        let second = normalize_flow_query(request(
+            "123e4567-e89b-42d3-a456-426614174001",
+            "192.0.2.1",
+            "203.0.113.8",
+        ))
+        .unwrap();
+        assert_ne!(first.session_id, second.session_id);
+    }
+
+    #[test]
+    fn shared_unmatched_flow_is_preserved() {
+        let result: FlowQueryResult = serde_json::from_value(serde_json::json!({
+            "session_id": "123e4567-e89b-42d3-a456-426614174000",
+            "offset": 0,
+            "limit": 100,
+            "total": 1,
+            "items": [{
+                "schema_version": 1,
+                "session_id": "123e4567-e89b-42d3-a456-426614174000",
+                "flow_id": "udp:shared",
+                "protocol": "udp",
+                "pre_flow": {
+                    "network": "udp",
+                    "src_ip": "2001:db8::10",
+                    "src_port": 53000,
+                    "dst_ip": "2001:db8::53",
+                    "dst_port": 53,
+                    "complete": true,
+                    "source": "mihomo",
+                    "scope": "pre_proxy",
+                    "shared": true
+                },
+                "post_flow": null,
+                "shared": true,
+                "match": {
+                    "status": "unmatched",
+                    "confidence": 0.0,
+                    "candidate_count": 0,
+                    "reason": "no complete post-proxy flow"
+                },
+                "request_ids": []
+            }]
+        }))
+        .unwrap();
+        assert!(result.items[0].shared);
+        assert_eq!(result.items[0].match_info.status, FlowMatchStatus::Unmatched);
+        assert!(result.items[0].post_flow.is_none());
+    }
+
+    #[test]
+    fn analysis_defaults_produce_the_flow_index() {
+        let options = AnalysisOptions::default();
+        assert!(options.split_pcaps);
+        assert!(options.write_flow_index);
+        assert!(!options.overwrite);
+    }
 }
 
 #[cfg(test)]
