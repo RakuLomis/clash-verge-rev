@@ -26,6 +26,9 @@
     "publish-version": "node scripts/publish-version.mjs",
     "lint": "eslint -c eslint.config.ts --max-warnings=0 --cache --cache-location .eslintcache src",
     "lint:fix": "eslint -c eslint.config.ts --max-warnings=0 --cache --cache-location .eslintcache --fix src",
+    "test": "pnpm test:node && pnpm test:frontend",
+    "test:node": "node --test scripts/*.test.mjs",
+    "test:frontend": "vitest run",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "i18n:check": "node scripts/cleanup-unused-i18n.mjs",
@@ -84,6 +87,9 @@
     "@eslint-react/eslint-plugin": "^5.8.5",
     "@eslint/js": "^10.0.1",
     "@tauri-apps/cli": "2.11.2",
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/js-yaml": "^4.0.9",
     "@types/lodash-es": "^4.17.12",
     "@types/node": "^24.12.4",
@@ -109,6 +115,7 @@
     "globals": "^17.6.0",
     "husky": "^9.1.7",
     "jiti": "^2.7.0",
+    "jsdom": "^30.0.1",
     "lint-staged": "^17.0.5",
     "sass": "^1.100.0",
     "tar": "^7.5.15",
@@ -116,7 +123,8 @@
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.4",
     "vite": "^8.0.14",
-    "vite-plugin-svgr": "^5.2.0"
+    "vite-plugin-svgr": "^5.2.0",
+    "vitest": "^4.1.10"
   },
   "lint-staged": {
     "*.{ts,tsx,js,mjs}": [
