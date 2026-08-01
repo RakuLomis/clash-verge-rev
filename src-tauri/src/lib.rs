@@ -162,6 +162,7 @@ mod app_init {
             cmd::list_available_cores,
             cmd::get_tracing_state,
             cmd::patch_tracing_state,
+            cmd::tt_get_environment,
             cmd::patch_clash_mode,
             cmd::change_clash_core,
             cmd::get_runtime_config,
