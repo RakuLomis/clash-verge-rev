@@ -1,0 +1,265 @@
+import {
+  CancelRounded,
+  CheckCircleRounded,
+  ErrorRounded,
+  HourglassTopRounded,
+} from '@mui/icons-material'
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  Divider,
+  LinearProgress,
+  Paper,
+  Stack,
+  Typography,
+} from '@mui/material'
+import { useState } from 'react'
+
+import type {
+  JobProgressEvent,
+  JobSnapshot,
+  JobState,
+} from '@/types/traffic-tracer'
+
+export interface TrafficTracerJobProgressProps {
+  job: JobSnapshot
+  startedAt?: string | null
+  events?: JobProgressEvent[]
+  cancelling?: boolean
+  onCancel: (reason?: string) => Promise<unknown> | void
+}
+
+const emptyProgressEvents: JobProgressEvent[] = []
+
+const terminalStates = new Set<JobState>([
+  'completed',
+  'failed',
+  'cancelled',
+  'interrupted',
+])
+
+const stateColor: Record<
+  JobState,
+  'default' | 'info' | 'success' | 'warning' | 'error'
+> = {
+  created: 'default',
+  preparing: 'info',
+  capturing: 'info',
+  analyzing: 'info',
+  completed: 'success',
+  failed: 'error',
+  cancelled: 'warning',
+  interrupted: 'warning',
+}
+
+function formatTime(value?: string | null) {
+  if (!value) return 'unknown (restored Job)'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+
+function errorText(error: unknown) {
+  if (typeof error === 'string') return error
+  if (typeof error !== 'object' || error === null) return ''
+  const payload = error as Record<string, unknown>
+  const code = typeof payload.code === 'string' ? payload.code : ''
+  const message = typeof payload.message === 'string' ? payload.message : ''
+  return [code, message].filter(Boolean).join(': ')
+}
+
+export function TrafficTracerJobProgress({
+  job,
+  startedAt,
+  events = emptyProgressEvents,
+  cancelling = false,
+  onCancel,
+}: TrafficTracerJobProgressProps) {
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const terminal = terminalStates.has(job.state)
+  const canceling = cancelling || job.cancel_requested
+  const progress = Math.round(
+    Math.min(1, Math.max(0, Number.isFinite(job.progress) ? job.progress : 0)) *
+      100,
+  )
+  const failure = errorText(job.error)
+  const logEvents = events.filter(
+    (event) => event.message || event.stage || event.state,
+  )
+
+  const confirmCancel = async () => {
+    setConfirmOpen(false)
+    await onCancel('Cancelled from the TrafficTracer workspace.')
+  }
+
+  return (
+    <>
+      <Paper
+        variant="outlined"
+        data-testid="traffic-tracer-job-progress"
+        data-job-state={job.state}
+        sx={{ overflow: 'hidden' }}
+      >
+        <Stack
+          direction="row"
+          spacing={2}
+          sx={{
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            px: 2,
+            py: 1.5,
+          }}
+        >
+          <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
+            {job.state === 'completed' ? (
+              <CheckCircleRounded color="success" />
+            ) : job.state === 'failed' ? (
+              <ErrorRounded color="error" />
+            ) : (
+              <HourglassTopRounded color={terminal ? 'warning' : 'primary'} />
+            )}
+            <Box>
+              <Typography variant="h6" sx={{ fontSize: 17, fontWeight: 600 }}>
+                {job.kind === 'capture' ? 'Capture Job' : 'Analysis Job'}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                Started {formatTime(startedAt)}
+              </Typography>
+            </Box>
+          </Stack>
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+            <Chip
+              size="small"
+              color={stateColor[job.state]}
+              label={job.state}
+            />
+            {!terminal && (
+              <Button
+                color="error"
+                size="small"
+                startIcon={<CancelRounded />}
+                disabled={canceling}
+                onClick={() => setConfirmOpen(true)}
+              >
+                {canceling ? 'Canceling…' : 'Cancel'}
+              </Button>
+            )}
+          </Stack>
+        </Stack>
+
+        <Divider />
+
+        <Stack spacing={1.5} sx={{ p: 2 }}>
+          <Stack
+            direction="row"
+            sx={{ justifyContent: 'space-between', alignItems: 'baseline' }}
+          >
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              {job.stage}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {progress}%
+            </Typography>
+          </Stack>
+          <LinearProgress
+            variant="determinate"
+            value={progress}
+            color={job.state === 'failed' ? 'error' : 'primary'}
+          />
+          {job.message && (
+            <Typography variant="body2">{job.message}</Typography>
+          )}
+          {failure && (
+            <Alert severity={job.state === 'failed' ? 'error' : 'warning'}>
+              {failure}
+            </Alert>
+          )}
+
+          <Box>
+            <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
+              Progress log
+            </Typography>
+            <Paper
+              variant="outlined"
+              sx={{ maxHeight: 180, overflow: 'auto', bgcolor: 'action.hover' }}
+            >
+              {logEvents.length === 0 ? (
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ p: 1.5 }}
+                >
+                  Waiting for progress events…
+                </Typography>
+              ) : (
+                <Stack divider={<Divider flexItem />}>
+                  {logEvents.map((event) => (
+                    <Stack
+                      key={
+                        event.timestamp +
+                        event.stage +
+                        event.progress +
+                        event.message
+                      }
+                      direction="row"
+                      spacing={1}
+                      sx={{ px: 1.5, py: 0.75, alignItems: 'baseline' }}
+                    >
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ flexShrink: 0 }}
+                      >
+                        {new Date(event.timestamp).toLocaleTimeString()}
+                      </Typography>
+                      <Typography variant="caption" sx={{ fontWeight: 600 }}>
+                        {event.stage}
+                      </Typography>
+                      <Typography variant="caption">
+                        {event.message || event.state}
+                      </Typography>
+                    </Stack>
+                  ))}
+                </Stack>
+              )}
+            </Paper>
+          </Box>
+
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}
+          >
+            Job ID: {job.job_id}
+          </Typography>
+        </Stack>
+      </Paper>
+
+      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
+        <DialogTitle>Cancel TrafficTracer Job?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Capture processes will stop and the partial Session will be retained
+            as cancelled. Closing this page alone does not cancel the Job.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmOpen(false)}>Keep running</Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={() => void confirmCancel()}
+          >
+            Cancel Job
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </>
+  )
+}

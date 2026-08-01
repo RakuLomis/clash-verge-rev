@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { trafficTracerCaptureLockKey } from '@/hooks/use-traffic-tracer-worker'
 import {
@@ -15,6 +15,7 @@ import type {
 } from '@/types/traffic-tracer'
 
 const ACTIVE_JOB_STORAGE_KEY = 'traffictracer.activeJobId'
+const JOB_STARTED_STORAGE_KEY = 'traffictracer.activeJobStartedAt'
 const TERMINAL_STATES = new Set([
   'completed',
   'failed',
@@ -53,14 +54,25 @@ export function useCaptureJob(initialJobId?: string | null) {
       ? localStorage.getItem(ACTIVE_JOB_STORAGE_KEY)
       : initialJobId,
   )
+  const [jobStartedAt, setJobStartedAt] = useState<string | null>(() =>
+    jobId ? localStorage.getItem(JOB_STARTED_STORAGE_KEY) : null,
+  )
+  const [progressEvents, setProgressEvents] = useState<JobProgressEvent[]>([])
 
   const rememberJob = useCallback((nextJobId: string) => {
+    const startedAt = new Date().toISOString()
     localStorage.setItem(ACTIVE_JOB_STORAGE_KEY, nextJobId)
+    localStorage.setItem(JOB_STARTED_STORAGE_KEY, startedAt)
+    setJobStartedAt(startedAt)
+    setProgressEvents([])
     setJobId(nextJobId)
   }, [])
 
   const clearJob = useCallback(() => {
     localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY)
+    localStorage.removeItem(JOB_STARTED_STORAGE_KEY)
+    setJobStartedAt(null)
+    setProgressEvents([])
     setJobId(null)
   }, [])
 
@@ -84,6 +96,7 @@ export function useCaptureJob(initialJobId?: string | null) {
       queryClient.setQueryData(trafficTracerJobKey(jobId), snapshot)
       if (TERMINAL_STATES.has(snapshot.state)) {
         localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY)
+        localStorage.removeItem(JOB_STARTED_STORAGE_KEY)
         void queryClient.invalidateQueries({
           queryKey: trafficTracerCaptureLockKey,
         })
@@ -91,6 +104,17 @@ export function useCaptureJob(initialJobId?: string | null) {
     }
     const updateProgress = (progress: JobProgressEvent) => {
       if (progress.job_id !== jobId) return
+      setProgressEvents((events) => {
+        const previous = events.at(-1)
+        if (
+          previous?.timestamp === progress.timestamp &&
+          previous.stage === progress.stage &&
+          previous.message === progress.message
+        ) {
+          return events
+        }
+        return [...events, progress].slice(-100)
+      })
       queryClient.setQueryData<JobSnapshot>(
         trafficTracerJobKey(jobId),
         (snapshot) => mergeTrafficTracerProgress(snapshot, progress),
@@ -129,6 +153,7 @@ export function useCaptureJob(initialJobId?: string | null) {
   useEffect(() => {
     if (jobQuery.data && TERMINAL_STATES.has(jobQuery.data.state)) {
       localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY)
+      localStorage.removeItem(JOB_STARTED_STORAGE_KEY)
     }
   }, [jobQuery.data])
 
@@ -175,10 +200,17 @@ export function useCaptureJob(initialJobId?: string | null) {
     },
   })
 
+  const currentProgressEvents = useMemo(
+    () => progressEvents.filter((event) => event.job_id === jobId),
+    [jobId, progressEvents],
+  )
+
   return {
     jobId,
     job: jobQuery.data,
     jobQuery,
+    jobStartedAt,
+    progressEvents: currentProgressEvents,
     startCapture: startMutation.mutateAsync,
     startMutation,
     cancelJob: cancelMutation.mutateAsync,

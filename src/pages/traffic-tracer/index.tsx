@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 
 import { BasePage } from '@/components/base'
 import { TrafficTracerCaptureForm } from '@/components/traffic-tracer/capture-form'
+import { TrafficTracerJobProgress } from '@/components/traffic-tracer/job-progress'
 import { useCaptureJob } from '@/hooks/use-capture-job'
 import { useTrafficTracerWorker } from '@/hooks/use-traffic-tracer-worker'
 import { showNotice } from '@/services/notice-service'
@@ -18,7 +19,15 @@ const TrafficTracerPage = () => {
     useState<EnvironmentRequest | null>(null)
   const { environment, environmentQuery, captureLock } =
     useTrafficTracerWorker(diagnosticRequest)
-  const { startCapture, startMutation } = useCaptureJob()
+  const {
+    job,
+    jobStartedAt,
+    progressEvents,
+    startCapture,
+    startMutation,
+    cancelJob,
+    cancelMutation,
+  } = useCaptureJob()
 
   const handleStartCapture = async (request: CaptureStartRequest) => {
     try {
@@ -29,9 +38,28 @@ const TrafficTracerPage = () => {
     }
   }
 
+  const handleCancel = async (reason?: string) => {
+    try {
+      await cancelJob({ reason })
+    } catch (error) {
+      showNotice.error(error)
+    }
+  }
+
   return (
     <BasePage title={t('layout.components.navigation.tabs.trafficTracer')}>
       <Box data-testid="traffic-tracer-workspace" sx={{ pb: 2 }}>
+        {job && (
+          <Box sx={{ mb: 2 }}>
+            <TrafficTracerJobProgress
+              job={job}
+              startedAt={jobStartedAt}
+              events={progressEvents}
+              cancelling={cancelMutation.isPending}
+              onCancel={handleCancel}
+            />
+          </Box>
+        )}
         <TrafficTracerCaptureForm
           environment={environment}
           diagnosticRequest={diagnosticRequest}
