@@ -12,6 +12,7 @@ use tokio::sync::broadcast;
 
 use super::{
     client::WorkerClient,
+    lock::CaptureLock,
     protocol::{EmptyParams, MessageType, Notification, NotificationMethod, RequestMethod, WORKER_API_VERSION},
     worker::{WorkerEvent, WorkerProcess},
 };
@@ -72,6 +73,7 @@ pub struct WorkerManager {
     monitor: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     session_root: Mutex<Option<PathBuf>>,
     recovery: Mutex<Option<WorkerRecoveryReport>>,
+    active_job: Arc<Mutex<Option<String>>>,
     lifecycle: tokio::sync::Mutex<()>,
 }
 
@@ -85,6 +87,7 @@ impl WorkerManager {
             monitor: Mutex::new(None),
             session_root: Mutex::new(None),
             recovery: Mutex::new(None),
+            active_job: Arc::new(Mutex::new(None)),
             lifecycle: tokio::sync::Mutex::new(()),
         }
     }
@@ -212,22 +215,29 @@ impl WorkerManager {
         Ok(configured)
     }
 
-    pub fn mark_busy(&self) -> Result<()> {
+    pub fn mark_busy(&self, job_id: &str) -> Result<()> {
+        if job_id.trim().is_empty() {
+            bail!("TrafficTracer Job ID must not be empty");
+        }
+        let mut active_job = self.active_job.lock();
         let mut state = self.state.lock();
-        if *state != WorkerManagerState::Ready {
+        if *state != WorkerManagerState::Ready || active_job.is_some() {
             bail!("TrafficTracer Worker must be ready before starting a Job");
         }
+        *active_job = Some(job_id.to_owned());
         *state = WorkerManagerState::Busy;
         Ok(())
     }
 
-    pub fn mark_ready(&self) -> Result<()> {
+    pub fn mark_ready(&self, job_id: &str) -> bool {
+        let mut active_job = self.active_job.lock();
         let mut state = self.state.lock();
-        if *state != WorkerManagerState::Busy {
-            bail!("TrafficTracer Worker is not busy");
+        if *state != WorkerManagerState::Busy || active_job.as_deref() != Some(job_id) {
+            return false;
         }
+        *active_job = None;
         *state = WorkerManagerState::Ready;
-        Ok(())
+        true
     }
 
     fn reset_stopped(&self) {
@@ -240,6 +250,8 @@ impl WorkerManager {
         }
         *self.session_root.lock() = None;
         *self.recovery.lock() = None;
+        *self.active_job.lock() = None;
+        CaptureLock::global().clear();
         *self.state.lock() = WorkerManagerState::Stopped;
     }
 
@@ -270,22 +282,34 @@ impl WorkerManager {
         *self.client.lock() = None;
         *self.session_root.lock() = None;
         *self.recovery.lock() = None;
+        *self.active_job.lock() = None;
         *self.state.lock() = WorkerManagerState::Failed { message };
     }
 
     fn spawn_exit_monitor(&self) -> tauri::async_runtime::JoinHandle<()> {
         let mut events = self.process.subscribe();
         let state = Arc::clone(&self.state);
+        let active_job = Arc::clone(&self.active_job);
+        let capture_lock = CaptureLock::global();
         tauri::async_runtime::spawn(async move {
             loop {
                 match events.recv().await {
-                    Ok(WorkerEvent::Stdout { line, .. }) if is_terminal_job_notification(&line) => {
-                        let mut state = state.lock();
-                        if *state == WorkerManagerState::Busy {
-                            *state = WorkerManagerState::Ready;
+                    Ok(WorkerEvent::Stdout { line, .. }) => {
+                        if let Some(job_id) = terminal_job_id(&line) {
+                            let mut active = active_job.lock();
+                            if active.as_deref() == Some(job_id.as_str()) {
+                                let _ = capture_lock.release(&job_id);
+                                *active = None;
+                                let mut state = state.lock();
+                                if *state == WorkerManagerState::Busy {
+                                    *state = WorkerManagerState::Ready;
+                                }
+                            }
                         }
                     }
                     Ok(WorkerEvent::Exited { status, .. }) => {
+                        capture_lock.clear();
+                        *active_job.lock() = None;
                         let mut state = state.lock();
                         if *state != WorkerManagerState::Stopped {
                             *state = WorkerManagerState::Failed {
@@ -382,12 +406,14 @@ fn normalize_path(path: &Path) -> PathBuf {
     dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn is_terminal_job_notification(line: &str) -> bool {
-    let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
-        return false;
-    };
-    message.get("type").and_then(serde_json::Value::as_str) == Some("notification")
-        && message.get("method").and_then(serde_json::Value::as_str) == Some("job.completed")
+fn terminal_job_id(line: &str) -> Option<String> {
+    let message = serde_json::from_str::<serde_json::Value>(line).ok()?;
+    if message.get("type").and_then(serde_json::Value::as_str) != Some("notification")
+        || message.get("method").and_then(serde_json::Value::as_str) != Some("job.completed")
+    {
+        return None;
+    }
+    message.get("params")?.get("job_id")?.as_str().map(str::to_owned)
 }
 
 singleton!(WorkerManager, TRAFFIC_TRACER_WORKER_MANAGER);
@@ -505,10 +531,12 @@ mod tests {
         assert_eq!(manager.state(), WorkerManagerState::Starting);
         manager.finish_start().unwrap();
         assert_eq!(manager.state(), WorkerManagerState::Ready);
-        manager.mark_busy().unwrap();
+        manager.mark_busy("job-one").unwrap();
         assert_eq!(manager.state(), WorkerManagerState::Busy);
-        assert!(manager.mark_busy().is_err());
-        manager.mark_ready().unwrap();
+        assert!(manager.mark_busy("job-two").is_err());
+        assert!(!manager.mark_ready("stale-job"));
+        assert_eq!(manager.state(), WorkerManagerState::Busy);
+        assert!(manager.mark_ready("job-one"));
         assert_eq!(manager.state(), WorkerManagerState::Ready);
         assert!(manager.finish_start().is_err());
     }
@@ -526,13 +554,14 @@ mod tests {
 
     #[test]
     fn recognizes_only_terminal_job_notifications() {
-        assert!(is_terminal_job_notification(
-            r#"{"api_version":1,"type":"notification","method":"job.completed","params":{}}"#
-        ));
-        assert!(!is_terminal_job_notification(
-            r#"{"api_version":1,"type":"response","method":"job.completed"}"#
-        ));
-        assert!(!is_terminal_job_notification("not-json"));
+        assert_eq!(
+            terminal_job_id(
+                r#"{"api_version":1,"type":"notification","method":"job.completed","params":{"job_id":"job-one"}}"#
+            ),
+            Some("job-one".to_owned())
+        );
+        assert!(terminal_job_id(r#"{"api_version":1,"type":"response","method":"job.completed"}"#).is_none());
+        assert!(terminal_job_id("not-json").is_none());
     }
 
     #[test]

@@ -14,6 +14,7 @@ use crate::{
     core::{
         service,
         traffic_tracer::{
+            lock::{CaptureLock, CaptureLockSnapshot},
             manager::{WorkerManager, WorkerManagerState, WorkerRecoveryReport, WorkerRecoveryStatus},
             protocol::RequestMethod,
         },
@@ -22,6 +23,7 @@ use crate::{
 
 const TRAFFIC_TRACER_CORE: &str = "verge-mihomo-tt";
 const DEFAULT_CHROME_BINARY: &str = "google-chrome";
+const CAPTURE_LOCK_REASON: &str = "TrafficTracer capture is active";
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -430,7 +432,6 @@ pub async fn tt_capture_start(app_handle: AppHandle, request: CaptureStartReques
     }
 
     let manager = WorkerManager::global();
-    manager.mark_busy().stringify_err()?;
     let client = manager.client().stringify_err()?;
     let controller_secret = Config::clash()
         .await
@@ -439,6 +440,14 @@ pub async fn tt_capture_start(app_handle: AppHandle, request: CaptureStartReques
         .secret
         .unwrap_or_default();
     let job_id = new_job_id()?;
+    let capture_lock = CaptureLock::global();
+    capture_lock
+        .acquire(job_id.clone(), CAPTURE_LOCK_REASON)
+        .stringify_err()?;
+    if let Err(error) = manager.mark_busy(&job_id) {
+        let _ = capture_lock.release(&job_id);
+        return Err(error.to_string().into());
+    }
     let result = client
         .request::<_, JobSnapshot>(
             RequestMethod::JobStart,
@@ -446,7 +455,7 @@ pub async fn tt_capture_start(app_handle: AppHandle, request: CaptureStartReques
                 job: CaptureJobSpec {
                     schema_version: 1,
                     kind: "capture",
-                    job_id,
+                    job_id: job_id.clone(),
                     url: request.url,
                     domain: request.domain,
                     duration_seconds: request.duration_seconds,
@@ -468,9 +477,16 @@ pub async fn tt_capture_start(app_handle: AppHandle, request: CaptureStartReques
         .await;
 
     match result {
-        Ok(snapshot) => Ok(snapshot),
+        Ok(snapshot) => {
+            if snapshot.state.terminal() {
+                let _ = capture_lock.release(&job_id);
+                let _ = manager.mark_ready(&job_id);
+            }
+            Ok(snapshot)
+        }
         Err(error) => {
-            let _ = manager.mark_ready();
+            let _ = capture_lock.release(&job_id);
+            let _ = manager.mark_ready(&job_id);
             Err(error.to_string().into())
         }
     }
@@ -483,11 +499,12 @@ pub async fn tt_capture_get(job_id: String) -> CmdResult<JobSnapshot> {
     let snapshot = manager
         .client()
         .stringify_err()?
-        .request::<_, JobSnapshot>(RequestMethod::JobStatus, JobIdParams { job_id })
+        .request::<_, JobSnapshot>(RequestMethod::JobStatus, JobIdParams { job_id: job_id.clone() })
         .await
         .stringify_err()?;
     if snapshot.state.terminal() {
-        let _ = manager.mark_ready();
+        let _ = CaptureLock::global().release(&job_id);
+        let _ = manager.mark_ready(&job_id);
     }
     Ok(snapshot)
 }
@@ -502,16 +519,22 @@ pub async fn tt_capture_cancel(job_id: String, reason: Option<String>) -> CmdRes
         .request::<_, JobSnapshot>(
             RequestMethod::JobCancel,
             CancelJobParams {
-                job_id,
+                job_id: job_id.clone(),
                 reason: reason.unwrap_or_else(|| "Cancelled by user.".to_owned()),
             },
         )
         .await
         .stringify_err()?;
     if snapshot.state.terminal() {
-        let _ = manager.mark_ready();
+        let _ = CaptureLock::global().release(&job_id);
+        let _ = manager.mark_ready(&job_id);
     }
     Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn tt_get_capture_lock() -> CaptureLockSnapshot {
+    CaptureLock::global().snapshot()
 }
 
 fn validate_capture_request(request: &CaptureStartRequest) -> CmdResult {
@@ -793,7 +816,7 @@ pub async fn tt_analysis_start(session_id: String, options: Option<AnalysisOptio
     let session_dir = resolve_session_dir(&root, &manifest)?;
     let job_id = new_job_id()?;
     let client = manager.client().stringify_err()?;
-    manager.mark_busy().stringify_err()?;
+    manager.mark_busy(&job_id).stringify_err()?;
 
     let result = client
         .request::<_, JobSnapshot>(
@@ -802,7 +825,7 @@ pub async fn tt_analysis_start(session_id: String, options: Option<AnalysisOptio
                 job: AnalysisJobSpec {
                     schema_version: 1,
                     kind: "analysis",
-                    job_id,
+                    job_id: job_id.clone(),
                     session_dir: session_dir.to_string_lossy().into_owned(),
                     output_root: root.to_string_lossy().into_owned(),
                     options: options.unwrap_or_default(),
@@ -814,7 +837,7 @@ pub async fn tt_analysis_start(session_id: String, options: Option<AnalysisOptio
     match result {
         Ok(snapshot) => Ok(snapshot),
         Err(error) => {
-            let _ = manager.mark_ready();
+            let _ = manager.mark_ready(&job_id);
             Err(error.to_string().into())
         }
     }
