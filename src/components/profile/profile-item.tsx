@@ -59,6 +59,8 @@ interface Props {
   onEdit: () => void
   onSave?: (prev?: string, curr?: string) => void
   onDelete: () => void
+  switchLocked?: boolean
+  switchLockReason?: string | null
   batchMode?: boolean
   isSelected?: boolean
   onSelectionChange?: () => void
@@ -75,6 +77,8 @@ export const ProfileItem = (props: Props) => {
     onEdit,
     onSave,
     onDelete,
+    switchLocked = false,
+    switchLockReason,
     batchMode,
     isSelected,
     onSelectionChange,
@@ -694,7 +698,10 @@ export const ProfileItem = (props: Props) => {
     >
       <ProfileBox
         aria-selected={selected}
+        aria-disabled={switchLocked}
+        title={switchLocked ? (switchLockReason ?? undefined) : undefined}
         onClick={(e) => {
+          if (switchLocked) return
           // 如果正在激活中，阻止重复点击
           if (activating) {
             e.preventDefault()
@@ -709,6 +716,7 @@ export const ProfileItem = (props: Props) => {
           setAnchorEl(event.currentTarget as HTMLElement)
           event.preventDefault()
         }}
+        sx={switchLocked ? { cursor: 'not-allowed', opacity: 0.72 } : undefined}
       >
         {activating && (
           <Box

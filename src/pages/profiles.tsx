@@ -20,7 +20,15 @@ import {
   RefreshRounded,
   TextSnippetOutlined,
 } from '@mui/icons-material'
-import { Box, Button, Divider, Grid, IconButton, Stack } from '@mui/material'
+import {
+  Alert,
+  Box,
+  Button,
+  Divider,
+  Grid,
+  IconButton,
+  Stack,
+} from '@mui/material'
 import { useQuery } from '@tanstack/react-query'
 import { TauriEvent } from '@tauri-apps/api/event'
 import { readText } from '@tauri-apps/plugin-clipboard-manager'
@@ -52,6 +60,7 @@ import {
 import { ConfigViewer } from '@/components/setting/mods/config-viewer'
 import { useListen } from '@/hooks/use-listen'
 import { useProfiles } from '@/hooks/use-profiles'
+import { useTrafficTracerCaptureLock } from '@/hooks/use-traffic-tracer-worker'
 import {
   calcuProxies,
   createProfile,
@@ -119,6 +128,8 @@ const ProfilePage = () => {
   const [disabled, setDisabled] = useState(false)
   const [activatings, setActivatings] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
+  const { captureLock, captureLockReason } = useTrafficTracerCaptureLock()
+  const captureLocked = captureLock?.locked ?? false
 
   // Batch selection states
   const [batchMode, setBatchMode] = useState(false)
@@ -401,6 +412,11 @@ const ProfilePage = () => {
 
   const activateProfile = useCallback(
     async (profile: string, notifySuccess: boolean) => {
+      if (captureLocked) {
+        if (notifySuccess && captureLockReason)
+          showNotice.info(captureLockReason)
+        return
+      }
       if (profiles.current === profile && !notifySuccess) {
         debugLog(`[Profile] 目标profile ${profile} 已经是当前配置，跳过切换`)
         return
@@ -535,6 +551,8 @@ const ProfilePage = () => {
       mutateLogs,
       handleProfileInterrupt,
       cleanupSwitchState,
+      captureLocked,
+      captureLockReason,
     ],
   )
   const onSelect = async (current: string, force: boolean) => {
@@ -562,6 +580,10 @@ const ProfilePage = () => {
   }, [current, activateProfile, mutateProfiles])
 
   const onEnhance = useLockFn(async (notifySuccess: boolean) => {
+    if (captureLocked) {
+      if (notifySuccess && captureLockReason) showNotice.info(captureLockReason)
+      return
+    }
     if (switchingProfileRef.current) {
       debugLog(
         `[Profile] 有profile正在切换中(${switchingProfileRef.current})，跳过enhance操作`,
@@ -816,6 +838,7 @@ const ProfilePage = () => {
               <IconButton
                 size="small"
                 color="primary"
+                disabled={captureLocked}
                 title={t('profiles.page.actions.reactivate')}
                 onClick={() => onEnhance(true)}
               >
@@ -888,6 +911,11 @@ const ProfilePage = () => {
         </Box>
       }
     >
+      {captureLocked && (
+        <Alert severity="warning" sx={{ mx: '10px', mt: 1 }}>
+          {captureLockReason} Profile switching and reactivation are locked.
+        </Alert>
+      )}
       <Stack
         direction="row"
         spacing={1}
@@ -1004,6 +1032,8 @@ const ProfilePage = () => {
                           onDelete(item.uid)
                         }
                       }}
+                      switchLocked={captureLocked}
+                      switchLockReason={captureLockReason}
                       batchMode={batchMode}
                       isSelected={selectedProfiles.has(item.uid)}
                       onSelectionChange={() => toggleProfileSelection(item.uid)}

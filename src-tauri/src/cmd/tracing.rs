@@ -1,5 +1,7 @@
 use super::CmdResult;
+use super::StringifyErr as _;
 use crate::config::IClashTemp;
+use crate::core::traffic_tracer::lock::CaptureLock;
 use reqwest::{Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -45,6 +47,9 @@ pub async fn get_tracing_state() -> CmdResult<TracingState> {
 
 #[tauri::command]
 pub async fn patch_tracing_state(payload: TracingPatch) -> CmdResult<TracingState> {
+    CaptureLock::global()
+        .ensure_unlocked("changing manual tracing settings")
+        .stringify_err()?;
     let response = tracing_client()?
         .patch(TRACING_URL)
         .json(&payload)

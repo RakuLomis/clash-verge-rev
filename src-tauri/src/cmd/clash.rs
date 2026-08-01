@@ -7,6 +7,7 @@ use crate::{
     constants,
     core::{
         CoreManager, handle,
+        traffic_tracer::lock::CaptureLock,
         validate::{CoreConfigValidator, ValidationOutcome},
     },
 };
@@ -45,6 +46,9 @@ pub async fn patch_clash_mode(payload: String) -> CmdResult {
 /// 切换Clash核心
 #[tauri::command]
 pub async fn change_clash_core(clash_core: String) -> CmdResult<Option<String>> {
+    CaptureLock::global()
+        .ensure_unlocked("changing the proxy core")
+        .stringify_err()?;
     logging!(info, Type::Config, "changing core to {clash_core}");
 
     match CoreManager::global().change_core(&clash_core).await {
@@ -100,6 +104,9 @@ pub async fn stop_core() -> CmdResult {
 /// 重启核心
 #[tauri::command]
 pub async fn restart_core() -> CmdResult {
+    CaptureLock::global()
+        .ensure_unlocked("restarting the proxy core")
+        .stringify_err()?;
     logging_error!(Type::Core, Config::profiles().await.data_arc().save_file().await);
     let result = CoreManager::global().restart_core().await.stringify_err();
     if result.is_ok() {

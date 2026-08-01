@@ -19,13 +19,24 @@ import { useImperativeHandle, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { closeAllConnections, upgradeCore } from 'tauri-plugin-mihomo-api'
 
-import { BaseDialog, DialogRef } from '@/components/base'
+import { BaseDialog, type DialogRef } from '@/components/base'
 import { useClash, useClashInfo } from '@/hooks/use-clash'
 import { useVerge } from '@/hooks/use-verge'
 import { changeClashCore, restartCore } from '@/services/cmds'
 import { showNotice } from '@/services/notice-service'
-export function ClashCoreViewer({ ref }: { ref?: Ref<DialogRef> }) {
+import type { CaptureLockSnapshot } from '@/types/traffic-tracer'
+
+export function ClashCoreViewer({
+  ref,
+  captureLock,
+  captureLockReason,
+}: {
+  ref?: Ref<DialogRef>
+  captureLock?: CaptureLockSnapshot
+  captureLockReason?: string | null
+}) {
   const { t } = useTranslation()
+  const captureLocked = captureLock?.locked ?? false
 
   const { verge, mutateVerge } = useVerge()
   const { mutateVersion } = useClash()
@@ -127,7 +138,7 @@ export function ClashCoreViewer({ ref }: { ref?: Ref<DialogRef> }) {
               startIcon={<SwitchAccessShortcutRounded />}
               loadingPosition="start"
               loading={upgrading}
-              disabled={restarting || changingCore !== null}
+              disabled={captureLocked || restarting || changingCore !== null}
               sx={{ marginRight: '8px' }}
               onClick={onUpgrade}
             >
@@ -139,7 +150,7 @@ export function ClashCoreViewer({ ref }: { ref?: Ref<DialogRef> }) {
               startIcon={<RestartAltRounded />}
               loadingPosition="start"
               loading={restarting}
-              disabled={upgrading}
+              disabled={captureLocked || upgrading}
               onClick={onRestart}
             >
               {t('shared.actions.restart')}
@@ -160,6 +171,11 @@ export function ClashCoreViewer({ ref }: { ref?: Ref<DialogRef> }) {
       onClose={() => setOpen(false)}
       onCancel={() => setOpen(false)}
     >
+      {captureLocked && (
+        <Alert severity="warning" sx={{ mb: 1 }}>
+          {captureLockReason}
+        </Alert>
+      )}
       {coreLoadError && (
         <Alert severity="error" sx={{ mb: 1 }}>
           {coreLoadError}
@@ -171,7 +187,9 @@ export function ClashCoreViewer({ ref }: { ref?: Ref<DialogRef> }) {
             key={core}
             selected={core === clash_core}
             onClick={() => onCoreChange(core)}
-            disabled={changingCore !== null || restarting || upgrading}
+            disabled={
+              captureLocked || changingCore !== null || restarting || upgrading
+            }
           >
             <ListItemText
               primary={core}

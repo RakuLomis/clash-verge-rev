@@ -41,6 +41,17 @@ impl CaptureLock {
         }
     }
 
+    pub fn ensure_unlocked(&self, action: &str) -> Result<()> {
+        if let Some(active) = self.active.lock().as_ref() {
+            bail!(
+                "{action} is unavailable while TrafficTracer Job {} is active: {}",
+                active.job_id,
+                active.reason
+            );
+        }
+        Ok(())
+    }
+
     pub fn acquire(&self, job_id: impl Into<String>, reason: impl Into<String>) -> Result<()> {
         let job_id = job_id.into();
         let reason = reason.into();
@@ -101,6 +112,19 @@ mod tests {
         );
         assert!(lock.release("job-one").unwrap());
         assert_eq!(lock.snapshot(), CaptureLockSnapshot::default());
+    }
+
+    #[test]
+    fn guarded_action_is_rejected_until_release() {
+        let lock = CaptureLock::new();
+        assert!(lock.ensure_unlocked("changing the proxy core").is_ok());
+        lock.acquire("job-one", "capture in progress").unwrap();
+        let error = lock.ensure_unlocked("changing the proxy core").unwrap_err().to_string();
+        assert!(error.contains("changing the proxy core"));
+        assert!(error.contains("job-one"));
+        assert!(error.contains("capture in progress"));
+        lock.release("job-one").unwrap();
+        assert!(lock.ensure_unlocked("changing the proxy core").is_ok());
     }
 
     #[test]

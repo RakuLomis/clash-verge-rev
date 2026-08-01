@@ -11,7 +11,9 @@ use crate::{
         },
         profiles_append_item_safe,
     },
-    core::{CoreManager, handle, timer::Timer, tray::Tray, validate::ValidationOutcome},
+    core::{
+        CoreManager, handle, timer::Timer, traffic_tracer::lock::CaptureLock, tray::Tray, validate::ValidationOutcome,
+    },
     feat,
     utils::{dirs, help},
 };
@@ -294,6 +296,9 @@ async fn perform_config_update(
 /// 修改profiles的配置
 #[tauri::command]
 pub async fn patch_profiles_config(profiles: IProfiles) -> CmdResult<ValidationOutcome> {
+    CaptureLock::global()
+        .ensure_unlocked("switching the active profile")
+        .stringify_err()?;
     if CURRENT_SWITCHING_PROFILE
         .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
         .is_err()

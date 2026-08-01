@@ -231,5 +231,6 @@ pub async fn update_profile(
 
 /// 增强配置
 pub async fn enhance_profiles() -> Result<ValidationOutcome> {
+    crate::core::traffic_tracer::lock::CaptureLock::global().ensure_unlocked("reactivating the active profile")?;
     CoreManager::global().update_config_forced().await
 }

@@ -6,10 +6,11 @@ import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { updateGeo } from 'tauri-plugin-mihomo-api'
 
-import { DialogRef, Switch, TooltipIcon } from '@/components/base'
+import { type DialogRef, Switch, TooltipIcon } from '@/components/base'
 import { useClash } from '@/hooks/use-clash'
 import { useClashLog } from '@/hooks/use-clash-log'
 import { useTracing } from '@/hooks/use-tracing'
+import { useTrafficTracerCaptureLock } from '@/hooks/use-traffic-tracer-worker'
 import { useVerge } from '@/hooks/use-verge'
 import { invoke_uwp_tool } from '@/services/cmds'
 import { showNotice } from '@/services/notice-service'
@@ -43,6 +44,8 @@ const SettingClash = ({ onError }: Props) => {
     isError: tracingIsError,
     error: tracingError,
   } = useTracing()
+  const { captureLock, captureLockReason } = useTrafficTracerCaptureLock()
+  const captureLocked = captureLock?.locked ?? false
   const [, setClashLog] = useClashLog()
 
   const {
@@ -103,7 +106,11 @@ const SettingClash = ({ onError }: Props) => {
       <WebUIViewer ref={webRef} />
       <ClashPortViewer ref={portRef} />
       <ControllerViewer ref={ctrlRef} />
-      <ClashCoreViewer ref={coreRef} />
+      <ClashCoreViewer
+        ref={coreRef}
+        captureLock={captureLock}
+        captureLockReason={captureLockReason}
+      />
       <NetworkInterfaceViewer ref={networkRef} />
       <DnsViewer ref={dnsRef} />
       <HeaderConfiguration ref={corsRef} />
@@ -293,6 +300,13 @@ const SettingClash = ({ onError }: Props) => {
         onClick={() => tunnelRef.current?.open()}
       />
 
+      {captureLocked && (
+        <Alert severity="warning" sx={{ mx: 2, my: 1 }}>
+          {captureLockReason} Core, profile, and manual tracing controls are
+          locked.
+        </Alert>
+      )}
+
       <SettingItem label={t('settings.sections.clash.form.fields.tracing')}>
         <GuardState
           value={tracing?.enabled ?? false}
@@ -302,7 +316,7 @@ const SettingClash = ({ onError }: Props) => {
           onChange={() => {}}
           onGuard={(e) => patchTracing({ enabled: e })}
         >
-          <Switch edge="end" />
+          <Switch edge="end" disabled={captureLocked} />
         </GuardState>
       </SettingItem>
 
@@ -327,6 +341,7 @@ const SettingClash = ({ onError }: Props) => {
           <TextField
             autoComplete="new-password"
             size="small"
+            disabled={captureLocked}
             value={tracing?.output ?? ''}
             placeholder="stdout"
             sx={{ width: 250, input: { py: '7.5px' } }}

@@ -7,6 +7,7 @@ import {
   getTrafficTracerEnvironment,
 } from '@/services/cmds'
 import type {
+  CaptureLockSnapshot,
   EnvironmentRequest,
   WorkerLogEvent,
   WorkerReadyEvent,
@@ -20,23 +21,46 @@ export const trafficTracerCaptureLockKey = [
 export const trafficTracerEnvironmentKey = (request: EnvironmentRequest) =>
   ['trafficTracer', 'environment', request] as const
 
+export function formatTrafficTracerCaptureLock(
+  captureLock: CaptureLockSnapshot | undefined,
+) {
+  if (!captureLock?.locked) return null
+  const reason = captureLock.reason ?? 'TrafficTracer capture is active.'
+  return captureLock.job_id ? `${reason} (Job ${captureLock.job_id})` : reason
+}
+
+export function useTrafficTracerCaptureLock(enabled = true) {
+  const captureLockQuery = useQuery({
+    queryKey: trafficTracerCaptureLockKey,
+    queryFn: getTrafficTracerCaptureLock,
+    enabled,
+    refetchInterval: ({ state }) => (state.data?.locked ? 1000 : 5000),
+  })
+
+  return {
+    captureLock: captureLockQuery.data,
+    captureLockQuery,
+    captureLockReason: formatTrafficTracerCaptureLock(captureLockQuery.data),
+  }
+}
+
 export function useTrafficTracerWorker(
   request: EnvironmentRequest | null,
   enabled = true,
 ) {
   const queryClient = useQueryClient()
+  const captureLockState = useTrafficTracerCaptureLock(enabled)
   const environmentQuery = useQuery({
     queryKey: request
       ? trafficTracerEnvironmentKey(request)
       : ['trafficTracer', 'environment', 'disabled'],
-    queryFn: () => getTrafficTracerEnvironment(request!),
+    queryFn: () => {
+      if (!request)
+        throw new Error('TrafficTracer environment request is missing')
+      return getTrafficTracerEnvironment(request)
+    },
     enabled: enabled && request !== null,
     retry: 1,
-  })
-  const captureLockQuery = useQuery({
-    queryKey: trafficTracerCaptureLockKey,
-    queryFn: getTrafficTracerCaptureLock,
-    enabled,
   })
 
   useEffect(() => {
@@ -58,7 +82,9 @@ export function useTrafficTracerWorker(
     ])
       .then((registered) => {
         if (disposed) {
-          registered.forEach((unlisten) => unlisten())
+          registered.forEach((unlisten) => {
+            unlisten()
+          })
         } else {
           unlisteners = registered
         }
@@ -72,7 +98,9 @@ export function useTrafficTracerWorker(
 
     return () => {
       disposed = true
-      unlisteners.forEach((unlisten) => unlisten())
+      unlisteners.forEach((unlisten) => {
+        unlisten()
+      })
       unlisteners = []
     }
   }, [enabled, queryClient])
@@ -80,7 +108,6 @@ export function useTrafficTracerWorker(
   return {
     environment: environmentQuery.data,
     environmentQuery,
-    captureLock: captureLockQuery.data,
-    captureLockQuery,
+    ...captureLockState,
   }
 }
