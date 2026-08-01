@@ -14,7 +14,7 @@ use crate::{
     core::{
         service,
         traffic_tracer::{
-            manager::{WorkerManager, WorkerManagerState},
+            manager::{WorkerManager, WorkerManagerState, WorkerRecoveryReport, WorkerRecoveryStatus},
             protocol::RequestMethod,
         },
     },
@@ -109,6 +109,7 @@ pub async fn tt_get_environment(
     drop(clash);
 
     let service_available = service::is_service_available().await.is_ok();
+    let controller_endpoint = local_controller_endpoint();
     let manager = WorkerManager::global();
     let requested_root = Path::new(&request.output_root);
     if !requested_root.is_absolute() {
@@ -118,16 +119,19 @@ pub async fn tt_get_environment(
         manager.state(),
         WorkerManagerState::Stopped | WorkerManagerState::Failed { .. }
     ) {
-        manager.start(&app_handle, requested_root).await.stringify_err()?;
+        manager
+            .start(&app_handle, requested_root, &controller_endpoint, &controller_secret)
+            .await
+            .stringify_err()?;
     } else {
         manager.require_session_root(requested_root).stringify_err()?;
     }
     let client = manager.client().stringify_err()?;
-    let worker_report = client
+    let mut worker_report = client
         .request::<_, WorkerDiagnosticReport>(
             RequestMethod::EnvironmentDiagnose,
             WorkerEnvironmentParams {
-                controller_endpoint: local_controller_endpoint(),
+                controller_endpoint,
                 controller_secret,
                 tun_interface: request.tun_interface,
                 physical_interface: request.physical_interface,
@@ -142,6 +146,9 @@ pub async fn tt_get_environment(
         )
         .await
         .stringify_err()?;
+    if let Some(check) = recovery_diagnostic(manager.recovery()) {
+        worker_report.checks.push(check);
+    }
 
     Ok(merge_environment(
         worker_report,
@@ -152,6 +159,26 @@ pub async fn tt_get_environment(
             worker: manager.state(),
         },
     ))
+}
+
+fn recovery_diagnostic(recovery: Option<WorkerRecoveryReport>) -> Option<DiagnosticCheck> {
+    let recovery = recovery?;
+    if recovery.status != WorkerRecoveryStatus::Degraded {
+        return None;
+    }
+    Some(DiagnosticCheck {
+        code: "RECOVERY_DEGRADED".to_owned(),
+        ok: false,
+        severity: DiagnosticSeverity::Warning,
+        message: "TrafficTracer recovery completed with warnings; historical Sessions remain available.".to_owned(),
+        remediation: "Review the recovery details before starting a new capture.".to_owned(),
+        details: serde_json::json!({
+            "recovered_sessions": recovery.recovered_sessions,
+            "terminated_pids": recovery.terminated_pids,
+            "skipped_pids": recovery.skipped_pids,
+            "errors": recovery.errors,
+        }),
+    })
 }
 
 fn local_controller_endpoint() -> String {
@@ -1189,6 +1216,30 @@ mod tests {
             remediation: String::new(),
             details: Value::Object(Default::default()),
         }
+    }
+
+    #[test]
+    fn degraded_recovery_is_a_non_blocking_warning() {
+        let diagnostic = recovery_diagnostic(Some(WorkerRecoveryReport {
+            status: WorkerRecoveryStatus::Degraded,
+            recovered_sessions: Vec::new(),
+            terminated_pids: Vec::new(),
+            skipped_pids: vec![456],
+            errors: vec!["unable to restore tracing".to_owned()],
+        }))
+        .unwrap();
+        assert_eq!(diagnostic.code, "RECOVERY_DEGRADED");
+        assert_eq!(diagnostic.severity, DiagnosticSeverity::Warning);
+
+        let report = merge_environment(
+            WorkerDiagnosticReport {
+                ok: true,
+                checks: vec![diagnostic],
+            },
+            integration(TRAFFIC_TRACER_CORE, true, true),
+        );
+        assert_eq!(report.level, CompleteEnvironmentLevel::Warning);
+        assert!(report.ok);
     }
 
     #[test]

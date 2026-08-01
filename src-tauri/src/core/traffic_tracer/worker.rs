@@ -89,7 +89,13 @@ impl WorkerProcess {
         Self::default()
     }
 
-    pub fn start(&self, app_handle: &AppHandle, output_root: &Path) -> Result<u64> {
+    pub fn start(
+        &self,
+        app_handle: &AppHandle,
+        output_root: &Path,
+        controller_endpoint: &str,
+        controller_secret: &str,
+    ) -> Result<u64> {
         let mut state = self.state.lock();
         if state.child.is_some() {
             bail!("TrafficTracer Worker is already running");
@@ -99,7 +105,13 @@ impl WorkerProcess {
             .shell()
             .sidecar(WORKER_SIDECAR_NAME)
             .context("failed to resolve TrafficTracer Worker sidecar")?
-            .args(["--output-root", &output_root.to_string_lossy()])
+            .args([
+                "--output-root",
+                &output_root.to_string_lossy(),
+                "--controller-endpoint",
+                controller_endpoint,
+            ])
+            .env("TRAFFICTRACER_CONTROLLER_SECRET", controller_secret)
             .spawn()
             .context("failed to start TrafficTracer Worker sidecar")?;
         let instance_id = self.next_instance_id.fetch_add(1, Ordering::Relaxed);
