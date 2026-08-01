@@ -11,6 +11,24 @@ mod module;
 mod process;
 pub mod utils;
 
+/// Minimal orchestration surface used by the sidecar integration tests.
+///
+/// This is not an application API. Keeping the re-exports here lets tests use
+/// the same process, client, protocol, and event mapper as production without
+/// making the complete internal module tree public.
+#[doc(hidden)]
+pub mod traffic_tracer_test_support {
+    pub use crate::core::traffic_tracer::{
+        client::{ClientError, HandshakeState, HelloResult, WorkerClient},
+        events::{EVENT_JOB_PROGRESS, FrontendWorkerEvent, NotificationMapper},
+        protocol::{
+            EmptyParams, FLOW_SCHEMA_VERSION, JOB_SCHEMA_VERSION, RequestMethod, SESSION_SCHEMA_VERSION,
+            WORKER_API_VERSION, WorkerErrorCode,
+        },
+        worker::{ManagedChild, WorkerEvent, WorkerProcess},
+    };
+}
+
 use crate::constants::files;
 use crate::{
     core::handle,

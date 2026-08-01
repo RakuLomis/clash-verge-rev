@@ -37,7 +37,8 @@ pub enum WorkerEvent {
     Exited { instance_id: u64, status: WorkerExit },
 }
 
-pub(super) trait ManagedChild: Send {
+#[doc(hidden)]
+pub trait ManagedChild: Send {
     fn pid(&self) -> u32;
     fn write(&mut self, bytes: &[u8]) -> Result<()>;
     fn kill(self: Box<Self>) -> Result<()>;
@@ -186,7 +187,11 @@ impl WorkerProcess {
         })
     }
 
-    pub(super) fn attach(&self, receiver: mpsc::Receiver<CommandEvent>, child: Box<dyn ManagedChild>) -> Result<u64> {
+    /// Attaches an already spawned transport. This is intentionally hidden from
+    /// application consumers and exists so integration tests can exercise the
+    /// complete Worker orchestration without a packaged sidecar.
+    #[doc(hidden)]
+    pub fn attach(&self, receiver: mpsc::Receiver<CommandEvent>, child: Box<dyn ManagedChild>) -> Result<u64> {
         let mut state = self.state.lock();
         if state.child.is_some() {
             bail!("TrafficTracer Worker is already running");
