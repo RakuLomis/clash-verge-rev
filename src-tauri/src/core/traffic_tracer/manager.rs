@@ -153,6 +153,12 @@ impl WorkerManager {
         tauri::async_runtime::spawn(async move {
             loop {
                 match events.recv().await {
+                    Ok(WorkerEvent::Stdout { line, .. }) if is_terminal_job_notification(&line) => {
+                        let mut state = state.lock();
+                        if *state == WorkerManagerState::Busy {
+                            *state = WorkerManagerState::Ready;
+                        }
+                    }
                     Ok(WorkerEvent::Exited { status, .. }) => {
                         let mut state = state.lock();
                         if *state != WorkerManagerState::Stopped {
@@ -172,6 +178,14 @@ impl WorkerManager {
             }
         })
     }
+}
+
+fn is_terminal_job_notification(line: &str) -> bool {
+    let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
+        return false;
+    };
+    message.get("type").and_then(serde_json::Value::as_str) == Some("notification")
+        && message.get("method").and_then(serde_json::Value::as_str) == Some("job.completed")
 }
 
 singleton!(WorkerManager, TRAFFIC_TRACER_WORKER_MANAGER);
@@ -196,6 +210,7 @@ mod tests {
         assert_eq!(manager.state(), WorkerManagerState::Ready);
         manager.mark_busy().unwrap();
         assert_eq!(manager.state(), WorkerManagerState::Busy);
+        assert!(manager.mark_busy().is_err());
         manager.mark_ready().unwrap();
         assert_eq!(manager.state(), WorkerManagerState::Ready);
         assert!(manager.finish_start().is_err());
@@ -210,6 +225,17 @@ mod tests {
 
         manager.begin_start().unwrap();
         assert_eq!(manager.state(), WorkerManagerState::Starting);
+    }
+
+    #[test]
+    fn recognizes_only_terminal_job_notifications() {
+        assert!(is_terminal_job_notification(
+            r#"{"api_version":1,"type":"notification","method":"job.completed","params":{}}"#
+        ));
+        assert!(!is_terminal_job_notification(
+            r#"{"api_version":1,"type":"response","method":"job.completed"}"#
+        ));
+        assert!(!is_terminal_job_notification("not-json"));
     }
 
     #[test]
