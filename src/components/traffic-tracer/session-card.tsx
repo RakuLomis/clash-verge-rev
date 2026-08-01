@@ -1,6 +1,7 @@
 import {
   FolderOpenRounded,
   ReplayRounded,
+  VisibilityRounded,
   WarningAmberRounded,
 } from '@mui/icons-material'
 import {
@@ -22,6 +23,7 @@ export interface TrafficTracerSessionCardProps {
   analysisBlocked?: boolean
   onOpenDirectory: (sessionId: string) => void
   onAnalyze: (sessionId: string) => void
+  onView: (sessionId: string) => void
 }
 
 const stateColor: Record<
@@ -50,6 +52,7 @@ export function TrafficTracerSessionCard({
   analysisBlocked = false,
   onOpenDirectory,
   onAnalyze,
+  onView,
 }: TrafficTracerSessionCardProps) {
   return (
     <Paper
@@ -119,6 +122,13 @@ export function TrafficTracerSessionCard({
         )}
 
         <Stack direction="row" spacing={1} sx={{ justifyContent: 'flex-end' }}>
+          <Button
+            size="small"
+            startIcon={<VisibilityRounded />}
+            onClick={() => onView(session.session_id)}
+          >
+            Details
+          </Button>
           <Button
             size="small"
             startIcon={<FolderOpenRounded />}

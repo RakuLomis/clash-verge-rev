@@ -24,6 +24,7 @@ import {
 import { showNotice } from '@/services/notice-service'
 
 import { TrafficTracerSessionCard } from './session-card'
+import { TrafficTracerSessionDetail } from './session-detail'
 
 const PAGE_SIZE = 8
 
@@ -34,6 +35,9 @@ export function TrafficTracerSessionsView({
 }) {
   const queryClient = useQueryClient()
   const [page, setPage] = useState(1)
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
+    null,
+  )
   const [openingSessionId, setOpeningSessionId] = useState<string | null>(null)
   const { sessions, corrupt, total, sessionsQuery, refreshSessions } =
     useTrafficTracerSessions((page - 1) * PAGE_SIZE, PAGE_SIZE, enabled)
@@ -156,6 +160,7 @@ export function TrafficTracerSessionsView({
                 }
                 onOpenDirectory={(sessionId) => void openDirectory(sessionId)}
                 onAnalyze={(sessionId) => analysisMutation.mutate(sessionId)}
+                onView={setSelectedSessionId}
               />
             ))}
           </Stack>
@@ -170,6 +175,10 @@ export function TrafficTracerSessionsView({
           />
         )}
       </Stack>
+      <TrafficTracerSessionDetail
+        sessionId={selectedSessionId}
+        onClose={() => setSelectedSessionId(null)}
+      />
     </Paper>
   )
 }
