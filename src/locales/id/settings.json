@@ -294,7 +294,8 @@
       "variants": {
         "release": "Versi Rilis",
         "alpha": "Versi Alpha"
-      }
+      },
+      "currentCore": "Current"
     },
     "liteMode": {
       "title": "LightWeight Mode Settings",

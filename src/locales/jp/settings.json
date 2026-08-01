@@ -294,7 +294,8 @@
       "variants": {
         "release": "正式版",
         "alpha": "アルファ版"
-      }
+      },
+      "currentCore": "Current"
     },
     "liteMode": {
       "title": "軽量モード設定",

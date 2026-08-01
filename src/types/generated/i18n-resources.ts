@@ -191,6 +191,7 @@ export interface TranslationResources {
             proxies: string
             rules: string
             settings: string
+            trafficTracer: string
             unlock: string
           }
         }

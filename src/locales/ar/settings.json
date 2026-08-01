@@ -294,7 +294,8 @@
       "variants": {
         "release": "الإصدار المستقر",
         "alpha": "الإصدار التجريبي"
-      }
+      },
+      "currentCore": "Current"
     },
     "liteMode": {
       "title": "LightWeight Mode Settings",

@@ -294,7 +294,8 @@
       "variants": {
         "release": "Kararlı Sürüm",
         "alpha": "Alfa Sürümü"
-      }
+      },
+      "currentCore": "Current"
     },
     "liteMode": {
       "title": "Hafif Mod Ayarları",

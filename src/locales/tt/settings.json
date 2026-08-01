@@ -294,7 +294,8 @@
       "variants": {
         "release": "Рәсми версия",
         "alpha": "Альфа-версия"
-      }
+      },
+      "currentCore": "Current"
     },
     "liteMode": {
       "title": "LightWeight Mode Settings",

@@ -8,6 +8,7 @@
         "connections": "Соединения",
         "rules": "Правила",
         "logs": "Логи",
+        "trafficTracer": "TrafficTracer",
         "unlock": "Тест",
         "settings": "Настройки"
       },

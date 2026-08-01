@@ -8,6 +8,7 @@
         "connections": "Connections",
         "rules": "Rules",
         "logs": "Logs",
+        "trafficTracer": "TrafficTracer",
         "unlock": "Test",
         "settings": "Settings"
       },

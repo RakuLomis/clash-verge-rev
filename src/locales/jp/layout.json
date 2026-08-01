@@ -8,6 +8,7 @@
         "connections": "接続",
         "rules": "ルール",
         "logs": "ログ",
+        "trafficTracer": "TrafficTracer",
         "unlock": "テスト",
         "settings": "設定"
       },

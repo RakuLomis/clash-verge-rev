@@ -294,7 +294,8 @@
       "variants": {
         "release": "Stabile Version",
         "alpha": "Alpha-Version"
-      }
+      },
+      "currentCore": "Current"
     },
     "liteMode": {
       "title": "Einstellungen für den Leichtgewichtigen Modus",

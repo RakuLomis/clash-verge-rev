@@ -294,7 +294,8 @@
       "variants": {
         "release": "نسخه نهایی",
         "alpha": "نسخه آلفا"
-      }
+      },
+      "currentCore": "Current"
     },
     "liteMode": {
       "title": "LightWeight Mode Settings",

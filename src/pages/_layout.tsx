@@ -24,7 +24,14 @@ import {
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import type { CSSProperties } from 'react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet, useLocation, useNavigate } from 'react-router'
 
@@ -451,7 +458,9 @@ const Layout = () => {
             <div className="the-bar"></div>
             <div className="the-content">
               <BaseErrorBoundary>
-                <Outlet />
+                <Suspense fallback={null}>
+                  <Outlet />
+                </Suspense>
               </BaseErrorBoundary>
               {isLogsPage && (
                 <div
