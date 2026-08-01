@@ -4,13 +4,17 @@ function addressWithPort(ip: string, port: number) {
   return ip.includes(':') ? `[${ip}]:${port}` : `${ip}:${port}`
 }
 
-export function formatFlowTuple(tuple: NormalizedFlowTuple | null) {
-  if (!tuple) return 'No complete post-proxy tuple'
+export function formatFlowTuple(
+  tuple: NormalizedFlowTuple | null,
+  missing = 'No complete post-proxy tuple',
+  incomplete = 'Incomplete',
+) {
+  if (!tuple) return missing
   const destination = tuple.dst_host
     ? `${tuple.dst_host} (${addressWithPort(tuple.dst_ip, tuple.dst_port)})`
     : addressWithPort(tuple.dst_ip, tuple.dst_port)
   const value = `${addressWithPort(tuple.src_ip, tuple.src_port)} → ${destination}`
-  return tuple.complete ? value : `Incomplete · ${value}`
+  return tuple.complete ? value : `${incomplete} · ${value}`
 }
 
 export function flowSearchText(flow: FlowRecord) {

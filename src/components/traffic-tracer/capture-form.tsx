@@ -15,6 +15,7 @@ import {
 import { appDataDir, join } from '@tauri-apps/api/path'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 
 import { getNetworkInterfaces } from '@/services/cmds'
@@ -80,6 +81,7 @@ export function TrafficTracerCaptureForm({
   onRetryDiagnostics,
   onSubmit,
 }: TrafficTracerCaptureFormProps) {
+  const { t } = useTranslation()
   const navigate = useNavigate()
   const [draft, setDraft] = useState(restoredDraft)
   const [interfaces, setInterfaces] = useState<string[]>([])
@@ -173,7 +175,7 @@ export function TrafficTracerCaptureForm({
     const selected = await open({
       directory: false,
       multiple: false,
-      title: 'Select Chrome or Chromium',
+      title: t('settings.trafficTracer.capture.selectChrome'),
     })
     if (selected) update('chrome_binary', String(selected))
   }
@@ -182,7 +184,7 @@ export function TrafficTracerCaptureForm({
     const selected = await open({
       directory: true,
       multiple: false,
-      title: 'Select TrafficTracer Session directory',
+      title: t('settings.trafficTracer.capture.selectOutput'),
     })
     if (selected) update('output_root', String(selected))
   }
@@ -213,7 +215,10 @@ export function TrafficTracerCaptureForm({
     await onSubmit(captureRequestFromDraft(draft))
   }
 
-  const showError = (key: keyof typeof errors) => submitted && errors[key]
+  const showError = (key: keyof typeof errors) => {
+    const code = submitted ? errors[key] : undefined
+    return code ? t(`settings.trafficTracer.validation.${code}`) : undefined
+  }
   const interfaceOptions = Array.from(
     new Set([...interfaces, draft.tun_interface, draft.physical_interface]),
   ).filter(Boolean)
@@ -235,8 +240,7 @@ export function TrafficTracerCaptureForm({
 
       {!diagnosticsCurrent && diagnosticRequest && (
         <Alert severity="warning">
-          Capture settings changed after the last environment check. Check the
-          environment again before starting.
+          {t('settings.trafficTracer.environment.changed')}
         </Alert>
       )}
 
@@ -244,11 +248,10 @@ export function TrafficTracerCaptureForm({
         <Stack spacing={2}>
           <Box>
             <Typography variant="h6" sx={{ fontSize: 17, fontWeight: 600 }}>
-              New capture
+              {t('settings.trafficTracer.capture.title')}
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Capture the pre-proxy and post-proxy traffic for one browser
-              target.
+              {t('settings.trafficTracer.capture.description')}
             </Typography>
           </Box>
 
@@ -260,10 +263,13 @@ export function TrafficTracerCaptureForm({
             }}
           >
             <TextField
-              label="Target URL"
+              label={t('settings.trafficTracer.capture.fields.url')}
               value={draft.url}
               error={Boolean(showError('url'))}
-              helperText={showError('url') || 'HTTP(S) URL opened by Chrome.'}
+              helperText={
+                showError('url') ||
+                t('settings.trafficTracer.capture.hints.url')
+              }
               onChange={(event) => {
                 const url = event.target.value
                 setDraft((current) => ({
@@ -274,14 +280,17 @@ export function TrafficTracerCaptureForm({
               }}
             />
             <TextField
-              label="Domain"
+              label={t('settings.trafficTracer.capture.fields.domain')}
               value={draft.domain}
               error={Boolean(showError('domain'))}
-              helperText={showError('domain') || 'Derived from the target URL.'}
+              helperText={
+                showError('domain') ||
+                t('settings.trafficTracer.capture.hints.domain')
+              }
               onChange={(event) => update('domain', event.target.value)}
             />
             <TextField
-              label="Duration (seconds)"
+              label={t('settings.trafficTracer.capture.fields.duration')}
               type="number"
               value={draft.duration_seconds}
               error={Boolean(showError('duration_seconds'))}
@@ -293,7 +302,7 @@ export function TrafficTracerCaptureForm({
             />
             <TextField
               select
-              label="Network"
+              label={t('settings.trafficTracer.capture.fields.network')}
               value={draft.network}
               onChange={(event) =>
                 update(
@@ -309,7 +318,7 @@ export function TrafficTracerCaptureForm({
             <TextField
               inputRef={tunRef}
               select
-              label="TUN interface"
+              label={t('settings.trafficTracer.capture.fields.tunInterface')}
               value={draft.tun_interface}
               error={Boolean(showError('tun_interface'))}
               helperText={showError('tun_interface')}
@@ -324,7 +333,9 @@ export function TrafficTracerCaptureForm({
             <TextField
               inputRef={physicalRef}
               select
-              label="Physical interface"
+              label={t(
+                'settings.trafficTracer.capture.fields.physicalInterface',
+              )}
               value={draft.physical_interface}
               error={Boolean(showError('physical_interface'))}
               helperText={showError('physical_interface')}
@@ -339,37 +350,42 @@ export function TrafficTracerCaptureForm({
               ))}
             </TextField>
             <TextField
-              label="Chrome / Chromium"
+              label={t('settings.trafficTracer.capture.fields.chrome')}
               value={draft.chrome_binary}
               error={Boolean(showError('chrome_binary'))}
               helperText={
-                showError('chrome_binary') || 'An absolute executable path.'
+                showError('chrome_binary') ||
+                t('settings.trafficTracer.capture.hints.chrome')
               }
               onChange={(event) => update('chrome_binary', event.target.value)}
               slotProps={{
                 input: {
                   endAdornment: (
                     <InputAdornment position="end">
-                      <Button onClick={pickChrome}>Browse</Button>
+                      <Button onClick={pickChrome}>
+                        {t('settings.trafficTracer.common.actions.browse')}
+                      </Button>
                     </InputAdornment>
                   ),
                 },
               }}
             />
             <TextField
-              label="Session output directory"
+              label={t('settings.trafficTracer.capture.fields.output')}
               value={draft.output_root}
               error={Boolean(showError('output_root'))}
               helperText={
                 showError('output_root') ||
-                'One subdirectory is created per Session.'
+                t('settings.trafficTracer.capture.hints.output')
               }
               onChange={(event) => update('output_root', event.target.value)}
               slotProps={{
                 input: {
                   endAdornment: (
                     <InputAdornment position="end">
-                      <Button onClick={pickOutput}>Browse</Button>
+                      <Button onClick={pickOutput}>
+                        {t('settings.trafficTracer.common.actions.browse')}
+                      </Button>
                     </InputAdornment>
                   ),
                 },
@@ -380,16 +396,16 @@ export function TrafficTracerCaptureForm({
           <Stack direction="row" spacing={2} sx={{ flexWrap: 'wrap' }}>
             {(
               [
-                ['capture_packets', 'Packet capture'],
-                ['collect_cdp', 'Chrome CDP'],
-                ['collect_netlog', 'Chrome NetLog'],
-                ['analyze_after_capture', 'Analyze automatically'],
-                ['headless', 'Headless Chrome'],
+                ['capture_packets', 'packets'],
+                ['collect_cdp', 'cdp'],
+                ['collect_netlog', 'netlog'],
+                ['analyze_after_capture', 'analyze'],
+                ['headless', 'headless'],
               ] as const
             ).map(([key, label]) => (
               <FormControlLabel
                 key={key}
-                label={label}
+                label={t(`settings.trafficTracer.capture.options.${label}`)}
                 control={
                   <Checkbox
                     checked={draft.options[key]}
@@ -402,8 +418,8 @@ export function TrafficTracerCaptureForm({
 
           {captureLocked && (
             <Alert severity="info">
-              A TrafficTracer capture is active. Core and capture settings are
-              locked.
+              {t('settings.trafficTracer.locks.captureActive')}{' '}
+              {t('settings.trafficTracer.capture.locked')}
             </Alert>
           )}
 
@@ -423,7 +439,7 @@ export function TrafficTracerCaptureForm({
                 onDiagnose(environmentRequest)
               }}
             >
-              Check environment
+              {t('settings.trafficTracer.common.actions.checkEnvironment')}
             </Button>
             <Button
               variant="contained"
@@ -431,7 +447,7 @@ export function TrafficTracerCaptureForm({
               disabled={disabled}
               onClick={() => void handleSubmit()}
             >
-              Start capture
+              {t('settings.trafficTracer.common.actions.startCapture')}
             </Button>
           </Stack>
         </Stack>

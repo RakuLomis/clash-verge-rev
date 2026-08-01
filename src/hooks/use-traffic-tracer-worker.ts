@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import {
   getTrafficTracerCaptureLock,
@@ -23,13 +24,22 @@ export const trafficTracerEnvironmentKey = (request: EnvironmentRequest) =>
 
 export function formatTrafficTracerCaptureLock(
   captureLock: CaptureLockSnapshot | undefined,
+  fallback = 'TrafficTracer capture is active.',
+  formatJob = (id: string) => `Job ${id}`,
 ) {
   if (!captureLock?.locked) return null
-  const reason = captureLock.reason ?? 'TrafficTracer capture is active.'
-  return captureLock.job_id ? `${reason} (Job ${captureLock.job_id})` : reason
+  const reason =
+    !captureLock.reason ||
+    captureLock.reason === 'TrafficTracer capture is active'
+      ? fallback
+      : captureLock.reason
+  return captureLock.job_id
+    ? `${reason} (${formatJob(captureLock.job_id)})`
+    : reason
 }
 
 export function useTrafficTracerCaptureLock(enabled = true) {
+  const { t } = useTranslation()
   const captureLockQuery = useQuery({
     queryKey: trafficTracerCaptureLockKey,
     queryFn: getTrafficTracerCaptureLock,
@@ -40,7 +50,11 @@ export function useTrafficTracerCaptureLock(enabled = true) {
   return {
     captureLock: captureLockQuery.data,
     captureLockQuery,
-    captureLockReason: formatTrafficTracerCaptureLock(captureLockQuery.data),
+    captureLockReason: formatTrafficTracerCaptureLock(
+      captureLockQuery.data,
+      t('settings.trafficTracer.locks.captureActive'),
+      (id) => t('settings.trafficTracer.locks.job', { id }),
+    ),
   }
 }
 

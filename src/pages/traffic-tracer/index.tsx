@@ -34,7 +34,7 @@ const TrafficTracerPage = () => {
   const handleStartCapture = async (request: CaptureStartRequest) => {
     try {
       await startCapture(request)
-      showNotice.success('TrafficTracer capture started.')
+      showNotice.success('settings.trafficTracer.notifications.captureStarted')
     } catch (error) {
       showNotice.error(error)
     }

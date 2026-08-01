@@ -625,6 +625,328 @@
       }
     }
   },
+  "trafficTracer": {
+    "title": "TrafficTracer",
+    "notifications": {
+      "captureStarted": "TrafficTracer capture started.",
+      "analysisStarted": "TrafficTracer analysis started."
+    },
+    "common": {
+      "actions": {
+        "analyzeAgain": "Analyze again",
+        "browse": "Browse",
+        "cancel": "Cancel",
+        "cancelJob": "Cancel Job",
+        "close": "Close",
+        "keepRunning": "Keep running",
+        "open": "Open",
+        "openDirectory": "Open directory",
+        "queryAll": "Query all Sessions",
+        "refresh": "Refresh",
+        "retry": "Retry",
+        "startCapture": "Start capture",
+        "checkEnvironment": "Check environment"
+      },
+      "progress": {
+        "canceling": "Canceling…",
+        "opening": "Opening…",
+        "querying": "Querying…",
+        "starting": "Starting…"
+      },
+      "states": {
+        "created": "Created",
+        "preparing": "Preparing",
+        "capturing": "Capturing",
+        "analyzing": "Analyzing",
+        "completed": "Completed",
+        "failed": "Failed",
+        "cancelled": "Cancelled",
+        "interrupted": "Interrupted",
+        "ready": "Ready",
+        "warning": "Needs attention",
+        "blocked": "Blocked",
+        "unknown": "Unknown",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "notChecked": "Not checked",
+        "complete": "Complete",
+        "incomplete": "Incomplete"
+      }
+    },
+    "locks": {
+      "captureActive": "TrafficTracer capture is active.",
+      "coreTracing": "Core, profile, and manual tracing controls are locked.",
+      "profiles": "Profile switching and reactivation are locked.",
+      "proxyLifecycle": "TUN, system proxy, and service changes are locked.",
+      "job": "Job {{id}}"
+    },
+    "environment": {
+      "title": "Environment readiness",
+      "description": "Core, capture tools, interfaces, browser, and Session storage",
+      "diagnosticsFailed": "Environment diagnostics failed.",
+      "checkAgain": "Check environment",
+      "changed": "Capture settings changed after the last environment check. Check the environment again before starting.",
+      "labels": {
+        "core": "Core",
+        "controller": "Controller",
+        "tun": "TUN",
+        "tunInterface": "TUN interface",
+        "physicalInterface": "Physical interface",
+        "captureTools": "Packet capture",
+        "chrome": "Chrome / Chromium",
+        "output": "Session output"
+      },
+      "values": {
+        "localController": "Local controller",
+        "notSelected": "Not selected",
+        "tunServiceReady": "Enabled · service ready",
+        "tunServiceUnavailable": "Enabled · service unavailable"
+      },
+      "actions": {
+        "retry": "Retry",
+        "fix": "Fix"
+      },
+      "diagnostics": {
+        "RECOVERY_DEGRADED": {
+          "message": "Recovery completed with warnings; historical Sessions remain available.",
+          "remediation": "Review the recovery details before starting a new capture."
+        },
+        "CORE_NOT_TRAFFIC_TRACER": {
+          "message": "The running core does not provide TrafficTracer capabilities.",
+          "remediation": "Select verge-mihomo-tt and restart the proxy core."
+        },
+        "CORE_ENDPOINT_MISSING": {
+          "message": "No Mihomo controller endpoint is configured.",
+          "remediation": "Select the TrafficTracer core and configure its controller endpoint."
+        },
+        "CORE_TRACING_UNAVAILABLE": {
+          "message": "TrafficTracer capabilities are unavailable.",
+          "remediation": "Start mihomo-traffictracer and verify the controller endpoint and secret."
+        },
+        "CORE_CAPABILITY_MISMATCH": {
+          "message": "The selected core does not advertise normalized Flow support.",
+          "remediation": "Select the verge-mihomo-tt core built from the pinned TrafficTracer branch."
+        },
+        "TUN_SERVICE_UNAVAILABLE": {
+          "message": "TUN mode is enabled, but the Clash Verge service is unavailable.",
+          "remediation": "Install or repair the Clash Verge TUN service, then check again."
+        },
+        "TUN_DISABLED": {
+          "message": "TUN mode is disabled; proxy-flow capture may be incomplete.",
+          "remediation": "Enable TUN mode before starting a full TrafficTracer capture."
+        },
+        "TUN_INTERFACE_NOT_CONFIGURED": {
+          "message": "The TUN capture interface is not configured.",
+          "remediation": "Select the TUN interface in the capture settings."
+        },
+        "TUN_INTERFACE_ENUMERATION_FAILED": {
+          "message": "Network interfaces could not be enumerated.",
+          "remediation": "Check operating-system network permissions and try again."
+        },
+        "TUN_INTERFACE_NOT_FOUND": {
+          "message": "The selected TUN interface does not exist.",
+          "remediation": "Refresh interfaces after enabling TUN."
+        },
+        "PHYSICAL_INTERFACE_NOT_CONFIGURED": {
+          "message": "The physical capture interface is not configured.",
+          "remediation": "Select the physical interface in the capture settings."
+        },
+        "PHYSICAL_INTERFACE_ENUMERATION_FAILED": {
+          "message": "Network interfaces could not be enumerated.",
+          "remediation": "Check operating-system network permissions and try again."
+        },
+        "PHYSICAL_INTERFACE_NOT_FOUND": {
+          "message": "The selected physical interface does not exist.",
+          "remediation": "Refresh interfaces after reconnecting the network."
+        },
+        "CAPTURE_TOOL_NOT_FOUND": {
+          "message": "tshark and dumpcap are required for packet capture.",
+          "remediation": "Install Wireshark CLI tools and add tshark and dumpcap to PATH."
+        },
+        "CAPTURE_TOOL_CHECK_FAILED": {
+          "message": "dumpcap could not be executed.",
+          "remediation": "Verify the dumpcap executable and its Linux capabilities."
+        },
+        "CAPTURE_PERMISSION_DENIED": {
+          "message": "Packet capture permission was denied.",
+          "remediation": "Grant dumpcap capture capabilities or add the user to the wireshark group."
+        },
+        "CAPTURE_TOOL_UNAVAILABLE": {
+          "message": "The packet-capture tools are unavailable.",
+          "remediation": "Run dumpcap -D in a terminal and fix the reported error."
+        },
+        "CHROME_NOT_EXECUTABLE": {
+          "message": "The configured Chrome or Chromium executable is unavailable.",
+          "remediation": "Select an executable Chrome or Chromium binary."
+        },
+        "OUTPUT_DIRECTORY_MISSING": {
+          "message": "No output directory is configured.",
+          "remediation": "Choose an absolute directory for TrafficTracer Sessions."
+        },
+        "OUTPUT_DIRECTORY_NOT_ABSOLUTE": {
+          "message": "The output directory must be an absolute path.",
+          "remediation": "Choose the output directory with the folder picker."
+        },
+        "OUTPUT_DIRECTORY_INVALID": {
+          "message": "The configured output path is not a directory.",
+          "remediation": "Choose a directory instead of a file."
+        },
+        "OUTPUT_DIRECTORY_NOT_WRITABLE": {
+          "message": "The output directory cannot be created or written.",
+          "remediation": "Choose a writable directory or correct its permissions."
+        },
+        "OUTPUT_DIRECTORY_WILL_CREATE": {
+          "message": "The output directory does not exist yet and will be created.",
+          "remediation": "No action is required, or create it now to verify permissions."
+        },
+        "DISK_THRESHOLD_INVALID": {
+          "message": "The minimum free-space threshold is invalid.",
+          "remediation": "Configure a non-negative minimum free-space threshold."
+        },
+        "DISK_SPACE_UNAVAILABLE": {
+          "message": "Free disk space could not be inspected.",
+          "remediation": "Choose an output directory on an accessible mounted filesystem."
+        },
+        "DISK_SPACE_LOW": {
+          "message": "The output filesystem does not have enough free space.",
+          "remediation": "Free disk space or choose a different output directory."
+        }
+      }
+    },
+    "capture": {
+      "title": "New capture",
+      "description": "Capture the pre-proxy and post-proxy traffic for one browser target.",
+      "selectChrome": "Select Chrome or Chromium",
+      "selectOutput": "Select TrafficTracer Session directory",
+      "fields": {
+        "url": "Target URL",
+        "domain": "Domain",
+        "duration": "Duration (seconds)",
+        "network": "Network",
+        "tunInterface": "TUN interface",
+        "physicalInterface": "Physical interface",
+        "chrome": "Chrome / Chromium",
+        "output": "Session output directory"
+      },
+      "hints": {
+        "url": "HTTP(S) URL opened by Chrome.",
+        "domain": "Derived from the target URL.",
+        "output": "One subdirectory is created per Session.",
+        "chrome": "An absolute executable path."
+      },
+      "options": {
+        "packets": "Packet capture",
+        "cdp": "Chrome CDP",
+        "netlog": "Chrome NetLog",
+        "analyze": "Analyze automatically",
+        "headless": "Headless Chrome"
+      },
+      "locked": "Core and capture settings are locked."
+    },
+    "jobs": {
+      "capture": "Capture Job",
+      "analysis": "Analysis Job",
+      "started": "Started {{time}}",
+      "restoredTime": "unknown (restored Job)",
+      "progressLog": "Progress log",
+      "waiting": "Waiting for progress events…",
+      "jobId": "Job ID: {{id}}",
+      "cancelTitle": "Cancel TrafficTracer Job?",
+      "cancelDescription": "Capture processes will stop and the partial Session will be retained as cancelled. Closing this page alone does not cancel the Job.",
+      "cancelReason": "Cancelled from the TrafficTracer workspace."
+    },
+    "sessions": {
+      "title": "Sessions",
+      "description": "Captures and analysis results stored by TrafficTracer",
+      "checkEnvironment": "Check the TrafficTracer environment to load Sessions.",
+      "empty": "No TrafficTracer Sessions yet.",
+      "corrupt": "Corrupt Session",
+      "detailTitle": "TrafficTracer Session",
+      "details": "Details",
+      "artifactsEmpty": "This Session has no registered artifacts.",
+      "artifacts_one": "{{count}} artifact",
+      "artifacts_other": "{{count}} artifacts",
+      "warnings_one": "{{count}} warning",
+      "warnings_other": "{{count}} warnings",
+      "schema": "Schema v{{version}}",
+      "workerApi": "Worker API {{version}}",
+      "componentVersions": "Component versions",
+      "artifactsTitle": "Artifacts",
+      "unknownSize": "Unknown size",
+      "startingAnalysis": "Starting analysis…"
+    },
+    "flows": {
+      "title": "Normalized Flows",
+      "description": "Pre-proxy tuples and their observed post-proxy mappings",
+      "filter": "Filter current results",
+      "noResults": "No Flow results.",
+      "noFilterResults": "No Flows match this filter.",
+      "noPostTuple": "No complete post-proxy tuple",
+      "shared": "Shared",
+      "exclusive": "Exclusive",
+      "unknown": "Unknown",
+      "sharedTooltip": "This outer Flow is shared by multiple logical Flows.",
+      "match": {
+        "matched": "Matched",
+        "ambiguous": "Ambiguous",
+        "unmatched": "Unmatched",
+        "legacy": "Legacy"
+      },
+      "detail": {
+        "title": "Normalized Flow details",
+        "sharedFlow": "Shared Flow",
+        "sharedWarning": "This mapping shares a tuple or outer connection with another logical Flow. It is not an exclusive one-to-one association.",
+        "preTuple": "Pre-proxy tuple",
+        "postTuple": "Post-proxy tuple",
+        "missingPost": "No complete post-proxy tuple was recorded. The pre-proxy tuple is not copied or inferred as a replacement.",
+        "correlation": "Correlation",
+        "reason": "Reason",
+        "candidates": "Candidates",
+        "flowId": "Flow ID",
+        "connectionId": "Connection ID",
+        "outerConnectionId": "Outer connection ID",
+        "requestContext": "Request context",
+        "resourceType": "Resource type",
+        "relation": "Relation",
+        "requestIds": "Request IDs",
+        "noRequestIds": "No request IDs are associated with this Flow.",
+        "packetCaptures": "Session packet captures",
+        "packetCaptureScope": "These artifacts belong to the Session; the schema does not claim a per-Flow pcap association.",
+        "confidence": "{{value}}% confidence",
+        "to": "to",
+        "host": "Host"
+      },
+      "columns": {
+        "network": "Network",
+        "session": "Session",
+        "pre": "Pre-proxy",
+        "post": "Post-proxy",
+        "match": "Match",
+        "shared": "Shared",
+        "url": "URL"
+      },
+      "queryTitle": "Query pre-proxy five-tuple",
+      "queryDescription": "Search every loaded Session for all matching logical Flows and their observed post-proxy tuples.",
+      "sourceIp": "Source IP",
+      "sourcePort": "Source port",
+      "destinationIp": "Destination IP",
+      "destinationPort": "Destination port",
+      "ipHint": "IPv4 or IPv6",
+      "sessionsAvailable": "{{count}} Sessions available",
+      "found": "Found {{count}} logical Flow matches across {{sessions}} Sessions."
+    },
+    "validation": {
+      "ip": "Enter a valid, non-unspecified IP address.",
+      "port": "Port must be between 1 and 65535.",
+      "url": "Enter an absolute HTTP(S) URL.",
+      "domain": "Enter a valid DNS domain.",
+      "duration": "Duration must be between 1 and 86400 seconds.",
+      "tunInterface": "Select the TUN interface.",
+      "physicalInterface": "Select the physical interface.",
+      "output": "Choose an absolute Session output directory.",
+      "chrome": "Choose an absolute Chrome/Chromium executable."
+    }
+  },
   "feedback": {
     "notifications": {
       "clash": {

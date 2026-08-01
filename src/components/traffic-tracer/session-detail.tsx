@@ -12,6 +12,7 @@ import {
   Stack,
   Typography,
 } from '@mui/material'
+import { useTranslation } from 'react-i18next'
 
 import { useTrafficTracerSession } from '@/hooks/use-traffic-tracer-sessions'
 import { showNotice } from '@/services/notice-service'
@@ -31,6 +32,7 @@ export function TrafficTracerSessionDetail({
   sessionId,
   onClose,
 }: TrafficTracerSessionDetailProps) {
+  const { t } = useTranslation()
   const { session, sessionQuery, startAnalysis, analysisMutation } =
     useTrafficTracerSession(sessionId)
 
@@ -41,7 +43,7 @@ export function TrafficTracerSessionDetail({
         write_flow_index: true,
         overwrite: true,
       })
-      showNotice.success('TrafficTracer analysis started.')
+      showNotice.success('settings.trafficTracer.notifications.analysisStarted')
     } catch (error) {
       showNotice.error(error)
     }
@@ -49,7 +51,9 @@ export function TrafficTracerSessionDetail({
 
   return (
     <Dialog open={sessionId !== null} onClose={onClose} fullWidth maxWidth="md">
-      <DialogTitle>TrafficTracer Session</DialogTitle>
+      <DialogTitle>
+        {t('settings.trafficTracer.sessions.detailTitle')}
+      </DialogTitle>
       <DialogContent dividers>
         {sessionQuery.isLoading ? (
           <Stack sx={{ alignItems: 'center', py: 5 }}>
@@ -67,10 +71,22 @@ export function TrafficTracerSessionDetail({
             </Box>
 
             <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
-              <Chip label={session.state} size="small" />
-              <Chip label={`Schema v${session.schema_version}`} size="small" />
               <Chip
-                label={`Worker API ${session.component_versions.worker_api}`}
+                label={t(
+                  `settings.trafficTracer.common.states.${session.state}`,
+                )}
+                size="small"
+              />
+              <Chip
+                label={t('settings.trafficTracer.sessions.schema', {
+                  version: session.schema_version,
+                })}
+                size="small"
+              />
+              <Chip
+                label={t('settings.trafficTracer.sessions.workerApi', {
+                  version: session.component_versions.worker_api,
+                })}
                 size="small"
               />
             </Stack>
@@ -89,7 +105,7 @@ export function TrafficTracerSessionDetail({
 
             <Box>
               <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                Component versions
+                {t('settings.trafficTracer.sessions.componentVersions')}
               </Typography>
               <Stack spacing={0.75}>
                 <Typography variant="body2">
@@ -119,7 +135,7 @@ export function TrafficTracerSessionDetail({
             <Divider />
             <Box>
               <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
-                Artifacts
+                {t('settings.trafficTracer.sessions.artifactsTitle')}
               </Typography>
               <TrafficTracerArtifactList
                 sessionId={session.session_id}
@@ -130,13 +146,17 @@ export function TrafficTracerSessionDetail({
         ) : null}
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Close</Button>
+        <Button onClick={onClose}>
+          {t('settings.trafficTracer.common.actions.close')}
+        </Button>
         <Button
           variant="contained"
           disabled={!session || analysisMutation.isPending}
           onClick={() => void analyzeAgain()}
         >
-          {analysisMutation.isPending ? 'Starting analysis…' : 'Analyze again'}
+          {analysisMutation.isPending
+            ? t('settings.trafficTracer.sessions.startingAnalysis')
+            : t('settings.trafficTracer.common.actions.analyzeAgain')}
         </Button>
       </DialogActions>
     </Dialog>

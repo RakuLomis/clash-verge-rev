@@ -13,6 +13,7 @@ import {
   Stack,
   Typography,
 } from '@mui/material'
+import { useTranslation } from 'react-i18next'
 
 import type { JobState, SessionManifest } from '@/types/traffic-tracer'
 
@@ -54,6 +55,7 @@ export function TrafficTracerSessionCard({
   onAnalyze,
   onView,
 }: TrafficTracerSessionCardProps) {
+  const { t } = useTranslation()
   return (
     <Paper
       variant="outlined"
@@ -90,7 +92,7 @@ export function TrafficTracerSessionCard({
           <Chip
             size="small"
             color={stateColor[session.state]}
-            label={session.state}
+            label={t(`settings.trafficTracer.common.states.${session.state}`)}
           />
         </Stack>
 
@@ -103,14 +105,28 @@ export function TrafficTracerSessionCard({
           <Chip
             size="small"
             variant="outlined"
-            label={`${session.artifacts.length} artifacts`}
+            label={t(
+              session.artifacts.length === 1
+                ? 'settings.trafficTracer.sessions.artifacts_one'
+                : 'settings.trafficTracer.sessions.artifacts_other',
+              {
+                count: session.artifacts.length,
+              },
+            )}
           />
           {session.warnings.length > 0 && (
             <Chip
               size="small"
               color="warning"
               icon={<WarningAmberRounded />}
-              label={`${session.warnings.length} warnings`}
+              label={t(
+                session.warnings.length === 1
+                  ? 'settings.trafficTracer.sessions.warnings_one'
+                  : 'settings.trafficTracer.sessions.warnings_other',
+                {
+                  count: session.warnings.length,
+                },
+              )}
             />
           )}
         </Stack>
@@ -127,7 +143,7 @@ export function TrafficTracerSessionCard({
             startIcon={<VisibilityRounded />}
             onClick={() => onView(session.session_id)}
           >
-            Details
+            {t('settings.trafficTracer.sessions.details')}
           </Button>
           <Button
             size="small"
@@ -135,7 +151,9 @@ export function TrafficTracerSessionCard({
             disabled={opening}
             onClick={() => onOpenDirectory(session.session_id)}
           >
-            {opening ? 'Opening…' : 'Open directory'}
+            {opening
+              ? t('settings.trafficTracer.common.progress.opening')
+              : t('settings.trafficTracer.common.actions.openDirectory')}
           </Button>
           <Button
             size="small"
@@ -143,7 +161,9 @@ export function TrafficTracerSessionCard({
             disabled={analyzing || analysisBlocked}
             onClick={() => onAnalyze(session.session_id)}
           >
-            {analyzing ? 'Starting…' : 'Analyze again'}
+            {analyzing
+              ? t('settings.trafficTracer.common.progress.starting')
+              : t('settings.trafficTracer.common.actions.analyzeAgain')}
           </Button>
         </Stack>
       </Stack>

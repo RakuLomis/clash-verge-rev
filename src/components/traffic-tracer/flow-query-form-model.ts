@@ -8,7 +8,10 @@ export interface FlowQueryDraft {
   dst_port: string
 }
 
-export type FlowQueryErrors = Partial<Record<keyof FlowQueryDraft, string>>
+export type FlowQueryErrorCode = 'ip' | 'port'
+export type FlowQueryErrors = Partial<
+  Record<keyof FlowQueryDraft, FlowQueryErrorCode>
+>
 
 export const defaultFlowQueryDraft: FlowQueryDraft = {
   network: 'tcp',
@@ -58,14 +61,10 @@ function validPort(value: string) {
 
 export function validateFlowQuery(draft: FlowQueryDraft): FlowQueryErrors {
   const errors: FlowQueryErrors = {}
-  if (!validFlowIp(draft.src_ip))
-    errors.src_ip = 'Enter a valid, non-unspecified IP address.'
-  if (!validPort(draft.src_port))
-    errors.src_port = 'Port must be between 1 and 65535.'
-  if (!validFlowIp(draft.dst_ip))
-    errors.dst_ip = 'Enter a valid, non-unspecified IP address.'
-  if (!validPort(draft.dst_port))
-    errors.dst_port = 'Port must be between 1 and 65535.'
+  if (!validFlowIp(draft.src_ip)) errors.src_ip = 'ip'
+  if (!validPort(draft.src_port)) errors.src_port = 'port'
+  if (!validFlowIp(draft.dst_ip)) errors.dst_ip = 'ip'
+  if (!validPort(draft.dst_port)) errors.dst_port = 'port'
   return errors
 }
 

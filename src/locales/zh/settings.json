@@ -625,6 +625,328 @@
       }
     }
   },
+  "trafficTracer": {
+    "title": "TrafficTracer",
+    "notifications": {
+      "captureStarted": "TrafficTracer 捕获任务已启动。",
+      "analysisStarted": "TrafficTracer 分析任务已启动。"
+    },
+    "common": {
+      "actions": {
+        "analyzeAgain": "重新分析",
+        "browse": "浏览",
+        "cancel": "取消",
+        "cancelJob": "取消任务",
+        "close": "关闭",
+        "keepRunning": "继续运行",
+        "open": "打开",
+        "openDirectory": "打开目录",
+        "queryAll": "查询全部会话",
+        "refresh": "刷新",
+        "retry": "重试",
+        "startCapture": "开始捕获",
+        "checkEnvironment": "检测环境"
+      },
+      "progress": {
+        "canceling": "正在取消…",
+        "opening": "正在打开…",
+        "querying": "正在查询…",
+        "starting": "正在启动…"
+      },
+      "states": {
+        "created": "已创建",
+        "preparing": "准备中",
+        "capturing": "捕获中",
+        "analyzing": "分析中",
+        "completed": "已完成",
+        "failed": "失败",
+        "cancelled": "已取消",
+        "interrupted": "已中断",
+        "ready": "就绪",
+        "warning": "需要处理",
+        "blocked": "已阻断",
+        "unknown": "未知",
+        "enabled": "已启用",
+        "disabled": "已禁用",
+        "notChecked": "未检查",
+        "complete": "完整",
+        "incomplete": "不完整"
+      }
+    },
+    "locks": {
+      "captureActive": "TrafficTracer 捕获任务正在运行。",
+      "coreTracing": "捕获期间禁止切换核心、配置或手动修改 tracing。",
+      "profiles": "捕获期间禁止切换或重新激活配置。",
+      "proxyLifecycle": "捕获期间禁止更改 TUN、系统代理或系统服务。",
+      "job": "任务 {{id}}"
+    },
+    "environment": {
+      "title": "环境就绪状态",
+      "description": "核心、捕获工具、网络接口、浏览器和会话存储",
+      "diagnosticsFailed": "环境诊断失败。",
+      "checkAgain": "检查环境",
+      "changed": "捕获设置在上次环境检查后发生变化，请重新检查后再开始。",
+      "labels": {
+        "core": "核心",
+        "controller": "控制器",
+        "tun": "TUN",
+        "tunInterface": "TUN 接口",
+        "physicalInterface": "物理接口",
+        "captureTools": "数据包捕获",
+        "chrome": "Chrome / Chromium",
+        "output": "会话输出"
+      },
+      "values": {
+        "localController": "本地控制器",
+        "notSelected": "未选择",
+        "tunServiceReady": "已启用 · 服务就绪",
+        "tunServiceUnavailable": "已启用 · 服务不可用"
+      },
+      "actions": {
+        "retry": "重试",
+        "fix": "修复"
+      },
+      "diagnostics": {
+        "RECOVERY_DEGRADED": {
+          "message": "恢复已完成，但存在警告；历史会话仍然可用。",
+          "remediation": "开始新捕获前请检查恢复详情。"
+        },
+        "CORE_NOT_TRAFFIC_TRACER": {
+          "message": "当前运行的核心不具备 TrafficTracer 能力。",
+          "remediation": "请选择 verge-mihomo-tt 并重启代理核心。"
+        },
+        "CORE_ENDPOINT_MISSING": {
+          "message": "尚未配置 Mihomo 控制器端点。",
+          "remediation": "请选择 TrafficTracer 核心并配置控制器端点。"
+        },
+        "CORE_TRACING_UNAVAILABLE": {
+          "message": "TrafficTracer 能力当前不可用。",
+          "remediation": "请启动 mihomo-traffictracer，并检查控制器端点和密钥。"
+        },
+        "CORE_CAPABILITY_MISMATCH": {
+          "message": "所选核心未声明规范化流支持。",
+          "remediation": "请选择由固定 TrafficTracer 分支构建的 verge-mihomo-tt 核心。"
+        },
+        "TUN_SERVICE_UNAVAILABLE": {
+          "message": "TUN 模式已启用，但 Clash Verge 服务不可用。",
+          "remediation": "请安装或修复 Clash Verge TUN 服务，然后重新检测。"
+        },
+        "TUN_DISABLED": {
+          "message": "TUN 模式未启用，代理流捕获可能不完整。",
+          "remediation": "开始完整 TrafficTracer 捕获前请启用 TUN 模式。"
+        },
+        "TUN_INTERFACE_NOT_CONFIGURED": {
+          "message": "尚未配置 TUN 捕获接口。",
+          "remediation": "请在捕获设置中选择 TUN 接口。"
+        },
+        "TUN_INTERFACE_ENUMERATION_FAILED": {
+          "message": "无法枚举网络接口。",
+          "remediation": "请检查操作系统网络权限后重试。"
+        },
+        "TUN_INTERFACE_NOT_FOUND": {
+          "message": "所选 TUN 接口不存在。",
+          "remediation": "启用 TUN 后请刷新接口列表。"
+        },
+        "PHYSICAL_INTERFACE_NOT_CONFIGURED": {
+          "message": "尚未配置物理捕获接口。",
+          "remediation": "请在捕获设置中选择物理接口。"
+        },
+        "PHYSICAL_INTERFACE_ENUMERATION_FAILED": {
+          "message": "无法枚举网络接口。",
+          "remediation": "请检查操作系统网络权限后重试。"
+        },
+        "PHYSICAL_INTERFACE_NOT_FOUND": {
+          "message": "所选物理接口不存在。",
+          "remediation": "网络重连后请刷新接口列表。"
+        },
+        "CAPTURE_TOOL_NOT_FOUND": {
+          "message": "数据包捕获需要 tshark 和 dumpcap。",
+          "remediation": "请安装 Wireshark 命令行工具，并将 tshark 和 dumpcap 加入 PATH。"
+        },
+        "CAPTURE_TOOL_CHECK_FAILED": {
+          "message": "无法执行 dumpcap。",
+          "remediation": "请检查 dumpcap 可执行文件及其 Linux capabilities。"
+        },
+        "CAPTURE_PERMISSION_DENIED": {
+          "message": "数据包捕获权限被拒绝。",
+          "remediation": "请授予 dumpcap 捕获能力，或将当前用户加入 wireshark 组。"
+        },
+        "CAPTURE_TOOL_UNAVAILABLE": {
+          "message": "数据包捕获工具不可用。",
+          "remediation": "请在终端运行 dumpcap -D 并修复其报告的问题。"
+        },
+        "CHROME_NOT_EXECUTABLE": {
+          "message": "配置的 Chrome 或 Chromium 可执行文件不可用。",
+          "remediation": "请选择可执行的 Chrome 或 Chromium 文件。"
+        },
+        "OUTPUT_DIRECTORY_MISSING": {
+          "message": "尚未配置输出目录。",
+          "remediation": "请为 TrafficTracer 会话选择绝对路径目录。"
+        },
+        "OUTPUT_DIRECTORY_NOT_ABSOLUTE": {
+          "message": "输出目录必须是绝对路径。",
+          "remediation": "请通过目录选择器选择输出目录。"
+        },
+        "OUTPUT_DIRECTORY_INVALID": {
+          "message": "配置的输出路径不是目录。",
+          "remediation": "请选择目录而不是文件。"
+        },
+        "OUTPUT_DIRECTORY_NOT_WRITABLE": {
+          "message": "无法创建或写入输出目录。",
+          "remediation": "请选择可写目录，或修正其所有者和权限。"
+        },
+        "OUTPUT_DIRECTORY_WILL_CREATE": {
+          "message": "输出目录尚不存在，捕获时将自动创建。",
+          "remediation": "无需操作；也可以现在创建目录以验证权限。"
+        },
+        "DISK_THRESHOLD_INVALID": {
+          "message": "最小可用空间阈值无效。",
+          "remediation": "请配置非负的最小可用空间阈值。"
+        },
+        "DISK_SPACE_UNAVAILABLE": {
+          "message": "无法检查可用磁盘空间。",
+          "remediation": "请选择位于已挂载且可访问文件系统上的输出目录。"
+        },
+        "DISK_SPACE_LOW": {
+          "message": "输出文件系统的可用空间不足。",
+          "remediation": "请释放磁盘空间或选择其他输出目录。"
+        }
+      }
+    },
+    "capture": {
+      "title": "新建捕获",
+      "description": "针对一个浏览器目标捕获代理前与代理后流量。",
+      "selectChrome": "选择 Chrome 或 Chromium",
+      "selectOutput": "选择 TrafficTracer 会话目录",
+      "fields": {
+        "url": "目标 URL",
+        "domain": "域名",
+        "duration": "持续时间（秒）",
+        "network": "网络协议",
+        "tunInterface": "TUN 接口",
+        "physicalInterface": "物理接口",
+        "chrome": "Chrome / Chromium",
+        "output": "会话输出目录"
+      },
+      "hints": {
+        "url": "Chrome 将打开的 HTTP(S) URL。",
+        "domain": "根据目标 URL 自动推导。",
+        "output": "每个会话将创建一个独立子目录。",
+        "chrome": "必须是可执行文件的绝对路径。"
+      },
+      "options": {
+        "packets": "捕获数据包",
+        "cdp": "Chrome CDP",
+        "netlog": "Chrome NetLog",
+        "analyze": "自动分析",
+        "headless": "无头模式 Chrome"
+      },
+      "locked": "核心与捕获设置已锁定。"
+    },
+    "jobs": {
+      "capture": "捕获任务",
+      "analysis": "分析任务",
+      "started": "开始时间：{{time}}",
+      "restoredTime": "未知（恢复的任务）",
+      "progressLog": "进度日志",
+      "waiting": "等待进度事件…",
+      "jobId": "任务 ID：{{id}}",
+      "cancelTitle": "取消 TrafficTracer 任务？",
+      "cancelDescription": "捕获进程将停止，部分会话会以已取消状态保留。仅关闭本页面不会取消任务。",
+      "cancelReason": "用户从 TrafficTracer 工作区取消。"
+    },
+    "sessions": {
+      "title": "会话",
+      "description": "TrafficTracer 保存的捕获与分析结果",
+      "checkEnvironment": "请先检查 TrafficTracer 环境以加载会话。",
+      "empty": "尚无 TrafficTracer 会话。",
+      "corrupt": "损坏的会话",
+      "detailTitle": "TrafficTracer 会话",
+      "details": "详情",
+      "artifactsEmpty": "该会话没有已登记的产物。",
+      "artifacts_one": "{{count}} 个产物",
+      "artifacts_other": "{{count}} 个产物",
+      "warnings_one": "{{count}} 条警告",
+      "warnings_other": "{{count}} 条警告",
+      "schema": "Schema v{{version}}",
+      "workerApi": "Worker API {{version}}",
+      "componentVersions": "组件版本",
+      "artifactsTitle": "产物",
+      "unknownSize": "大小未知",
+      "startingAnalysis": "正在启动分析…"
+    },
+    "flows": {
+      "title": "规范化流",
+      "description": "代理前五元组及观测到的代理后映射",
+      "filter": "筛选当前结果",
+      "noResults": "没有流结果。",
+      "noFilterResults": "没有符合筛选条件的流。",
+      "noPostTuple": "没有完整的代理后五元组",
+      "shared": "共享",
+      "exclusive": "独占",
+      "unknown": "未知",
+      "sharedTooltip": "该外层连接被多个逻辑流共享。",
+      "match": {
+        "matched": "已匹配",
+        "ambiguous": "存在歧义",
+        "unmatched": "未匹配",
+        "legacy": "旧版"
+      },
+      "detail": {
+        "title": "规范化流详情",
+        "sharedFlow": "共享流",
+        "sharedWarning": "该映射与其他逻辑流共享五元组或外层连接，并非独占的一对一关联。",
+        "preTuple": "代理前五元组",
+        "postTuple": "代理后五元组",
+        "missingPost": "未记录完整的代理后五元组；系统不会复制或推断代理前五元组作为替代。",
+        "correlation": "关联信息",
+        "reason": "原因",
+        "candidates": "候选数",
+        "flowId": "流 ID",
+        "connectionId": "连接 ID",
+        "outerConnectionId": "外层连接 ID",
+        "requestContext": "请求上下文",
+        "resourceType": "资源类型",
+        "relation": "关系",
+        "requestIds": "请求 ID",
+        "noRequestIds": "该流没有关联的请求 ID。",
+        "packetCaptures": "会话数据包捕获",
+        "packetCaptureScope": "这些产物属于整个会话；当前 schema 不声明逐流 pcap 关联。",
+        "confidence": "置信度 {{value}}%",
+        "to": "至",
+        "host": "主机"
+      },
+      "columns": {
+        "network": "网络协议",
+        "session": "会话",
+        "pre": "代理前",
+        "post": "代理后",
+        "match": "匹配",
+        "shared": "共享",
+        "url": "URL"
+      },
+      "queryTitle": "查询代理前五元组",
+      "queryDescription": "在全部已加载会话中查找所有匹配的逻辑流及其观测到的代理后五元组。",
+      "sourceIp": "源 IP",
+      "sourcePort": "源端口",
+      "destinationIp": "目的 IP",
+      "destinationPort": "目的端口",
+      "ipHint": "IPv4 或 IPv6",
+      "sessionsAvailable": "可查询 {{count}} 个会话",
+      "found": "在 {{sessions}} 个会话中找到 {{count}} 个逻辑流匹配。"
+    },
+    "validation": {
+      "ip": "请输入有效且非未指定地址的 IP。",
+      "port": "端口必须在 1 到 65535 之间。",
+      "url": "请输入绝对 HTTP(S) URL。",
+      "domain": "请输入有效的 DNS 域名。",
+      "duration": "持续时间必须在 1 到 86400 秒之间。",
+      "tunInterface": "请选择 TUN 接口。",
+      "physicalInterface": "请选择物理接口。",
+      "output": "请选择绝对路径的会话输出目录。",
+      "chrome": "请选择绝对路径的 Chrome/Chromium 可执行文件。"
+    }
+  },
   "feedback": {
     "notifications": {
       "clash": {

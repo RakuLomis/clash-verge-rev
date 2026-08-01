@@ -199,7 +199,7 @@ const ProxyControlSwitches = ({
     <Box sx={{ width: '100%', pr: noRightPadding ? 1 : 2 }}>
       {captureLocked && (
         <Alert severity="warning" sx={{ mb: 1 }}>
-          {captureLockReason} TUN, system proxy, and service changes are locked.
+          {captureLockReason} {t('settings.trafficTracer.locks.proxyLifecycle')}
         </Alert>
       )}
       {isSystemProxyMode && (

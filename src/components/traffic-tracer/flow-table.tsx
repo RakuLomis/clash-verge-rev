@@ -19,6 +19,7 @@ import {
   Typography,
 } from '@mui/material'
 import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import type { FlowMatchStatus, FlowRecord } from '@/types/traffic-tracer'
 
@@ -66,6 +67,7 @@ export function TrafficTracerFlowTable({
   onPageChange,
   onSelect,
 }: TrafficTracerFlowTableProps) {
+  const { t } = useTranslation()
   const [filter, setFilter] = useState('')
   const visibleFlows = useMemo(
     () => filterFlows(flows, filter),
@@ -87,16 +89,16 @@ export function TrafficTracerFlowTable({
       >
         <Box>
           <Typography variant="h6" sx={{ fontSize: 17, fontWeight: 600 }}>
-            Normalized Flows
+            {t('settings.trafficTracer.flows.title')}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Pre-proxy tuples and their observed post-proxy mappings
+            {t('settings.trafficTracer.flows.description')}
           </Typography>
         </Box>
         <TextField
           size="small"
           value={filter}
-          placeholder="Filter current results"
+          placeholder={t('settings.trafficTracer.flows.filter')}
           onChange={(event) => setFilter(event.target.value)}
           slotProps={{
             input: {
@@ -131,13 +133,27 @@ export function TrafficTracerFlowTable({
         <Table size="small">
           <TableHead>
             <TableRow>
-              <TableCell>Network</TableCell>
-              <TableCell>Session</TableCell>
-              <TableCell>Pre-proxy</TableCell>
-              <TableCell>Post-proxy</TableCell>
-              <TableCell>Match</TableCell>
-              <TableCell>Shared</TableCell>
-              <TableCell>URL</TableCell>
+              <TableCell>
+                {t('settings.trafficTracer.flows.columns.network')}
+              </TableCell>
+              <TableCell>
+                {t('settings.trafficTracer.flows.columns.session')}
+              </TableCell>
+              <TableCell>
+                {t('settings.trafficTracer.flows.columns.pre')}
+              </TableCell>
+              <TableCell>
+                {t('settings.trafficTracer.flows.columns.post')}
+              </TableCell>
+              <TableCell>
+                {t('settings.trafficTracer.flows.columns.match')}
+              </TableCell>
+              <TableCell>
+                {t('settings.trafficTracer.flows.columns.shared')}
+              </TableCell>
+              <TableCell>
+                {t('settings.trafficTracer.flows.columns.url')}
+              </TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -146,8 +162,8 @@ export function TrafficTracerFlowTable({
                 <TableCell colSpan={7} align="center" sx={{ py: 5 }}>
                   <Typography color="text.secondary">
                     {filter
-                      ? 'No Flows match this filter.'
-                      : 'No Flow results.'}
+                      ? t('settings.trafficTracer.flows.noFilterResults')
+                      : t('settings.trafficTracer.flows.noResults')}
                   </Typography>
                 </TableCell>
               </TableRow>
@@ -182,17 +198,33 @@ export function TrafficTracerFlowTable({
                     </Typography>
                   </TableCell>
                   <TableCell sx={{ minWidth: 260 }}>
-                    <Tooltip title={formatFlowTuple(flow.pre_flow)}>
+                    <Tooltip
+                      title={formatFlowTuple(
+                        flow.pre_flow,
+                        t('settings.trafficTracer.flows.noPostTuple'),
+                        t('settings.trafficTracer.common.states.incomplete'),
+                      )}
+                    >
                       <Typography
                         variant="body2"
                         sx={{ fontFamily: 'monospace' }}
                       >
-                        {formatFlowTuple(flow.pre_flow)}
+                        {formatFlowTuple(
+                          flow.pre_flow,
+                          t('settings.trafficTracer.flows.noPostTuple'),
+                          t('settings.trafficTracer.common.states.incomplete'),
+                        )}
                       </Typography>
                     </Tooltip>
                   </TableCell>
                   <TableCell sx={{ minWidth: 260 }}>
-                    <Tooltip title={formatFlowTuple(flow.post_flow)}>
+                    <Tooltip
+                      title={formatFlowTuple(
+                        flow.post_flow,
+                        t('settings.trafficTracer.flows.noPostTuple'),
+                        t('settings.trafficTracer.common.states.incomplete'),
+                      )}
+                    >
                       <Typography
                         variant="body2"
                         color={
@@ -202,7 +234,11 @@ export function TrafficTracerFlowTable({
                         }
                         sx={{ fontFamily: 'monospace' }}
                       >
-                        {formatFlowTuple(flow.post_flow)}
+                        {formatFlowTuple(
+                          flow.post_flow,
+                          t('settings.trafficTracer.flows.noPostTuple'),
+                          t('settings.trafficTracer.common.states.incomplete'),
+                        )}
                       </Typography>
                     </Tooltip>
                   </TableCell>
@@ -211,7 +247,7 @@ export function TrafficTracerFlowTable({
                       <Chip
                         size="small"
                         color={matchColor[flow.match.status]}
-                        label={`${flow.match.status} · ${confidenceLabel(flow.match.confidence)}`}
+                        label={`${t(`settings.trafficTracer.flows.match.${flow.match.status}`)} · ${confidenceLabel(flow.match.confidence)}`}
                       />
                     </Tooltip>
                   </TableCell>
@@ -219,17 +255,19 @@ export function TrafficTracerFlowTable({
                     {flow.shared ||
                     flow.pre_flow.shared ||
                     flow.post_flow?.shared ? (
-                      <Tooltip title="This outer Flow is shared by multiple logical Flows.">
+                      <Tooltip
+                        title={t('settings.trafficTracer.flows.sharedTooltip')}
+                      >
                         <Chip
                           size="small"
                           color="warning"
                           icon={<WarningAmberRounded />}
-                          label="Shared"
+                          label={t('settings.trafficTracer.flows.shared')}
                         />
                       </Tooltip>
                     ) : (
                       <Typography variant="body2" color="text.secondary">
-                        Exclusive
+                        {t('settings.trafficTracer.flows.exclusive')}
                       </Typography>
                     )}
                   </TableCell>

@@ -18,6 +18,9 @@ import {
   Typography,
 } from '@mui/material'
 import type { ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
+
+import type { TranslationKey } from '@/types/generated/i18n-keys'
 
 import type {
   EnvironmentItemState,
@@ -43,9 +46,9 @@ const statePresentation: Record<EnvironmentItemState, { icon: ReactNode }> = {
   },
 }
 
-function errorMessage(error: unknown) {
+function errorMessage(error: unknown, fallback: string) {
   if (error instanceof Error) return error.message
-  return typeof error === 'string' ? error : 'Environment diagnostics failed.'
+  return typeof error === 'string' ? error : fallback
 }
 
 export function TrafficTracerEnvironmentCard({
@@ -56,7 +59,37 @@ export function TrafficTracerEnvironmentCard({
   onRetry,
   onRemediate,
 }: TrafficTracerEnvironmentCardProps) {
-  const summary = buildEnvironmentSummary(report, request)
+  const { t } = useTranslation()
+  const summary = buildEnvironmentSummary(report, request, {
+    labels: {
+      core: t('settings.trafficTracer.environment.labels.core'),
+      controller: t('settings.trafficTracer.environment.labels.controller'),
+      tun: t('settings.trafficTracer.environment.labels.tun'),
+      'tun-interface': t(
+        'settings.trafficTracer.environment.labels.tunInterface',
+      ),
+      'physical-interface': t(
+        'settings.trafficTracer.environment.labels.physicalInterface',
+      ),
+      'capture-tools': t(
+        'settings.trafficTracer.environment.labels.captureTools',
+      ),
+      chrome: t('settings.trafficTracer.environment.labels.chrome'),
+      output: t('settings.trafficTracer.environment.labels.output'),
+    },
+    localController: t(
+      'settings.trafficTracer.environment.values.localController',
+    ),
+    notChecked: t('settings.trafficTracer.common.states.notChecked'),
+    notSelected: t('settings.trafficTracer.environment.values.notSelected'),
+    disabled: t('settings.trafficTracer.common.states.disabled'),
+    tunServiceReady: t(
+      'settings.trafficTracer.environment.values.tunServiceReady',
+    ),
+    tunServiceUnavailable: t(
+      'settings.trafficTracer.environment.values.tunServiceUnavailable',
+    ),
+  })
   const failingChecks = report?.checks.filter((check) => !check.ok) ?? []
   const level = report?.level ?? 'blocking'
   const levelColor =
@@ -81,10 +114,10 @@ export function TrafficTracerEnvironmentCard({
       >
         <Box>
           <Typography variant="h6" sx={{ fontSize: 17, fontWeight: 600 }}>
-            Environment readiness
+            {t('settings.trafficTracer.environment.title')}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Core, capture tools, interfaces, browser, and Session storage
+            {t('settings.trafficTracer.environment.description')}
           </Typography>
         </Box>
         <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
@@ -95,10 +128,10 @@ export function TrafficTracerEnvironmentCard({
               color={levelColor}
               label={
                 level === 'ready'
-                  ? 'Ready'
+                  ? t('settings.trafficTracer.common.states.ready')
                   : level === 'warning'
-                    ? 'Needs attention'
-                    : 'Blocked'
+                    ? t('settings.trafficTracer.common.states.warning')
+                    : t('settings.trafficTracer.common.states.blocked')
               }
             />
           )}
@@ -109,7 +142,7 @@ export function TrafficTracerEnvironmentCard({
               onClick={onRetry}
               disabled={loading}
             >
-              Check again
+              {t('settings.trafficTracer.environment.checkAgain')}
             </Button>
           )}
         </Stack>
@@ -165,13 +198,16 @@ export function TrafficTracerEnvironmentCard({
           action={
             onRetry ? (
               <Button color="inherit" size="small" onClick={onRetry}>
-                Retry
+                {t('settings.trafficTracer.environment.actions.retry')}
               </Button>
             ) : undefined
           }
           sx={{ borderRadius: 0 }}
         >
-          {errorMessage(error)}
+          {errorMessage(
+            error,
+            t('settings.trafficTracer.environment.diagnosticsFailed'),
+          )}
         </Alert>
       )}
 
@@ -192,13 +228,23 @@ export function TrafficTracerEnvironmentCard({
                       startIcon={<BuildRounded />}
                       onClick={() => onRemediate(target, check)}
                     >
-                      Fix
+                      {t('settings.trafficTracer.environment.actions.fix')}
                     </Button>
                   ) : undefined
                 }
               >
-                <Typography variant="subtitle2">{check.message}</Typography>
-                <Typography variant="body2">{check.remediation}</Typography>
+                <Typography variant="subtitle2">
+                  {t(
+                    `settings.trafficTracer.environment.diagnostics.${check.code}.message` as TranslationKey,
+                    { defaultValue: check.message },
+                  )}
+                </Typography>
+                <Typography variant="body2">
+                  {t(
+                    `settings.trafficTracer.environment.diagnostics.${check.code}.remediation` as TranslationKey,
+                    { defaultValue: check.remediation },
+                  )}
+                </Typography>
                 <Typography variant="caption" color="text.secondary">
                   {check.code}
                 </Typography>

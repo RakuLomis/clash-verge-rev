@@ -1,6 +1,7 @@
 import { OpenInNewRounded } from '@mui/icons-material'
 import { Alert, Button, Chip, Divider, Stack, Typography } from '@mui/material'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { openTrafficTracerArtifact } from '@/services/cmds'
 import type { SessionArtifact } from '@/types/traffic-tracer'
@@ -10,8 +11,8 @@ export interface TrafficTracerArtifactListProps {
   artifacts: SessionArtifact[]
 }
 
-function formatBytes(bytes: number) {
-  if (!Number.isFinite(bytes) || bytes < 0) return 'Unknown size'
+function formatBytes(bytes: number, unknownSize: string) {
+  if (!Number.isFinite(bytes) || bytes < 0) return unknownSize
   const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
   let value = bytes
   let unit = 0
@@ -26,6 +27,7 @@ export function TrafficTracerArtifactList({
   sessionId,
   artifacts,
 }: TrafficTracerArtifactListProps) {
+  const { t } = useTranslation()
   const [openingName, setOpeningName] = useState<string | null>(null)
   const [openError, setOpenError] = useState<string | null>(null)
 
@@ -44,7 +46,7 @@ export function TrafficTracerArtifactList({
   if (artifacts.length === 0) {
     return (
       <Typography color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>
-        This Session has no registered artifacts.
+        {t('settings.trafficTracer.sessions.artifactsEmpty')}
       </Typography>
     )
   }
@@ -76,7 +78,10 @@ export function TrafficTracerArtifactList({
                   label={artifact.media_type}
                 />
                 <Typography variant="caption" color="text.secondary">
-                  {formatBytes(artifact.size_bytes)}
+                  {formatBytes(
+                    artifact.size_bytes,
+                    t('settings.trafficTracer.sessions.unknownSize'),
+                  )}
                 </Typography>
               </Stack>
             </Stack>
@@ -86,7 +91,9 @@ export function TrafficTracerArtifactList({
               disabled={openingName !== null}
               onClick={() => void openArtifact(artifact)}
             >
-              {openingName === artifact.name ? 'Opening…' : 'Open'}
+              {openingName === artifact.name
+                ? t('settings.trafficTracer.common.progress.opening')
+                : t('settings.trafficTracer.common.actions.open')}
             </Button>
           </Stack>
         ))}

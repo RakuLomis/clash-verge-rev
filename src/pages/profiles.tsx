@@ -913,7 +913,7 @@ const ProfilePage = () => {
     >
       {captureLocked && (
         <Alert severity="warning" sx={{ mx: '10px', mt: 1 }}>
-          {captureLockReason} Profile switching and reactivation are locked.
+          {captureLockReason} {t('settings.trafficTracer.locks.profiles')}
         </Alert>
       )}
       <Stack

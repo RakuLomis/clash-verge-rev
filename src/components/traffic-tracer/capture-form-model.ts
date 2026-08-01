@@ -26,7 +26,13 @@ export type CaptureFormErrors = Partial<
     | 'physical_interface'
     | 'output_root'
     | 'chrome_binary',
-    string
+    | 'url'
+    | 'domain'
+    | 'duration'
+    | 'tunInterface'
+    | 'physicalInterface'
+    | 'output'
+    | 'chrome'
   >
 >
 
@@ -89,29 +95,29 @@ export function validateCaptureForm(
 ): CaptureFormErrors {
   const errors: CaptureFormErrors = {}
   if (!deriveDomain(draft.url) || /\s/.test(draft.url)) {
-    errors.url = 'Enter an absolute HTTP(S) URL.'
+    errors.url = 'url'
   }
   if (!validDomain(draft.domain.trim())) {
-    errors.domain = 'Enter a valid DNS domain.'
+    errors.domain = 'domain'
   }
   if (
     !Number.isInteger(draft.duration_seconds) ||
     draft.duration_seconds < 1 ||
     draft.duration_seconds > 86_400
   ) {
-    errors.duration_seconds = 'Duration must be between 1 and 86400 seconds.'
+    errors.duration_seconds = 'duration'
   }
   if (!draft.tun_interface.trim()) {
-    errors.tun_interface = 'Select the TUN interface.'
+    errors.tun_interface = 'tunInterface'
   }
   if (!draft.physical_interface.trim()) {
-    errors.physical_interface = 'Select the physical interface.'
+    errors.physical_interface = 'physicalInterface'
   }
   if (!isAbsolutePlatformPath(draft.output_root)) {
-    errors.output_root = 'Choose an absolute Session output directory.'
+    errors.output_root = 'output'
   }
   if (!isAbsolutePlatformPath(draft.chrome_binary)) {
-    errors.chrome_binary = 'Choose an absolute Chrome/Chromium executable.'
+    errors.chrome_binary = 'chrome'
   }
   return errors
 }

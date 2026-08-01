@@ -11,6 +11,7 @@ import {
 } from '@mui/material'
 import { useMutation } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { useTrafficTracerSessions } from '@/hooks/use-traffic-tracer-sessions'
 import { queryTrafficTracerFlows } from '@/services/cmds'
@@ -85,6 +86,7 @@ export function TrafficTracerFlowQueryForm({
 }: {
   enabled?: boolean
 }) {
+  const { t } = useTranslation()
   const [draft, setDraft] = useState(defaultFlowQueryDraft)
   const [submitted, setSubmitted] = useState(false)
   const [offset, setOffset] = useState(0)
@@ -96,6 +98,8 @@ export function TrafficTracerFlowQueryForm({
     enabled,
   )
   const errors = useMemo(() => validateFlowQuery(draft), [draft])
+  const errorText = (code: 'ip' | 'port' | undefined) =>
+    code ? t(`settings.trafficTracer.validation.${code}`) : undefined
 
   const queryMutation = useMutation({
     mutationFn: () => queryAllSessions(sessions, draft),
@@ -129,11 +133,10 @@ export function TrafficTracerFlowQueryForm({
         <Stack spacing={2}>
           <Box>
             <Typography variant="h6" sx={{ fontSize: 17, fontWeight: 600 }}>
-              Query pre-proxy five-tuple
+              {t('settings.trafficTracer.flows.queryTitle')}
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Search every loaded Session for all matching logical Flows and
-              their observed post-proxy tuples.
+              {t('settings.trafficTracer.flows.queryDescription')}
             </Typography>
           </Box>
 
@@ -149,7 +152,7 @@ export function TrafficTracerFlowQueryForm({
           >
             <TextField
               select
-              label="Network"
+              label={t('settings.trafficTracer.flows.columns.network')}
               value={draft.network}
               onChange={(event) =>
                 update(
@@ -162,31 +165,39 @@ export function TrafficTracerFlowQueryForm({
               <MenuItem value="udp">UDP</MenuItem>
             </TextField>
             <TextField
-              label="Source IP"
+              label={t('settings.trafficTracer.flows.sourceIp')}
               value={draft.src_ip}
               error={submitted && Boolean(errors.src_ip)}
-              helperText={submitted ? errors.src_ip : 'IPv4 or IPv6'}
+              helperText={
+                submitted
+                  ? errorText(errors.src_ip)
+                  : t('settings.trafficTracer.flows.ipHint')
+              }
               onChange={(event) => update('src_ip', event.target.value)}
             />
             <TextField
-              label="Source port"
+              label={t('settings.trafficTracer.flows.sourcePort')}
               value={draft.src_port}
               error={submitted && Boolean(errors.src_port)}
-              helperText={submitted ? errors.src_port : undefined}
+              helperText={submitted ? errorText(errors.src_port) : undefined}
               onChange={(event) => update('src_port', event.target.value)}
             />
             <TextField
-              label="Destination IP"
+              label={t('settings.trafficTracer.flows.destinationIp')}
               value={draft.dst_ip}
               error={submitted && Boolean(errors.dst_ip)}
-              helperText={submitted ? errors.dst_ip : 'IPv4 or IPv6'}
+              helperText={
+                submitted
+                  ? errorText(errors.dst_ip)
+                  : t('settings.trafficTracer.flows.ipHint')
+              }
               onChange={(event) => update('dst_ip', event.target.value)}
             />
             <TextField
-              label="Destination port"
+              label={t('settings.trafficTracer.flows.destinationPort')}
               value={draft.dst_port}
               error={submitted && Boolean(errors.dst_port)}
-              helperText={submitted ? errors.dst_port : undefined}
+              helperText={submitted ? errorText(errors.dst_port) : undefined}
               onChange={(event) => update('dst_port', event.target.value)}
             />
           </Box>
@@ -198,8 +209,10 @@ export function TrafficTracerFlowQueryForm({
           >
             <Typography variant="body2" color="text.secondary">
               {enabled
-                ? `${sessions.length} Sessions available`
-                : 'Check the environment to load Sessions'}
+                ? t('settings.trafficTracer.flows.sessionsAvailable', {
+                    count: sessions.length,
+                  })
+                : t('settings.trafficTracer.sessions.checkEnvironment')}
             </Typography>
             <Button
               variant="contained"
@@ -212,7 +225,9 @@ export function TrafficTracerFlowQueryForm({
               }
               onClick={submit}
             >
-              {queryMutation.isPending ? 'Querying…' : 'Query all Sessions'}
+              {queryMutation.isPending
+                ? t('settings.trafficTracer.common.progress.querying')
+                : t('settings.trafficTracer.common.actions.queryAll')}
             </Button>
           </Stack>
         </Stack>
@@ -228,8 +243,10 @@ export function TrafficTracerFlowQueryForm({
       ))}
       {result && (
         <Alert severity={result.flows.length > 0 ? 'success' : 'info'}>
-          Found {result.flows.length} logical Flow matches across{' '}
-          {result.queriedSessions} Sessions.
+          {t('settings.trafficTracer.flows.found', {
+            count: result.flows.length,
+            sessions: result.queriedSessions,
+          })}
         </Alert>
       )}
 

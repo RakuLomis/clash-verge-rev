@@ -11,6 +11,7 @@ import {
 } from '@mui/material'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import { trafficTracerJobKey } from '@/hooks/use-capture-job'
 import {
@@ -33,6 +34,7 @@ export function TrafficTracerSessionsView({
 }: {
   enabled?: boolean
 }) {
+  const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [page, setPage] = useState(1)
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
@@ -52,7 +54,7 @@ export function TrafficTracerSessionsView({
     onSuccess: (snapshot) => {
       queryClient.setQueryData(trafficTracerJobKey(snapshot.job_id), snapshot)
       void queryClient.invalidateQueries({ queryKey: trafficTracerSessionsKey })
-      showNotice.success('TrafficTracer analysis started.')
+      showNotice.success('settings.trafficTracer.notifications.analysisStarted')
     },
     onError: (error) => showNotice.error(error),
   })
@@ -84,10 +86,10 @@ export function TrafficTracerSessionsView({
         >
           <Box>
             <Typography variant="h6" sx={{ fontSize: 17, fontWeight: 600 }}>
-              Sessions
+              {t('settings.trafficTracer.sessions.title')}
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Captures and analysis results stored by TrafficTracer
+              {t('settings.trafficTracer.sessions.description')}
             </Typography>
           </Box>
           <Button
@@ -96,13 +98,15 @@ export function TrafficTracerSessionsView({
             disabled={!enabled || sessionsQuery.isFetching}
             onClick={() => void refreshSessions()}
           >
-            Refresh
+            {t('settings.trafficTracer.common.actions.refresh')}
           </Button>
         </Stack>
 
         {corrupt.map((item) => (
           <Alert key={item.session_dir} severity="error">
-            <Typography variant="subtitle2">Corrupt Session</Typography>
+            <Typography variant="subtitle2">
+              {t('settings.trafficTracer.sessions.corrupt')}
+            </Typography>
             <Typography variant="body2">{item.message}</Typography>
             <Typography variant="caption" sx={{ overflowWrap: 'anywhere' }}>
               {item.session_dir}
@@ -115,7 +119,7 @@ export function TrafficTracerSessionsView({
             color="text.secondary"
             sx={{ py: 4, textAlign: 'center' }}
           >
-            Check the TrafficTracer environment to load Sessions.
+            {t('settings.trafficTracer.sessions.checkEnvironment')}
           </Typography>
         ) : sessionsQuery.isLoading ? (
           <Stack sx={{ alignItems: 'center', py: 4 }}>
@@ -130,7 +134,7 @@ export function TrafficTracerSessionsView({
                 size="small"
                 onClick={() => void refreshSessions()}
               >
-                Retry
+                {t('settings.trafficTracer.common.actions.retry')}
               </Button>
             }
           >
@@ -141,7 +145,7 @@ export function TrafficTracerSessionsView({
             color="text.secondary"
             sx={{ py: 4, textAlign: 'center' }}
           >
-            No TrafficTracer Sessions yet.
+            {t('settings.trafficTracer.sessions.empty')}
           </Typography>
         ) : (
           <Stack spacing={1}>

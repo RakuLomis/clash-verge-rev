@@ -12,6 +12,7 @@ import {
   Stack,
   Typography,
 } from '@mui/material'
+import { useTranslation } from 'react-i18next'
 
 import type {
   FlowRecord,
@@ -40,6 +41,7 @@ function TupleDetail({
   title: string
   tuple: NormalizedFlowTuple
 }) {
+  const { t } = useTranslation()
   return (
     <Paper variant="outlined" sx={{ p: 1.5, flex: 1, minWidth: 280 }}>
       <Stack spacing={1}>
@@ -52,20 +54,26 @@ function TupleDetail({
           <Chip
             size="small"
             color={tuple.complete ? 'success' : 'warning'}
-            label={tuple.complete ? 'Complete' : 'Incomplete'}
+            label={
+              tuple.complete
+                ? t('settings.trafficTracer.common.states.complete')
+                : t('settings.trafficTracer.common.states.incomplete')
+            }
           />
         </Stack>
         <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
           {endpoint(tuple.src_ip, tuple.src_port)}
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          to
+          {t('settings.trafficTracer.flows.detail.to')}
         </Typography>
         <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
           {endpoint(tuple.dst_ip, tuple.dst_port)}
         </Typography>
         {tuple.dst_host && (
-          <Typography variant="body2">Host: {tuple.dst_host}</Typography>
+          <Typography variant="body2">
+            {t('settings.trafficTracer.flows.detail.host')}: {tuple.dst_host}
+          </Typography>
         )}
         <Divider />
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
@@ -76,7 +84,13 @@ function TupleDetail({
           />
           <Chip size="small" variant="outlined" label={tuple.scope} />
           <Chip size="small" variant="outlined" label={tuple.source} />
-          {tuple.shared && <Chip size="small" color="warning" label="Shared" />}
+          {tuple.shared && (
+            <Chip
+              size="small"
+              color="warning"
+              label={t('settings.trafficTracer.flows.shared')}
+            />
+          )}
         </Stack>
       </Stack>
     </Paper>
@@ -94,11 +108,14 @@ export function TrafficTracerFlowDetail({
   sessionArtifacts = emptyArtifacts,
   onClose,
 }: TrafficTracerFlowDetailProps) {
+  const { t } = useTranslation()
   const packetCaptures = sessionArtifacts.filter(isPacketCapture)
 
   return (
     <Dialog open={flow !== null} onClose={onClose} fullWidth maxWidth="md">
-      <DialogTitle>Normalized Flow details</DialogTitle>
+      <DialogTitle>
+        {t('settings.trafficTracer.flows.detail.title')}
+      </DialogTitle>
       <DialogContent dividers>
         {flow && (
           <Stack spacing={2}>
@@ -108,54 +125,74 @@ export function TrafficTracerFlowDetail({
               sx={{ alignItems: 'center', flexWrap: 'wrap' }}
             >
               <Chip label={flow.protocol.toUpperCase()} size="small" />
-              <Chip label={flow.match.status} size="small" />
               <Chip
-                label={`${Math.round(flow.match.confidence * 100)}% confidence`}
+                label={t(
+                  `settings.trafficTracer.flows.match.${flow.match.status}`,
+                )}
+                size="small"
+              />
+              <Chip
+                label={t('settings.trafficTracer.flows.detail.confidence', {
+                  value: Math.round(flow.match.confidence * 100),
+                })}
                 size="small"
               />
               {flow.shared && (
-                <Chip color="warning" label="Shared Flow" size="small" />
+                <Chip
+                  color="warning"
+                  label={t('settings.trafficTracer.flows.detail.sharedFlow')}
+                  size="small"
+                />
               )}
             </Stack>
 
             {flow.shared && (
               <Alert severity="warning">
-                This mapping shares a tuple or outer connection with another
-                logical Flow. It is not an exclusive one-to-one association.
+                {t('settings.trafficTracer.flows.detail.sharedWarning')}
               </Alert>
             )}
 
             <Stack direction="row" spacing={1.5} sx={{ flexWrap: 'wrap' }}>
-              <TupleDetail title="Pre-proxy tuple" tuple={flow.pre_flow} />
+              <TupleDetail
+                title={t('settings.trafficTracer.flows.detail.preTuple')}
+                tuple={flow.pre_flow}
+              />
               {flow.post_flow ? (
-                <TupleDetail title="Post-proxy tuple" tuple={flow.post_flow} />
+                <TupleDetail
+                  title={t('settings.trafficTracer.flows.detail.postTuple')}
+                  tuple={flow.post_flow}
+                />
               ) : (
                 <Alert severity="warning" sx={{ flex: 1, minWidth: 280 }}>
-                  No complete post-proxy tuple was recorded. The pre-proxy tuple
-                  is not copied or inferred as a replacement.
+                  {t('settings.trafficTracer.flows.detail.missingPost')}
                 </Alert>
               )}
             </Stack>
 
             <Box>
               <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
-                Correlation
+                {t('settings.trafficTracer.flows.detail.correlation')}
               </Typography>
               <Stack spacing={0.5}>
                 <Typography variant="body2">
-                  Reason: {flow.match.reason || '—'}
+                  {t('settings.trafficTracer.flows.detail.reason')}:{' '}
+                  {flow.match.reason || '—'}
                 </Typography>
                 <Typography variant="body2">
-                  Candidates: {flow.match.candidate_count}
+                  {t('settings.trafficTracer.flows.detail.candidates')}:{' '}
+                  {flow.match.candidate_count}
                 </Typography>
                 <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>
-                  Flow ID: {flow.flow_id}
+                  {t('settings.trafficTracer.flows.detail.flowId')}:{' '}
+                  {flow.flow_id}
                 </Typography>
                 <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>
-                  Connection ID: {flow.conn_id || '—'}
+                  {t('settings.trafficTracer.flows.detail.connectionId')}:{' '}
+                  {flow.conn_id || '—'}
                 </Typography>
                 <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>
-                  Outer connection ID: {flow.outer_conn_id || '—'}
+                  {t('settings.trafficTracer.flows.detail.outerConnectionId')}:{' '}
+                  {flow.outer_conn_id || '—'}
                 </Typography>
               </Stack>
             </Box>
@@ -163,7 +200,7 @@ export function TrafficTracerFlowDetail({
             {(flow.url || flow.resource_type || flow.relation) && (
               <Box>
                 <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
-                  Request context
+                  {t('settings.trafficTracer.flows.detail.requestContext')}
                 </Typography>
                 <Stack spacing={0.5}>
                   {flow.url && (
@@ -176,12 +213,14 @@ export function TrafficTracerFlowDetail({
                   )}
                   {flow.resource_type && (
                     <Typography variant="body2">
-                      Resource type: {flow.resource_type}
+                      {t('settings.trafficTracer.flows.detail.resourceType')}:{' '}
+                      {flow.resource_type}
                     </Typography>
                   )}
                   {flow.relation && (
                     <Typography variant="body2">
-                      Relation: {flow.relation}
+                      {t('settings.trafficTracer.flows.detail.relation')}:{' '}
+                      {flow.relation}
                     </Typography>
                   )}
                 </Stack>
@@ -190,7 +229,7 @@ export function TrafficTracerFlowDetail({
 
             <Box>
               <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
-                Request IDs
+                {t('settings.trafficTracer.flows.detail.requestIds')}
               </Typography>
               {flow.request_ids.length > 0 ? (
                 <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap' }}>
@@ -205,7 +244,7 @@ export function TrafficTracerFlowDetail({
                 </Stack>
               ) : (
                 <Typography variant="body2" color="text.secondary">
-                  No request IDs are associated with this Flow.
+                  {t('settings.trafficTracer.flows.detail.noRequestIds')}
                 </Typography>
               )}
             </Box>
@@ -213,11 +252,10 @@ export function TrafficTracerFlowDetail({
             {packetCaptures.length > 0 && (
               <Box>
                 <Typography variant="subtitle2">
-                  Session packet captures
+                  {t('settings.trafficTracer.flows.detail.packetCaptures')}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
-                  These artifacts belong to the Session; the schema does not
-                  claim a per-Flow pcap association.
+                  {t('settings.trafficTracer.flows.detail.packetCaptureScope')}
                 </Typography>
                 <TrafficTracerArtifactList
                   sessionId={flow.session_id}
@@ -229,7 +267,9 @@ export function TrafficTracerFlowDetail({
         )}
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Close</Button>
+        <Button onClick={onClose}>
+          {t('settings.trafficTracer.common.actions.close')}
+        </Button>
       </DialogActions>
     </Dialog>
   )

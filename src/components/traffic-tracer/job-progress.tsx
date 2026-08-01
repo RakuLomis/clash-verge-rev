@@ -21,6 +21,7 @@ import {
   Typography,
 } from '@mui/material'
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import type {
   JobProgressEvent,
@@ -59,8 +60,8 @@ const stateColor: Record<
   interrupted: 'warning',
 }
 
-function formatTime(value?: string | null) {
-  if (!value) return 'unknown (restored Job)'
+function formatTime(value: string | null | undefined, restoredTime: string) {
+  if (!value) return restoredTime
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
 }
@@ -81,6 +82,7 @@ export function TrafficTracerJobProgress({
   cancelling = false,
   onCancel,
 }: TrafficTracerJobProgressProps) {
+  const { t } = useTranslation()
   const [confirmOpen, setConfirmOpen] = useState(false)
   const terminal = terminalStates.has(job.state)
   const canceling = cancelling || job.cancel_requested
@@ -95,7 +97,7 @@ export function TrafficTracerJobProgress({
 
   const confirmCancel = async () => {
     setConfirmOpen(false)
-    await onCancel('Cancelled from the TrafficTracer workspace.')
+    await onCancel(t('settings.trafficTracer.jobs.cancelReason'))
   }
 
   return (
@@ -126,10 +128,17 @@ export function TrafficTracerJobProgress({
             )}
             <Box>
               <Typography variant="h6" sx={{ fontSize: 17, fontWeight: 600 }}>
-                {job.kind === 'capture' ? 'Capture Job' : 'Analysis Job'}
+                {job.kind === 'capture'
+                  ? t('settings.trafficTracer.jobs.capture')
+                  : t('settings.trafficTracer.jobs.analysis')}
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                Started {formatTime(startedAt)}
+                {t('settings.trafficTracer.jobs.started', {
+                  time: formatTime(
+                    startedAt,
+                    t('settings.trafficTracer.jobs.restoredTime'),
+                  ),
+                })}
               </Typography>
             </Box>
           </Stack>
@@ -137,7 +146,7 @@ export function TrafficTracerJobProgress({
             <Chip
               size="small"
               color={stateColor[job.state]}
-              label={job.state}
+              label={t(`settings.trafficTracer.common.states.${job.state}`)}
             />
             {!terminal && (
               <Button
@@ -147,7 +156,9 @@ export function TrafficTracerJobProgress({
                 disabled={canceling}
                 onClick={() => setConfirmOpen(true)}
               >
-                {canceling ? 'Canceling…' : 'Cancel'}
+                {canceling
+                  ? t('settings.trafficTracer.common.progress.canceling')
+                  : t('settings.trafficTracer.common.actions.cancel')}
               </Button>
             )}
           </Stack>
@@ -183,7 +194,7 @@ export function TrafficTracerJobProgress({
 
           <Box>
             <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
-              Progress log
+              {t('settings.trafficTracer.jobs.progressLog')}
             </Typography>
             <Paper
               variant="outlined"
@@ -195,7 +206,7 @@ export function TrafficTracerJobProgress({
                   color="text.secondary"
                   sx={{ p: 1.5 }}
                 >
-                  Waiting for progress events…
+                  {t('settings.trafficTracer.jobs.waiting')}
                 </Typography>
               ) : (
                 <Stack divider={<Divider flexItem />}>
@@ -236,27 +247,30 @@ export function TrafficTracerJobProgress({
             color="text.secondary"
             sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}
           >
-            Job ID: {job.job_id}
+            {t('settings.trafficTracer.jobs.jobId', { id: job.job_id })}
           </Typography>
         </Stack>
       </Paper>
 
       <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
-        <DialogTitle>Cancel TrafficTracer Job?</DialogTitle>
+        <DialogTitle>
+          {t('settings.trafficTracer.jobs.cancelTitle')}
+        </DialogTitle>
         <DialogContent>
           <DialogContentText>
-            Capture processes will stop and the partial Session will be retained
-            as cancelled. Closing this page alone does not cancel the Job.
+            {t('settings.trafficTracer.jobs.cancelDescription')}
           </DialogContentText>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setConfirmOpen(false)}>Keep running</Button>
+          <Button onClick={() => setConfirmOpen(false)}>
+            {t('settings.trafficTracer.common.actions.keepRunning')}
+          </Button>
           <Button
             color="error"
             variant="contained"
             onClick={() => void confirmCancel()}
           >
-            Cancel Job
+            {t('settings.trafficTracer.common.actions.cancelJob')}
           </Button>
         </DialogActions>
       </Dialog>

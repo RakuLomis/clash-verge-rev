@@ -112,9 +112,39 @@ export function remediationTargetFor(
   return 'diagnostics'
 }
 
+export interface EnvironmentSummaryText {
+  labels: Record<EnvironmentSummaryItem['id'], string>
+  localController: string
+  notChecked: string
+  notSelected: string
+  disabled: string
+  tunServiceReady: string
+  tunServiceUnavailable: string
+}
+
+const defaultSummaryText: EnvironmentSummaryText = {
+  labels: {
+    core: 'Core',
+    controller: 'Controller',
+    tun: 'TUN',
+    'tun-interface': 'TUN interface',
+    'physical-interface': 'Physical interface',
+    'capture-tools': 'Packet capture',
+    chrome: 'Chrome / Chromium',
+    output: 'Session output',
+  },
+  localController: 'Local controller',
+  notChecked: 'Not checked',
+  notSelected: 'Not selected',
+  disabled: 'Disabled',
+  tunServiceReady: 'Enabled · service ready',
+  tunServiceUnavailable: 'Enabled · service unavailable',
+}
+
 export function buildEnvironmentSummary(
   report?: CompleteEnvironmentReport,
   request?: EnvironmentRequest,
+  text: EnvironmentSummaryText = defaultSummaryText,
 ): EnvironmentSummaryItem[] {
   const controllerChecks = checksFor(report, 'controller')
   const captureChecks = checksFor(report, 'capture-tools')
@@ -124,8 +154,8 @@ export function buildEnvironmentSummary(
   return [
     {
       id: 'core',
-      label: 'Core',
-      value: report?.integration.current_core || 'Not checked',
+      label: text.labels.core,
+      value: report?.integration.current_core || text.notChecked,
       state:
         report?.integration.current_core === 'verge-mihomo-tt'
           ? 'ready'
@@ -133,37 +163,37 @@ export function buildEnvironmentSummary(
     },
     {
       id: 'controller',
-      label: 'Controller',
-      value: detailString(controllerChecks, 'endpoint') || 'Local controller',
+      label: text.labels.controller,
+      value: detailString(controllerChecks, 'endpoint') || text.localController,
       state: stateFor(controllerChecks),
     },
     {
       id: 'tun',
-      label: 'TUN',
+      label: text.labels.tun,
       value: report
         ? report.integration.tun_enabled
           ? report.integration.service_available
-            ? 'Enabled · service ready'
-            : 'Enabled · service unavailable'
-          : 'Disabled'
-        : 'Not checked',
+            ? text.tunServiceReady
+            : text.tunServiceUnavailable
+          : text.disabled
+        : text.notChecked,
       state: stateFor(checksFor(report, 'tun')),
     },
     {
       id: 'tun-interface',
-      label: 'TUN interface',
-      value: request?.tun_interface || 'Not selected',
+      label: text.labels['tun-interface'],
+      value: request?.tun_interface || text.notSelected,
       state: stateFor(checksFor(report, 'tun-interface')),
     },
     {
       id: 'physical-interface',
-      label: 'Physical interface',
-      value: request?.physical_interface || 'Not selected',
+      label: text.labels['physical-interface'],
+      value: request?.physical_interface || text.notSelected,
       state: stateFor(checksFor(report, 'physical-interface')),
     },
     {
       id: 'capture-tools',
-      label: 'Packet capture',
+      label: text.labels['capture-tools'],
       value:
         [
           detailString(captureChecks, 'tshark'),
@@ -175,20 +205,20 @@ export function buildEnvironmentSummary(
     },
     {
       id: 'chrome',
-      label: 'Chrome / Chromium',
+      label: text.labels.chrome,
       value:
         detailString(chromeChecks, 'path') ||
         request?.chrome_binary ||
-        'Not selected',
+        text.notSelected,
       state: stateFor(chromeChecks),
     },
     {
       id: 'output',
-      label: 'Session output',
+      label: text.labels.output,
       value:
         detailString(outputChecks, 'path') ||
         request?.output_root ||
-        'Not selected',
+        text.notSelected,
       state: stateFor(outputChecks),
     },
   ]

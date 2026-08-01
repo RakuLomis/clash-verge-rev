@@ -302,8 +302,7 @@ const SettingClash = ({ onError }: Props) => {
 
       {captureLocked && (
         <Alert severity="warning" sx={{ mx: 2, my: 1 }}>
-          {captureLockReason} Core, profile, and manual tracing controls are
-          locked.
+          {captureLockReason} {t('settings.trafficTracer.locks.coreTracing')}
         </Alert>
       )}
 

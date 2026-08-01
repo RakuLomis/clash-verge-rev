@@ -1224,6 +1224,328 @@ export interface TranslationResources {
           uninstalling: string
         }
       }
+      trafficTracer: {
+        capture: {
+          description: string
+          fields: {
+            chrome: string
+            domain: string
+            duration: string
+            network: string
+            output: string
+            physicalInterface: string
+            tunInterface: string
+            url: string
+          }
+          hints: {
+            chrome: string
+            domain: string
+            output: string
+            url: string
+          }
+          locked: string
+          options: {
+            analyze: string
+            cdp: string
+            headless: string
+            netlog: string
+            packets: string
+          }
+          selectChrome: string
+          selectOutput: string
+          title: string
+        }
+        common: {
+          actions: {
+            analyzeAgain: string
+            browse: string
+            cancel: string
+            cancelJob: string
+            checkEnvironment: string
+            close: string
+            keepRunning: string
+            open: string
+            openDirectory: string
+            queryAll: string
+            refresh: string
+            retry: string
+            startCapture: string
+          }
+          progress: {
+            canceling: string
+            opening: string
+            querying: string
+            starting: string
+          }
+          states: {
+            analyzing: string
+            blocked: string
+            cancelled: string
+            capturing: string
+            complete: string
+            completed: string
+            created: string
+            disabled: string
+            enabled: string
+            failed: string
+            incomplete: string
+            interrupted: string
+            notChecked: string
+            preparing: string
+            ready: string
+            unknown: string
+            warning: string
+          }
+        }
+        environment: {
+          actions: {
+            fix: string
+            retry: string
+          }
+          changed: string
+          checkAgain: string
+          description: string
+          diagnostics: {
+            CAPTURE_PERMISSION_DENIED: {
+              message: string
+              remediation: string
+            }
+            CAPTURE_TOOL_CHECK_FAILED: {
+              message: string
+              remediation: string
+            }
+            CAPTURE_TOOL_NOT_FOUND: {
+              message: string
+              remediation: string
+            }
+            CAPTURE_TOOL_UNAVAILABLE: {
+              message: string
+              remediation: string
+            }
+            CHROME_NOT_EXECUTABLE: {
+              message: string
+              remediation: string
+            }
+            CORE_CAPABILITY_MISMATCH: {
+              message: string
+              remediation: string
+            }
+            CORE_ENDPOINT_MISSING: {
+              message: string
+              remediation: string
+            }
+            CORE_NOT_TRAFFIC_TRACER: {
+              message: string
+              remediation: string
+            }
+            CORE_TRACING_UNAVAILABLE: {
+              message: string
+              remediation: string
+            }
+            DISK_SPACE_LOW: {
+              message: string
+              remediation: string
+            }
+            DISK_SPACE_UNAVAILABLE: {
+              message: string
+              remediation: string
+            }
+            DISK_THRESHOLD_INVALID: {
+              message: string
+              remediation: string
+            }
+            OUTPUT_DIRECTORY_INVALID: {
+              message: string
+              remediation: string
+            }
+            OUTPUT_DIRECTORY_MISSING: {
+              message: string
+              remediation: string
+            }
+            OUTPUT_DIRECTORY_NOT_ABSOLUTE: {
+              message: string
+              remediation: string
+            }
+            OUTPUT_DIRECTORY_NOT_WRITABLE: {
+              message: string
+              remediation: string
+            }
+            OUTPUT_DIRECTORY_WILL_CREATE: {
+              message: string
+              remediation: string
+            }
+            PHYSICAL_INTERFACE_ENUMERATION_FAILED: {
+              message: string
+              remediation: string
+            }
+            PHYSICAL_INTERFACE_NOT_CONFIGURED: {
+              message: string
+              remediation: string
+            }
+            PHYSICAL_INTERFACE_NOT_FOUND: {
+              message: string
+              remediation: string
+            }
+            RECOVERY_DEGRADED: {
+              message: string
+              remediation: string
+            }
+            TUN_DISABLED: {
+              message: string
+              remediation: string
+            }
+            TUN_INTERFACE_ENUMERATION_FAILED: {
+              message: string
+              remediation: string
+            }
+            TUN_INTERFACE_NOT_CONFIGURED: {
+              message: string
+              remediation: string
+            }
+            TUN_INTERFACE_NOT_FOUND: {
+              message: string
+              remediation: string
+            }
+            TUN_SERVICE_UNAVAILABLE: {
+              message: string
+              remediation: string
+            }
+          }
+          diagnosticsFailed: string
+          labels: {
+            captureTools: string
+            chrome: string
+            controller: string
+            core: string
+            output: string
+            physicalInterface: string
+            tun: string
+            tunInterface: string
+          }
+          title: string
+          values: {
+            localController: string
+            notSelected: string
+            tunServiceReady: string
+            tunServiceUnavailable: string
+          }
+        }
+        flows: {
+          columns: {
+            match: string
+            network: string
+            post: string
+            pre: string
+            session: string
+            shared: string
+            url: string
+          }
+          description: string
+          destinationIp: string
+          destinationPort: string
+          detail: {
+            candidates: string
+            confidence: string
+            connectionId: string
+            correlation: string
+            flowId: string
+            host: string
+            missingPost: string
+            noRequestIds: string
+            outerConnectionId: string
+            packetCaptures: string
+            packetCaptureScope: string
+            postTuple: string
+            preTuple: string
+            reason: string
+            relation: string
+            requestContext: string
+            requestIds: string
+            resourceType: string
+            sharedFlow: string
+            sharedWarning: string
+            title: string
+            to: string
+          }
+          exclusive: string
+          filter: string
+          found: string
+          ipHint: string
+          match: {
+            ambiguous: string
+            legacy: string
+            matched: string
+            unmatched: string
+          }
+          noFilterResults: string
+          noPostTuple: string
+          noResults: string
+          queryDescription: string
+          queryTitle: string
+          sessionsAvailable: string
+          shared: string
+          sharedTooltip: string
+          sourceIp: string
+          sourcePort: string
+          title: string
+          unknown: string
+        }
+        jobs: {
+          analysis: string
+          cancelDescription: string
+          cancelReason: string
+          cancelTitle: string
+          capture: string
+          jobId: string
+          progressLog: string
+          restoredTime: string
+          started: string
+          waiting: string
+        }
+        locks: {
+          captureActive: string
+          coreTracing: string
+          job: string
+          profiles: string
+          proxyLifecycle: string
+        }
+        notifications: {
+          analysisStarted: string
+          captureStarted: string
+        }
+        sessions: {
+          artifacts_one: string
+          artifacts_other: string
+          artifactsEmpty: string
+          artifactsTitle: string
+          checkEnvironment: string
+          componentVersions: string
+          corrupt: string
+          description: string
+          details: string
+          detailTitle: string
+          empty: string
+          schema: string
+          startingAnalysis: string
+          title: string
+          unknownSize: string
+          warnings_one: string
+          warnings_other: string
+          workerApi: string
+        }
+        title: string
+        validation: {
+          chrome: string
+          domain: string
+          duration: string
+          ip: string
+          output: string
+          physicalInterface: string
+          port: string
+          tunInterface: string
+          url: string
+        }
+      }
     }
     shared: {
       actions: {
