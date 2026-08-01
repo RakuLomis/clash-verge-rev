@@ -208,3 +208,32 @@ export interface FlowMatch {
   candidate_count: number
   reason: string
 }
+
+export interface JobProgressEvent {
+  job_id: string
+  state: JobState
+  stage: string
+  progress: number
+  message: string
+  timestamp: string
+}
+
+export interface WorkerReadyEvent {
+  version: string
+  api_version: number
+  output_root: string
+  recovery: {
+    status: 'ok' | 'degraded'
+    recovered_sessions: string[]
+    terminated_pids: number[]
+    skipped_pids: number[]
+    errors: string[]
+  }
+}
+
+export interface WorkerLogEvent {
+  level: string
+  code?: string
+  message: string
+  recovery?: WorkerReadyEvent['recovery']
+}
