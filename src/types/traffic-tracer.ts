@@ -15,7 +15,7 @@ export type JobState =
   | 'interrupted'
 export type CaptureNetwork = 'tcp' | 'udp' | 'all'
 export type FlowNetwork = 'tcp' | 'udp'
-export type FlowMatchStatus = 'matched' | 'ambiguous' | 'unmatched'
+export type FlowMatchStatus = 'matched' | 'ambiguous' | 'unmatched' | 'legacy'
 
 export interface EnvironmentRequest {
   tun_interface: string

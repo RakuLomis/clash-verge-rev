@@ -937,6 +937,7 @@ pub enum FlowMatchStatus {
     Matched,
     Ambiguous,
     Unmatched,
+    Legacy,
 }
 
 #[derive(Serialize)]
@@ -1106,6 +1107,12 @@ mod flow_tests {
         assert!(result.items[0].shared);
         assert_eq!(result.items[0].match_info.status, FlowMatchStatus::Unmatched);
         assert!(result.items[0].post_flow.is_none());
+    }
+
+    #[test]
+    fn legacy_flow_match_status_is_accepted() {
+        let status: FlowMatchStatus = serde_json::from_str("\"legacy\"").unwrap();
+        assert_eq!(status, FlowMatchStatus::Legacy);
     }
 
     #[test]

@@ -37,10 +37,14 @@ export interface TrafficTracerFlowTableProps {
 
 const emptyFlows: FlowRecord[] = []
 
-const matchColor: Record<FlowMatchStatus, 'success' | 'warning' | 'default'> = {
+const matchColor: Record<
+  FlowMatchStatus,
+  'success' | 'warning' | 'default' | 'info'
+> = {
   matched: 'success',
   ambiguous: 'warning',
   unmatched: 'default',
+  legacy: 'info',
 }
 
 function confidenceLabel(confidence: number) {
