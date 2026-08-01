@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use anyhow::{Context as _, Result, bail};
@@ -86,7 +89,7 @@ impl WorkerProcess {
         Self::default()
     }
 
-    pub fn start(&self, app_handle: &AppHandle) -> Result<u64> {
+    pub fn start(&self, app_handle: &AppHandle, output_root: &Path) -> Result<u64> {
         let mut state = self.state.lock();
         if state.child.is_some() {
             bail!("TrafficTracer Worker is already running");
@@ -96,6 +99,7 @@ impl WorkerProcess {
             .shell()
             .sidecar(WORKER_SIDECAR_NAME)
             .context("failed to resolve TrafficTracer Worker sidecar")?
+            .args(["--output-root", &output_root.to_string_lossy()])
             .spawn()
             .context("failed to start TrafficTracer Worker sidecar")?;
         let instance_id = self.next_instance_id.fetch_add(1, Ordering::Relaxed);

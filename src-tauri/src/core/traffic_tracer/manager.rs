@@ -1,4 +1,8 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{Result, bail};
 use parking_lot::Mutex;
@@ -29,6 +33,7 @@ pub struct WorkerManager {
     client: Mutex<Option<Arc<WorkerClient>>>,
     bridge: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     monitor: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+    session_root: Mutex<Option<PathBuf>>,
     lifecycle: tokio::sync::Mutex<()>,
 }
 
@@ -40,6 +45,7 @@ impl WorkerManager {
             client: Mutex::new(None),
             bridge: Mutex::new(None),
             monitor: Mutex::new(None),
+            session_root: Mutex::new(None),
             lifecycle: tokio::sync::Mutex::new(()),
         }
     }
@@ -58,15 +64,18 @@ impl WorkerManager {
             .ok_or_else(|| anyhow::anyhow!("TrafficTracer Worker client is unavailable"))
     }
 
-    pub async fn start(&self, app_handle: &AppHandle) -> Result<()> {
+    pub async fn start(&self, app_handle: &AppHandle, session_root: &Path) -> Result<()> {
         let _lifecycle = self.lifecycle.lock().await;
+        if !session_root.is_absolute() {
+            bail!("TrafficTracer Session root must be an absolute path");
+        }
         self.begin_start()?;
 
         let client = Arc::new(WorkerClient::new(Arc::clone(&self.process), DEFAULT_REQUEST_TIMEOUT));
         let bridge = self.process.bridge_to_tauri(app_handle.clone());
         let monitor = self.spawn_exit_monitor();
 
-        if let Err(error) = self.process.start(app_handle) {
+        if let Err(error) = self.process.start(app_handle, session_root) {
             bridge.abort();
             monitor.abort();
             self.fail_start(error.to_string());
@@ -84,6 +93,7 @@ impl WorkerManager {
         *self.client.lock() = Some(client);
         *self.bridge.lock() = Some(bridge);
         *self.monitor.lock() = Some(monitor);
+        *self.session_root.lock() = Some(session_root.to_path_buf());
         self.finish_start()
     }
 
@@ -97,8 +107,28 @@ impl WorkerManager {
             monitor.abort();
         }
         let stopped = self.process.stop()?;
+        *self.session_root.lock() = None;
         *self.state.lock() = WorkerManagerState::Stopped;
         Ok(stopped)
+    }
+
+    pub fn session_root(&self) -> Result<PathBuf> {
+        self.session_root
+            .lock()
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("TrafficTracer Session root is unavailable"))
+    }
+
+    pub fn require_session_root(&self, requested: &Path) -> Result<PathBuf> {
+        let configured = self.session_root()?;
+        if normalize_path(&configured) != normalize_path(requested) {
+            bail!(
+                "TrafficTracer Worker is using Session root '{}'; stop it before selecting '{}'",
+                configured.display(),
+                requested.display()
+            );
+        }
+        Ok(configured)
     }
 
     pub fn mark_busy(&self) -> Result<()> {
@@ -144,6 +174,7 @@ impl WorkerManager {
 
     fn fail_start(&self, message: String) {
         *self.client.lock() = None;
+        *self.session_root.lock() = None;
         *self.state.lock() = WorkerManagerState::Failed { message };
     }
 
@@ -178,6 +209,10 @@ impl WorkerManager {
             }
         })
     }
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn is_terminal_job_notification(line: &str) -> bool {

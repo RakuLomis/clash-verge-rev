@@ -1,3 +1,8 @@
+use std::{
+    fs,
+    path::{Component, Path, PathBuf},
+};
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::AppHandle;
@@ -104,11 +109,17 @@ pub async fn tt_get_environment(
 
     let service_available = service::is_service_available().await.is_ok();
     let manager = WorkerManager::global();
+    let requested_root = Path::new(&request.output_root);
+    if !requested_root.is_absolute() {
+        return Err("output_root must be an absolute path".into());
+    }
     if matches!(
         manager.state(),
         WorkerManagerState::Stopped | WorkerManagerState::Failed { .. }
     ) {
-        manager.start(&app_handle).await.stringify_err()?;
+        manager.start(&app_handle, requested_root).await.stringify_err()?;
+    } else {
+        manager.require_session_root(requested_root).stringify_err()?;
     }
     let client = manager.client().stringify_err()?;
     let worker_report = client
@@ -552,6 +563,223 @@ fn validate_job_id(job_id: &str) -> CmdResult {
         return Err("job_id must be a UUID".into());
     }
     Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionListResult {
+    pub sessions: Vec<SessionManifest>,
+    pub corrupt: Vec<CorruptSession>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CorruptSession {
+    pub session_dir: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionManifest {
+    pub schema_version: u32,
+    pub session_id: String,
+    pub job_id: String,
+    pub state: JobState,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+    pub session_dir: String,
+    pub target: SessionTarget,
+    pub component_versions: Value,
+    pub artifacts: Vec<SessionArtifact>,
+    pub warnings: Vec<String>,
+    #[serde(default)]
+    pub error: Option<SessionError>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionTarget {
+    pub url: String,
+    pub domain: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionArtifact {
+    pub name: String,
+    pub kind: String,
+    pub path: String,
+    pub media_type: String,
+    pub size_bytes: u64,
+    #[serde(default)]
+    pub sha256: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionError {
+    pub code: String,
+    pub message: String,
+    #[serde(default)]
+    pub stage: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SessionIdParams {
+    session_id: String,
+}
+
+#[tauri::command]
+pub async fn tt_session_list() -> CmdResult<SessionListResult> {
+    WorkerManager::global()
+        .client()
+        .stringify_err()?
+        .request(RequestMethod::SessionList, serde_json::json!({}))
+        .await
+        .stringify_err()
+}
+
+#[tauri::command]
+pub async fn tt_session_get(session_id: String) -> CmdResult<SessionManifest> {
+    validate_session_id(&session_id)?;
+    fetch_session(&session_id).await
+}
+
+#[tauri::command]
+pub async fn tt_session_open_artifact(session_id: String, artifact_id: String) -> CmdResult<String> {
+    validate_session_id(&session_id)?;
+    if artifact_id.trim().is_empty() {
+        return Err("artifact_id must not be empty".into());
+    }
+
+    let manager = WorkerManager::global();
+    let manifest = fetch_session(&session_id).await?;
+    let artifact = manifest
+        .artifacts
+        .iter()
+        .find(|artifact| artifact.name == artifact_id)
+        .ok_or_else(|| smartstring::alias::String::from("artifact_id does not exist in the Session manifest"))?;
+    let path = resolve_artifact_path(&manager.session_root().stringify_err()?, &manifest, artifact)?;
+    open::that_detached(path.as_os_str()).stringify_err()?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+async fn fetch_session(session_id: &str) -> CmdResult<SessionManifest> {
+    WorkerManager::global()
+        .client()
+        .stringify_err()?
+        .request(
+            RequestMethod::SessionGet,
+            SessionIdParams {
+                session_id: session_id.to_owned(),
+            },
+        )
+        .await
+        .stringify_err()
+}
+
+fn resolve_artifact_path(
+    session_root: &Path,
+    manifest: &SessionManifest,
+    artifact: &SessionArtifact,
+) -> CmdResult<PathBuf> {
+    let relative = Path::new(&artifact.path);
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err("artifact path must be a normalized relative path".into());
+    }
+
+    let root = fs::canonicalize(session_root).stringify_err()?;
+    let session_dir = fs::canonicalize(&manifest.session_dir).stringify_err()?;
+    if session_dir == root || session_dir.parent() != Some(root.as_path()) {
+        return Err("Session directory is outside the configured Session root".into());
+    }
+    if !session_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(&format!("_{}", manifest.session_id)))
+    {
+        return Err("Session directory does not match the Session ID".into());
+    }
+
+    let target = fs::canonicalize(session_dir.join(relative)).stringify_err()?;
+    if !target.starts_with(&session_dir) || !target.is_file() {
+        return Err("artifact path escapes the Session directory or is not a file".into());
+    }
+    Ok(target)
+}
+
+fn validate_session_id(session_id: &str) -> CmdResult {
+    validate_job_id(session_id).map_err(|_| "session_id must be a UUID".into())
+}
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+
+    fn manifest(session_dir: &str) -> SessionManifest {
+        SessionManifest {
+            schema_version: 1,
+            session_id: "123e4567-e89b-42d3-a456-426614174000".to_owned(),
+            job_id: "123e4567-e89b-42d3-a456-426614174001".to_owned(),
+            state: JobState::Completed,
+            created_at: "2026-08-01T00:00:00Z".to_owned(),
+            updated_at: "2026-08-01T00:00:01Z".to_owned(),
+            started_at: Some("2026-08-01T00:00:00Z".to_owned()),
+            completed_at: Some("2026-08-01T00:00:01Z".to_owned()),
+            session_dir: session_dir.to_owned(),
+            target: SessionTarget {
+                url: "https://example.com/".to_owned(),
+                domain: "example.com".to_owned(),
+            },
+            component_versions: serde_json::json!({}),
+            artifacts: Vec::new(),
+            warnings: Vec::new(),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn artifact_path_rejects_parent_escape_before_file_access() {
+        let manifest = manifest("/tmp/sessions/20260801_123e4567-e89b-42d3-a456-426614174000");
+        let artifact = SessionArtifact {
+            name: "report".to_owned(),
+            kind: "report".to_owned(),
+            path: "../outside.html".to_owned(),
+            media_type: "text/html".to_owned(),
+            size_bytes: 1,
+            sha256: None,
+            created_at: None,
+        };
+
+        let error = resolve_artifact_path(Path::new("/tmp/sessions"), &manifest, &artifact).unwrap_err();
+        assert!(error.contains("normalized relative path"));
+    }
+
+    #[test]
+    fn corrupt_manifest_is_rejected_by_typed_decoder() {
+        let result = serde_json::from_value::<SessionManifest>(serde_json::json!({
+            "schema_version": 1,
+            "session_id": "123e4567-e89b-42d3-a456-426614174000"
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_session_list_is_valid() {
+        let result: SessionListResult = serde_json::from_value(serde_json::json!({
+            "sessions": [],
+            "corrupt": []
+        }))
+        .unwrap();
+        assert!(result.sessions.is_empty());
+        assert!(result.corrupt.is_empty());
+    }
 }
 
 #[cfg(test)]
