@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 
 import { BasePage } from '@/components/base'
 import { TrafficTracerCaptureForm } from '@/components/traffic-tracer/capture-form'
+import { TrafficTracerFlowQueryForm } from '@/components/traffic-tracer/flow-query-form'
 import { TrafficTracerJobProgress } from '@/components/traffic-tracer/job-progress'
 import { TrafficTracerSessionsView } from '@/components/traffic-tracer/sessions-view'
 import { useCaptureJob } from '@/hooks/use-capture-job'
@@ -74,6 +75,9 @@ const TrafficTracerPage = () => {
         />
         <Box sx={{ mt: 2 }}>
           <TrafficTracerSessionsView enabled={environment !== undefined} />
+        </Box>
+        <Box sx={{ mt: 2 }}>
+          <TrafficTracerFlowQueryForm enabled={environment !== undefined} />
         </Box>
       </Box>
     </BasePage>

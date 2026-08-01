@@ -132,6 +132,7 @@ export function TrafficTracerFlowTable({
           <TableHead>
             <TableRow>
               <TableCell>Network</TableCell>
+              <TableCell>Session</TableCell>
               <TableCell>Pre-proxy</TableCell>
               <TableCell>Post-proxy</TableCell>
               <TableCell>Match</TableCell>
@@ -142,7 +143,7 @@ export function TrafficTracerFlowTable({
           <TableBody>
             {!loading && visibleFlows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 5 }}>
+                <TableCell colSpan={7} align="center" sx={{ py: 5 }}>
                   <Typography color="text.secondary">
                     {filter
                       ? 'No Flows match this filter.'
@@ -154,8 +155,8 @@ export function TrafficTracerFlowTable({
               visibleFlows.map((flow) => (
                 <TableRow
                   hover={Boolean(onSelect)}
-                  key={flow.flow_id}
-                  data-testid={`flow-row-${flow.flow_id}`}
+                  key={`${flow.session_id}:${flow.flow_id}`}
+                  data-testid={`flow-row-${flow.session_id}-${flow.flow_id}`}
                   onClick={() => onSelect?.(flow)}
                   sx={{ cursor: onSelect ? 'pointer' : 'default' }}
                 >
@@ -165,6 +166,20 @@ export function TrafficTracerFlowTable({
                       variant="outlined"
                       label={flow.protocol.toUpperCase()}
                     />
+                  </TableCell>
+                  <TableCell sx={{ maxWidth: 150 }}>
+                    <Typography
+                      variant="caption"
+                      title={flow.session_id}
+                      sx={{
+                        display: 'block',
+                        fontFamily: 'monospace',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
+                    >
+                      {flow.session_id}
+                    </Typography>
                   </TableCell>
                   <TableCell sx={{ minWidth: 260 }}>
                     <Tooltip title={formatFlowTuple(flow.pre_flow)}>
