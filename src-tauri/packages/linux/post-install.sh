@@ -1,7 +1,22 @@
 #!/bin/bash
-chmod +x /usr/bin/clash-verge-service-install
-chmod +x /usr/bin/clash-verge-service-uninstall
-chmod +x /usr/bin/clash-verge-service
+required_binaries="
+clash-verge-service
+clash-verge-service-install
+clash-verge-service-uninstall
+verge-mihomo
+verge-mihomo-alpha
+verge-mihomo-tt
+traffictracer-worker
+"
+
+for binary in $required_binaries; do
+    binary_path="/usr/bin/$binary"
+    if [ ! -f "$binary_path" ]; then
+        echo "TrafficTracer Complete installation is missing $binary_path" >&2
+        exit 1
+    fi
+    chmod 0755 "$binary_path"
+done
 
 . /etc/os-release
 

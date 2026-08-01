@@ -10,8 +10,8 @@ import axios from 'axios'
 import { glob } from 'glob'
 import { extract } from 'tar'
 
-import { log_debug, log_error, log_info, log_success } from './utils.mjs'
 import { resolveTrafficTracerWorkerSidecar } from './traffictracer-worker-resolver.mjs'
+import { log_debug, log_error, log_info, log_success } from './utils.mjs'
 
 /**
  * Prebuild script with optimization features:
@@ -71,6 +71,15 @@ const RESOURCES_DIR = path.join(cwd, 'src-tauri', 'resources')
 const SIDECAR_DIR = path.join(cwd, 'src-tauri', 'sidecar')
 // Linux service binaries are bundled as externalBin sidecars (see tauri.linux.conf.json)
 const SERVICE_DIR = platform === 'linux' ? SIDECAR_DIR : RESOURCES_DIR
+const LINUX_BUNDLE_BINARIES = [
+  'clash-verge-service',
+  'clash-verge-service-install',
+  'clash-verge-service-uninstall',
+  'verge-mihomo',
+  'verge-mihomo-alpha',
+  'verge-mihomo-tt',
+  'traffictracer-worker',
+]
 
 // =======================
 // Version Cache
@@ -598,6 +607,23 @@ const resolveServicePermission = async () => {
   }
 }
 
+const validateLinuxBundleSidecars = async () => {
+  for (const name of LINUX_BUNDLE_BINARIES) {
+    const filePath = path.join(SIDECAR_DIR, `${name}-${SIDECAR_HOST}`)
+    const stat = await fsp.stat(filePath).catch((error) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    })
+    if (!stat?.isFile() || stat.size === 0) {
+      throw new Error(`Required Linux bundle sidecar is missing: ${filePath}`)
+    }
+    await fsp.chmod(filePath, 0o755)
+    if ((await fsp.stat(filePath)).mode & 0o111) continue
+    throw new Error(`Linux bundle sidecar is not executable: ${filePath}`)
+  }
+  log_success('TrafficTracer Complete Linux sidecars are ready')
+}
+
 // =======================
 // Other resource resolvers (service, mmdb, geosite, geoip, enableLoopback)
 // =======================
@@ -824,6 +850,12 @@ const tasks = [
     func: resolveServicePermission,
     retry: 5,
     unixOnly: platform === 'linux' || platform === 'darwin',
+  },
+  {
+    name: 'linux_bundle_sidecars',
+    func: validateLinuxBundleSidecars,
+    retry: 1,
+    linuxOnly: true,
   },
   {
     name: 'set_dns_script',

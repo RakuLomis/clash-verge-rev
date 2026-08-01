@@ -29,6 +29,7 @@
     "test": "pnpm test:node && pnpm test:frontend",
     "test:node": "node --test scripts/*.test.mjs",
     "test:frontend": "vitest run",
+    "verify:linux-bundle": "node scripts/verify-linux-bundle.mjs",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "i18n:check": "node scripts/cleanup-unused-i18n.mjs",
