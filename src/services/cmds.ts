@@ -3,6 +3,7 @@ import dayjs from 'dayjs'
 import { getProxies, getProxyProviders } from 'tauri-plugin-mihomo-api'
 
 import { showNotice } from '@/services/notice-service'
+import type * as TrafficTracer from '@/types/traffic-tracer'
 import { debugLog } from '@/utils/debug'
 
 export async function copyClashEnv() {
@@ -592,4 +593,64 @@ export async function getTracingState() {
 
 export async function patchTracingState(payload: ITracingPatch) {
   return invoke<ITracingState>('patch_tracing_state', { payload })
+}
+
+export function getTrafficTracerEnvironment(
+  request: TrafficTracer.EnvironmentRequest,
+) {
+  return invoke<TrafficTracer.CompleteEnvironmentReport>('tt_get_environment', {
+    request,
+  })
+}
+
+export function startTrafficTracerCapture(
+  request: TrafficTracer.CaptureStartRequest,
+) {
+  return invoke<TrafficTracer.JobSnapshot>('tt_capture_start', { request })
+}
+
+export function getTrafficTracerJob(jobId: string) {
+  return invoke<TrafficTracer.JobSnapshot>('tt_capture_get', { jobId })
+}
+
+export function cancelTrafficTracerJob(jobId: string, reason?: string) {
+  return invoke<TrafficTracer.JobSnapshot>('tt_capture_cancel', {
+    jobId,
+    reason,
+  })
+}
+
+export function getTrafficTracerCaptureLock() {
+  return invoke<TrafficTracer.CaptureLockSnapshot>('tt_get_capture_lock')
+}
+
+export function listTrafficTracerSessions() {
+  return invoke<TrafficTracer.SessionListResult>('tt_session_list')
+}
+
+export function getTrafficTracerSession(sessionId: string) {
+  return invoke<TrafficTracer.SessionManifest>('tt_session_get', { sessionId })
+}
+
+export function openTrafficTracerArtifact(
+  sessionId: string,
+  artifactId: string,
+) {
+  return invoke<string>('tt_session_open_artifact', { sessionId, artifactId })
+}
+
+export function startTrafficTracerAnalysis(
+  sessionId: string,
+  options?: Partial<TrafficTracer.AnalysisOptions>,
+) {
+  return invoke<TrafficTracer.JobSnapshot>('tt_analysis_start', {
+    sessionId,
+    options,
+  })
+}
+
+export function queryTrafficTracerFlows(
+  request: TrafficTracer.FlowQueryRequest,
+) {
+  return invoke<TrafficTracer.FlowQueryResult>('tt_flow_query', { request })
 }
