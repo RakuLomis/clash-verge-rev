@@ -68,24 +68,23 @@ make dev
 
 | 路径 | 用途 |
 | --- | --- |
-| `/tmp/verge/clash-verge-service.sock` | 特权服务 IPC |
+| `/run/clash-verge-service/service.sock` | Linux 特权服务 IPC（service v2.6.1） |
 | `/tmp/verge/verge-mihomo.sock` | Mihomo 控制器 IPC |
 
 ### `IPC path not ready`
 
-UI 安装后最多等待约 5 秒连接服务 socket。若出现 `install Service failed: IPC path not ready`：
+UI 安装后最多等待约 15 秒完成 socket 与协议握手。Complete 固定使用 service/client v2.6.1；若旧包仍提示 `install Service failed: IPC path not ready`，先确认它是否仍在错误地检查 `/tmp/verge/clash-verge-service.sock`。
 
-1. 关闭全部安装版/开发版 UI，再只启动当前版本。
-2. 检查 helper、进程和 socket：
+不要为了排障停止当前正在提供网络的 Clash Verge。先在另一个终端只读检查 helper、进程、systemd 状态和实际 socket：
 
-   ```bash
-   ls -l /usr/bin/clash-verge-service*
-   pgrep -af 'clash-verge-service|clash-verge'
-   ls -l /tmp/verge/clash-verge-service.sock
-   ```
+```bash
+ls -l /usr/bin/clash-verge-service*
+pgrep -af 'clash-verge-service|clash-verge'
+systemctl status clash-verge-service --no-pager
+ls -l /run/clash-verge-service/service.sock
+```
 
-3. 在 UI 使用“修复/重新安装服务”，完成授权并等待检测。
-4. 若 socket 仍未出现，查看“设置 → 日志”；确认未混用上游/旧版包或 helper，再重装同一 Complete 包。
+如果 `/run/clash-verge-service/service.sock` 已存在且服务为 active，而 UI 仍报告旧 `/tmp/verge/...` 路径，说明运行的是旧 UI 客户端，需要安装同一 Complete 构建中的 UI 与 service；不要反复重装健康的服务。只有 socket 不存在或协议检查明确报告不兼容时，才在有可接受的网络维护窗口后使用 UI 的“修复/重新安装服务”。
 
 不要同时手工启动 helper 和点击 UI 安装，也不要删除正在使用的 socket。
 

@@ -10,6 +10,12 @@ import axios from 'axios'
 import { glob } from 'glob'
 import { extract } from 'tar'
 
+import {
+  loadServiceBundleLock,
+  resolveServiceBundleAsset,
+  serviceBundleStampMatches,
+  verifyServiceArchive,
+} from './service-bundle-lock.mjs'
 import { resolveTrafficTracerWorkerSidecar } from './traffictracer-worker-resolver.mjs'
 import { log_debug, log_error, log_info, log_success } from './utils.mjs'
 
@@ -627,11 +633,11 @@ const validateLinuxBundleSidecars = async () => {
 // =======================
 // Other resource resolvers (service, mmdb, geosite, geoip, enableLoopback)
 // =======================
-const SERVICE_LATEST_URL =
-  'https://github.com/clash-verge-rev/clash-verge-service-ipc/releases/latest'
-const SERVICE_URL_PREFIX =
-  'https://github.com/clash-verge-rev/clash-verge-service-ipc/releases/download'
-let SERVICE_VERSION
+const SERVICE_LOCK_PATH = path.join(cwd, 'scripts', 'service-bundle.lock.json')
+const SERVICE_STAMP_PATH = path.join(
+  TEMP_DIR,
+  `.service-bundle-${SIDECAR_HOST}.json`,
+)
 
 const SERVICE_BINARIES = [
   'clash-verge-service',
@@ -659,39 +665,22 @@ function serviceFileInfo(name) {
   }
 }
 
-function parseServiceVersionFromUrl(url) {
-  const match = url.match(/\/releases\/tag\/([^/?#]+)/)
-  return match ? decodeURIComponent(match[1]) : null
-}
-
-async function getLatestServiceVersion() {
-  if (!FORCE) {
-    const cached = await getCachedVersion('SERVICE_VERSION')
-    if (cached) {
-      SERVICE_VERSION = cached
-      return
-    }
+async function isCurrentServiceBundle(files, asset) {
+  if (
+    FORCE ||
+    !files.every(({ targetPath }) => isUsableServiceBinary(targetPath))
+  ) {
+    return false
   }
-
   try {
-    const response = await axios.get(SERVICE_LATEST_URL, {
-      maxRedirects: 10,
-      responseType: 'text',
-      timeout: 30_000,
-    })
-    const responseUrl = response.request?.res?.responseUrl ?? SERVICE_LATEST_URL
-
-    SERVICE_VERSION = parseServiceVersionFromUrl(responseUrl)
-    if (!SERVICE_VERSION)
-      throw new Error(
-        `Unable to resolve service release tag from ${responseUrl}`,
-      )
-
-    log_info(`Latest service version: ${SERVICE_VERSION}`)
-    await setCachedVersion('SERVICE_VERSION', SERVICE_VERSION)
-  } catch (err) {
-    log_error('Error fetching latest service version:', err.message)
-    process.exit(1)
+    const stamp = JSON.parse(await fsp.readFile(SERVICE_STAMP_PATH, 'utf8'))
+    const binaryHashes = {}
+    for (const { targetFile, targetPath } of files) {
+      binaryHashes[targetFile] = await calculateFileHash(targetPath)
+    }
+    return serviceBundleStampMatches(stamp, asset, binaryHashes)
+  } catch {
+    return false
   }
 }
 
@@ -709,6 +698,8 @@ async function findExtractedFile(dir, fileName) {
 }
 
 async function resolveServiceBundle() {
+  const lock = await loadServiceBundleLock(SERVICE_LOCK_PATH)
+  const asset = resolveServiceBundleAsset(lock, SIDECAR_HOST)
   const files = SERVICE_BINARIES.map((name) => {
     const info = serviceFileInfo(name)
     return {
@@ -717,27 +708,23 @@ async function resolveServiceBundle() {
     }
   })
 
-  if (
-    !FORCE &&
-    files.every(({ targetPath }) => isUsableServiceBinary(targetPath))
-  ) {
-    log_success('"clash-verge-service-ipc" already exists, skipping download')
+  if (await isCurrentServiceBundle(files, asset)) {
+    log_success(
+      `"clash-verge-service-ipc" ${asset.tag} is verified, skipping download`,
+    )
     return
   }
 
-  await getLatestServiceVersion()
-
-  const archiveExt = platform === 'win32' ? 'zip' : 'tar.gz'
-  const archiveFile = `clash-verge-service-ipc-${SERVICE_VERSION}-${SIDECAR_HOST}.${archiveExt}`
-  const downloadURL = `${SERVICE_URL_PREFIX}/${SERVICE_VERSION}/${archiveFile}`
   const tempDir = path.join(TEMP_DIR, 'clash-verge-service-ipc')
-  const tempArchive = path.join(tempDir, archiveFile)
+  const tempArchive = path.join(tempDir, asset.file)
 
   await fsp.mkdir(tempDir, { recursive: true })
   await fsp.mkdir(SERVICE_DIR, { recursive: true })
 
   try {
-    await downloadFile(downloadURL, tempArchive)
+    await downloadFile(asset.downloadURL, tempArchive)
+    verifyServiceArchive(await fsp.readFile(tempArchive), asset)
+    log_success(`verified service archive SHA-256: ${asset.sha256}`)
 
     if (platform === 'win32') {
       const zip = new AdmZip(tempArchive)
@@ -768,7 +755,25 @@ async function resolveServiceBundle() {
       log_success(`Extracted service file: ${targetFile}`)
     }
 
-    log_success(`service bundle finished: ${archiveFile}`)
+    const binaries = {}
+    for (const { targetFile, targetPath } of files) {
+      binaries[targetFile] = await calculateFileHash(targetPath)
+    }
+    await fsp.writeFile(
+      SERVICE_STAMP_PATH,
+      JSON.stringify(
+        {
+          tag: asset.tag,
+          commit: asset.commit,
+          target: asset.target,
+          archiveSha256: asset.sha256,
+          binaries,
+        },
+        null,
+        2,
+      ),
+    )
+    log_success(`service bundle finished: ${asset.file}`)
   } finally {
     await fsp.rm(tempDir, { recursive: true, force: true })
   }
