@@ -609,6 +609,12 @@ export function startTrafficTracerCapture(
   return invoke<TrafficTracer.JobSnapshot>('tt_capture_start', { request })
 }
 
+export function loadTrafficTracerTargetConfig(configPath: string) {
+  return invoke<TrafficTracer.TargetConfigPreview>('tt_target_config_load', {
+    configPath,
+  })
+}
+
 export function getTrafficTracerJob(jobId: string) {
   return invoke<TrafficTracer.JobSnapshot>('tt_capture_get', { jobId })
 }

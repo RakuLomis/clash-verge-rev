@@ -21,7 +21,12 @@ import type {
 } from '@/types/traffic-tracer'
 
 import { TrafficTracerCaptureForm } from './capture-form'
-import { validateCaptureForm } from './capture-form-model'
+import {
+  applyTargetConfigEntry,
+  captureRequestFromDraft,
+  defaultCaptureFormDraft,
+  validateCaptureForm,
+} from './capture-form-model'
 import { TrafficTracerEnvironmentCard } from './environment-card'
 import { TrafficTracerFlowTable } from './flow-table'
 import { TrafficTracerJobProgress } from './job-progress'
@@ -168,6 +173,10 @@ describe('TrafficTracer Complete workspace', () => {
   it('returns stable validation codes for an invalid capture form', () => {
     expect(
       validateCaptureForm({
+        target_mode: 'manual',
+        config_path: '',
+        config_sha256: '',
+        selected_target_index: null,
         url: 'not a URL',
         domain: '-invalid.example',
         duration_seconds: 0,
@@ -176,6 +185,8 @@ describe('TrafficTracer Complete workspace', () => {
         physical_interface: '',
         output_root: 'relative/output',
         chrome_binary: 'google-chrome',
+        wait_load_timeout: 30,
+        run_label: 'all',
         options: {
           capture_packets: true,
           collect_cdp: true,
@@ -192,6 +203,53 @@ describe('TrafficTracer Complete workspace', () => {
       physical_interface: 'physicalInterface',
       output_root: 'output',
       chrome_binary: 'chrome',
+    })
+  })
+
+  it('applies a normalized YAML target and preserves its provenance', () => {
+    const preview = {
+      schema_version: 1 as const,
+      config_path: '/tmp/sites.yaml',
+      sha256: 'a'.repeat(64),
+      warnings: [],
+      targets: [
+        {
+          index: 3,
+          url: 'https://example.com/path',
+          domain: 'example.com',
+          duration_seconds: 12,
+          network: 'all' as const,
+          run_label: 'browser',
+          wait_load_timeout: 45,
+        },
+      ],
+    }
+    const draft = applyTargetConfigEntry(
+      {
+        ...defaultCaptureFormDraft,
+        tun_interface: 'mihomo',
+        physical_interface: 'eth0',
+        output_root: '/tmp/sessions',
+        chrome_binary: '/usr/bin/chromium',
+      },
+      preview,
+      preview.targets[0],
+    )
+
+    expect(validateCaptureForm(draft)).toEqual({})
+    expect(captureRequestFromDraft(draft)).toMatchObject({
+      url: 'https://example.com/path',
+      domain: 'example.com',
+      duration_seconds: 12,
+      network: 'all',
+      wait_load_timeout: 45,
+      run_label: 'browser',
+      target_source: {
+        mode: 'config',
+        config_path: '/tmp/sites.yaml',
+        config_sha256: 'a'.repeat(64),
+        target_index: 3,
+      },
     })
   })
 

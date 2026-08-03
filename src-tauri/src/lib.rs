@@ -76,7 +76,7 @@ mod app_init {
             .plugin(
                 tauri_plugin_mihomo::Builder::new()
                     .protocol(tauri_plugin_mihomo::models::Protocol::LocalSocket)
-                    .socket_path(crate::config::IClashTemp::guard_external_controller_ipc())
+                    .socket_path(crate::core::controller::sidecar_ipc_path())
                     .pool_config(
                         tauri_plugin_mihomo::IpcPoolConfigBuilder::new()
                             .min_connections(3)
@@ -181,6 +181,7 @@ mod app_init {
             cmd::get_tracing_state,
             cmd::patch_tracing_state,
             cmd::tt_get_environment,
+            cmd::tt_target_config_load,
             cmd::tt_capture_start,
             cmd::tt_capture_get,
             cmd::tt_capture_cancel,

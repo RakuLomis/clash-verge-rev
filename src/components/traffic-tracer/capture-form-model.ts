@@ -3,9 +3,17 @@ import type {
   CaptureOptions,
   CaptureStartRequest,
   EnvironmentRequest,
+  TargetConfigEntry,
+  TargetConfigPreview,
 } from '@/types/traffic-tracer'
 
+export type TargetInputMode = 'manual' | 'config'
+
 export interface CaptureFormDraft {
+  target_mode: TargetInputMode
+  config_path: string
+  config_sha256: string
+  selected_target_index: number | null
   url: string
   domain: string
   duration_seconds: number
@@ -14,12 +22,15 @@ export interface CaptureFormDraft {
   physical_interface: string
   output_root: string
   chrome_binary: string
+  wait_load_timeout: number
+  run_label: string
   options: CaptureOptions
 }
 
 export type CaptureFormErrors = Partial<
   Record<
     | 'url'
+    | 'config_path'
     | 'domain'
     | 'duration_seconds'
     | 'tun_interface'
@@ -27,6 +38,7 @@ export type CaptureFormErrors = Partial<
     | 'output_root'
     | 'chrome_binary',
     | 'url'
+    | 'configFile'
     | 'domain'
     | 'duration'
     | 'tunInterface'
@@ -37,6 +49,10 @@ export type CaptureFormErrors = Partial<
 >
 
 export const defaultCaptureFormDraft: CaptureFormDraft = {
+  target_mode: 'manual',
+  config_path: '',
+  config_sha256: '',
+  selected_target_index: null,
   url: '',
   domain: '',
   duration_seconds: 30,
@@ -45,6 +61,8 @@ export const defaultCaptureFormDraft: CaptureFormDraft = {
   physical_interface: '',
   output_root: '',
   chrome_binary: 'google-chrome',
+  wait_load_timeout: 30,
+  run_label: 'all',
   options: {
     capture_packets: true,
     collect_cdp: true,
@@ -94,6 +112,15 @@ export function validateCaptureForm(
   draft: CaptureFormDraft,
 ): CaptureFormErrors {
   const errors: CaptureFormErrors = {}
+  if (
+    draft.target_mode === 'config' &&
+    (!isAbsolutePlatformPath(draft.config_path) ||
+      !/^[a-f0-9]{64}$/.test(draft.config_sha256) ||
+      draft.selected_target_index === null ||
+      draft.selected_target_index < 0)
+  ) {
+    errors.config_path = 'configFile'
+  }
   if (!deriveDomain(draft.url) || /\s/.test(draft.url)) {
     errors.url = 'url'
   }
@@ -106,6 +133,14 @@ export function validateCaptureForm(
     draft.duration_seconds > 86_400
   ) {
     errors.duration_seconds = 'duration'
+  }
+  if (
+    !Number.isInteger(draft.wait_load_timeout) ||
+    draft.wait_load_timeout < 1 ||
+    draft.wait_load_timeout > 3_600 ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(draft.run_label)
+  ) {
+    errors.config_path = 'configFile'
   }
   if (!draft.tun_interface.trim()) {
     errors.tun_interface = 'tunInterface'
@@ -145,7 +180,38 @@ export function captureRequestFromDraft(
     physical_interface: draft.physical_interface.trim(),
     output_root: draft.output_root.trim(),
     chrome_binary: draft.chrome_binary.trim(),
+    wait_load_timeout: draft.wait_load_timeout,
+    run_label: draft.run_label,
+    target_source:
+      draft.target_mode === 'config'
+        ? {
+            mode: 'config',
+            config_path: draft.config_path,
+            config_sha256: draft.config_sha256,
+            target_index: draft.selected_target_index ?? -1,
+          }
+        : { mode: 'manual' },
     options: { ...draft.options },
+  }
+}
+
+export function applyTargetConfigEntry(
+  draft: CaptureFormDraft,
+  preview: TargetConfigPreview,
+  target: TargetConfigEntry,
+): CaptureFormDraft {
+  return {
+    ...draft,
+    target_mode: 'config',
+    config_path: preview.config_path,
+    config_sha256: preview.sha256,
+    selected_target_index: target.index,
+    url: target.url,
+    domain: target.domain,
+    duration_seconds: target.duration_seconds,
+    network: target.network,
+    wait_load_timeout: target.wait_load_timeout,
+    run_label: target.run_label,
   }
 }
 

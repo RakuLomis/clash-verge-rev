@@ -14,6 +14,14 @@ export type JobState =
   | 'cancelled'
   | 'interrupted'
 export type CaptureNetwork = 'tcp' | 'udp' | 'all'
+export type TargetSource =
+  | { mode: 'manual' }
+  | {
+      mode: 'config'
+      config_path: string
+      config_sha256: string
+      target_index: number
+    }
 export type FlowNetwork = 'tcp' | 'udp'
 export type FlowMatchStatus = 'matched' | 'ambiguous' | 'unmatched' | 'legacy'
 
@@ -65,7 +73,28 @@ export interface CaptureStartRequest {
   physical_interface: string
   output_root: string
   chrome_binary: string
+  wait_load_timeout: number
+  run_label: string
+  target_source: TargetSource
   options?: Partial<CaptureOptions>
+}
+
+export interface TargetConfigEntry {
+  index: number
+  domain: string
+  url: string
+  duration_seconds: number
+  network: CaptureNetwork
+  run_label: string
+  wait_load_timeout: number
+}
+
+export interface TargetConfigPreview {
+  schema_version: 1
+  config_path: string
+  sha256: string
+  targets: TargetConfigEntry[]
+  warnings: string[]
 }
 
 export interface JobSnapshot {
@@ -117,6 +146,7 @@ export interface SessionManifest {
 export interface SessionTarget {
   url: string
   domain: string
+  source?: TargetSource | null
 }
 
 export interface ComponentVersion {

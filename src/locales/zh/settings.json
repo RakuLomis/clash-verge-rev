@@ -818,7 +818,11 @@
       "description": "针对一个浏览器目标捕获代理前与代理后流量。",
       "selectChrome": "选择 Chrome 或 Chromium",
       "selectOutput": "选择 TrafficTracer 会话目录",
+      "selectTargetConfig": "选择 TrafficTracer 目标配置",
       "fields": {
+        "targetSource": "目标来源",
+        "configFile": "目标 YAML",
+        "configTarget": "配置中的目标",
         "url": "目标 URL",
         "domain": "域名",
         "duration": "持续时间（秒）",
@@ -829,10 +833,15 @@
         "output": "会话输出目录"
       },
       "hints": {
+        "configFile": "只读取 sites 列表；代理与环境设置仍由 Clash Verge 管理。",
         "url": "Chrome 将打开的 HTTP(S) URL。",
         "domain": "根据目标 URL 自动推导。",
         "output": "每个会话将创建一个独立子目录。",
         "chrome": "必须是可执行文件的绝对路径。"
+      },
+      "targetSources": {
+        "manual": "手动 URL",
+        "config": "YAML 配置"
       },
       "options": {
         "packets": "捕获数据包",
@@ -941,6 +950,7 @@
       "url": "请输入绝对 HTTP(S) URL。",
       "domain": "请输入有效的 DNS 域名。",
       "duration": "持续时间必须在 1 到 86400 秒之间。",
+      "configFile": "请选择并加载有效的目标 YAML 配置。",
       "tunInterface": "请选择 TUN 接口。",
       "physicalInterface": "请选择物理接口。",
       "output": "请选择绝对路径的会话输出目录。",

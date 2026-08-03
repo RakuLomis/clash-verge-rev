@@ -1229,16 +1229,20 @@ export interface TranslationResources {
           description: string
           fields: {
             chrome: string
+            configFile: string
+            configTarget: string
             domain: string
             duration: string
             network: string
             output: string
             physicalInterface: string
+            targetSource: string
             tunInterface: string
             url: string
           }
           hints: {
             chrome: string
+            configFile: string
             domain: string
             output: string
             url: string
@@ -1253,6 +1257,11 @@ export interface TranslationResources {
           }
           selectChrome: string
           selectOutput: string
+          selectTargetConfig: string
+          targetSources: {
+            config: string
+            manual: string
+          }
           title: string
         }
         common: {
@@ -1536,6 +1545,7 @@ export interface TranslationResources {
         title: string
         validation: {
           chrome: string
+          configFile: string
           domain: string
           duration: string
           ip: string

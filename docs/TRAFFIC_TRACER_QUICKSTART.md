@@ -40,11 +40,16 @@ git clone --branch Complete --recurse-submodules \
   git@github.com:RakuLomis/TrafficTracer.git
 cd TrafficTracer
 make bootstrap
+python -m pip install -r requirements.txt -r requirements-build.txt
+corepack enable
+cd components/clash-verge-rev
+pnpm install --frozen-lockfile
+cd ../..
 make check-toolchain
 make dev
 ```
 
-`make dev` 会构建并注入固定核心与 Worker。只准备 sidecar 时运行 `make prepare-dev`。启动前关闭其他 Clash Verge 实例，避免争用 socket。
+`make dev` 会构建并注入固定核心与 Worker。只编译和准备 sidecar、不启动第二个 UI 时运行 `make prepare-dev`。不要让开发版与已安装的 Clash Verge 同时运行并争用 socket；当前实例正在提供网络时，先构建，等到维护窗口再从旧 UI 正常退出后启动开发版，不要强制 kill。
 
 ## 2. 配置代理
 
@@ -90,7 +95,29 @@ ls -l /run/clash-verge-service/service.sock
 
 ## 4. 捕获与环境诊断
 
-打开“流量追踪”，填写目标 URL/域名、1–86400 秒持续时间、TCP/UDP/全部、TUN 接口、物理接口、Chrome 绝对路径和会话输出绝对目录。可选择数据包、CDP、NetLog、自动分析和无头模式。
+打开“流量追踪”后有两种目标来源：
+
+- “手工输入”：填写目标 URL/域名、1–86400 秒持续时间和 TCP/UDP/全部；
+- “YAML 配置”：浏览并加载预先编写的 `.yaml`/`.yml`，再从 `sites` 列表选择一个目标。URL、域名、持续时间、协议、页面加载超时和运行标签由该项提供。
+
+目标配置兼容独立 TrafficTracer 的格式，例如：
+
+```yaml
+sites:
+  - domain: example.com
+    url: https://example.com/
+    wait: 15
+    traffic_type: all
+    wait_load_timeout: 30
+```
+
+只读取 `sites`；即使同一文件含有 `global.mihomo`、`global.chrome`、`global.network` 或 `global.output`，UI 也不会应用它们，代理与运行环境仍由 Clash Verge 管理。`wait` 是捕获持续时间，`wait_load_timeout` 是页面加载超时；`traffic_type` 的 `tcp`、`udp`、`all` 直接映射协议，其他安全标签会将协议回退为 `all` 并显示警告。加载结果不会包含代理 secret。
+
+加载后会记录文件绝对路径、SHA-256 和目标序号。每次开始捕获前后端都会重新加载并逐字段核对；如果文件在预览后被修改，捕获会拒绝启动，点击刷新并重新选择即可。当前每次捕获一个选中目标，不会自动批量运行整个 `sites` 列表。
+
+目标 YAML 应放在不会随重启清理的持久目录，不要使用 `/tmp`。文件必须为 UTF-8、扩展名 `.yaml`/`.yml`、大小不超过 1 MiB，并包含非空 `sites`。`domain` 必须是有效 DNS 名，`url` 必须是绝对 HTTP(S) URL；`wait` 范围 1–86400，`wait_load_timeout` 范围 1–3600；`traffic_type` 最多 64 位，只能使用字母、数字、点、下划线和连字符，首位必须为字母或数字。
+
+随后填写 TUN 接口、物理接口、Chrome 绝对路径和会话输出绝对目录。可选择数据包、CDP、NetLog、自动分析和无头模式。
 
 `ip route show default` 可确认物理出口，`ip -brief link` 可查看 TUN 接口。
 
@@ -130,19 +157,41 @@ ls -l /run/clash-verge-service/service.sock
 
 ## 8. Linux 打包与验收
 
+从 TrafficTracer `Complete` 根目录运行统一流水线，不要在 UI 子仓库直接执行裸 `pnpm tauri build`，否则可能打入陈旧的核心或 Worker：
+
 ```bash
-cd components/clash-verge-rev
-pnpm tauri build --target x86_64-unknown-linux-gnu --bundles deb,appimage
+cd /absolute/path/to/TrafficTracer
+make check-toolchain
+make test-python
+make test-contracts
+make prepare-dev
+TT_PACKAGE_OUTPUT_DIR="$PWD/dist/packages/target-config-v2" make package-linux
+sha256sum -c dist/packages/target-config-v2/SHA256SUMS
 ```
 
-启用 updater 时还需 `TAURI_SIGNING_PRIVATE_KEY`；缺少私钥可能在 bundle 已生成后使签名步骤返回非零。验证 Deb/AppImage 都携带 7 个可执行文件：
+这里的 `$PWD` 必须是 TrafficTracer `Complete` 仓库根目录；不要从 `~` 直接复制执行，否则路径会展开到 `$HOME/dist/...`。
+
+`make package-linux` 会再次执行 sidecar 准备，因此单独的 `make prepare-dev` 是便于提前验证，不是打包必需步骤。默认输出目录已存在时构建会拒绝覆盖；为每个候选指定新的 `TT_PACKAGE_OUTPUT_DIR`。启用 updater 时还需 `TAURI_SIGNING_PRIVATE_KEY`；没有私钥时统一流水线会关闭 updater artifact 并生成经过布局验证的 unsigned 包。
+
+统一流水线已经验证 Deb/AppImage 都携带 7 个可执行文件。如需手工复核：
 
 ```bash
+cd components/clash-verge-rev
 pnpm verify:linux-bundle -- \
   --target x86_64-unknown-linux-gnu \
   --sidecars src-tauri/sidecar \
   /absolute/path/to/package.deb \
   /absolute/path/to/package.AppImage
+cd ../..
 ```
+
+Worker API v2 必须与新版 UI 成套部署。安装 Deb 不会更新已经运行的旧进程；先构建并校验，到可接受的网络维护窗口后从旧 UI 正常退出，再安装新包并启动：
+
+```bash
+cd /absolute/path/to/TrafficTracer
+sudo apt install "$PWD/dist/packages/target-config-v2/Clash Verge_2.5.2_amd64.deb"
+```
+
+不要从会被重启清理的 `/tmp` 安装。升级后重新确认 `verge-mihomo-tt`、TUN 服务和环境诊断。
 
 干净安装应验证：导入配置；TT 核心；测速选节点；系统代理/TUN；环境无阻断；UI 捕获/自动分析；会话产物；已知代理前五元组的全部逻辑流与实际 `post_flow` 状态。

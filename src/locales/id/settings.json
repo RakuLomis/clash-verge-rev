@@ -818,7 +818,11 @@
       "description": "Capture the pre-proxy and post-proxy traffic for one browser target.",
       "selectChrome": "Select Chrome or Chromium",
       "selectOutput": "Select TrafficTracer Session directory",
+      "selectTargetConfig": "Select TrafficTracer target configuration",
       "fields": {
+        "targetSource": "Target source",
+        "configFile": "Target YAML",
+        "configTarget": "Configured target",
         "url": "Target URL",
         "domain": "Domain",
         "duration": "Duration (seconds)",
@@ -829,10 +833,15 @@
         "output": "Session output directory"
       },
       "hints": {
+        "configFile": "Loads only the sites list; proxy and environment settings remain controlled by Clash Verge.",
         "url": "HTTP(S) URL opened by Chrome.",
         "domain": "Derived from the target URL.",
         "output": "One subdirectory is created per Session.",
         "chrome": "An absolute executable path."
+      },
+      "targetSources": {
+        "manual": "Manual URL",
+        "config": "YAML configuration"
       },
       "options": {
         "packets": "Packet capture",
@@ -941,6 +950,7 @@
       "url": "Enter an absolute HTTP(S) URL.",
       "domain": "Enter a valid DNS domain.",
       "duration": "Duration must be between 1 and 86400 seconds.",
+      "configFile": "Select and load a valid target YAML configuration.",
       "tunInterface": "Select the TUN interface.",
       "physicalInterface": "Select the physical interface.",
       "output": "Choose an absolute Session output directory.",

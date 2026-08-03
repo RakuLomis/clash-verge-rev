@@ -1,4 +1,8 @@
-import { PlayArrowRounded, SearchRounded } from '@mui/icons-material'
+import {
+  PlayArrowRounded,
+  RefreshRounded,
+  SearchRounded,
+} from '@mui/icons-material'
 import {
   Alert,
   Box,
@@ -18,16 +22,21 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 
-import { getNetworkInterfaces } from '@/services/cmds'
+import {
+  getNetworkInterfaces,
+  loadTrafficTracerTargetConfig,
+} from '@/services/cmds'
 import { showNotice } from '@/services/notice-service'
 import type {
   CaptureStartRequest,
   CompleteEnvironmentReport,
   DiagnosticCheck,
   EnvironmentRequest,
+  TargetConfigPreview,
 } from '@/types/traffic-tracer'
 
 import {
+  applyTargetConfigEntry,
   captureRequestFromDraft,
   defaultCaptureFormDraft,
   deriveDomain,
@@ -86,6 +95,11 @@ export function TrafficTracerCaptureForm({
   const [draft, setDraft] = useState(restoredDraft)
   const [interfaces, setInterfaces] = useState<string[]>([])
   const [submitted, setSubmitted] = useState(false)
+  const [targetConfig, setTargetConfig] = useState<TargetConfigPreview | null>(
+    null,
+  )
+  const [targetConfigError, setTargetConfigError] = useState('')
+  const [targetConfigLoading, setTargetConfigLoading] = useState(false)
   const tunRef = useRef<HTMLInputElement>(null)
   const physicalRef = useRef<HTMLInputElement>(null)
 
@@ -189,6 +203,44 @@ export function TrafficTracerCaptureForm({
     if (selected) update('output_root', String(selected))
   }
 
+  const loadTargetConfig = async (
+    path: string,
+    preferredIndex?: number | null,
+  ) => {
+    setTargetConfigLoading(true)
+    setTargetConfigError('')
+    try {
+      const preview = await loadTrafficTracerTargetConfig(path)
+      const selected =
+        preview.targets.find((target) => target.index === preferredIndex) ??
+        preview.targets[0]
+      if (!selected) throw new Error('Target configuration has no sites.')
+      setTargetConfig(preview)
+      setDraft((current) => applyTargetConfigEntry(current, preview, selected))
+    } catch (error) {
+      setTargetConfig(null)
+      setTargetConfigError(String(error))
+    } finally {
+      setTargetConfigLoading(false)
+    }
+  }
+
+  const pickTargetConfig = async () => {
+    const selected = await open({
+      directory: false,
+      multiple: false,
+      filters: [{ name: 'YAML', extensions: ['yaml', 'yml'] }],
+      title: t('settings.trafficTracer.capture.selectTargetConfig'),
+    })
+    if (selected) await loadTargetConfig(String(selected))
+  }
+
+  const selectTarget = (index: number) => {
+    const target = targetConfig?.targets.find((item) => item.index === index)
+    if (!target || !targetConfig) return
+    setDraft((current) => applyTargetConfigEntry(current, targetConfig, target))
+  }
+
   const handleRemediation = (
     target: EnvironmentRemediationTarget,
     check: DiagnosticCheck,
@@ -263,6 +315,78 @@ export function TrafficTracerCaptureForm({
             }}
           >
             <TextField
+              select
+              label={t('settings.trafficTracer.capture.fields.targetSource')}
+              value={draft.target_mode}
+              onChange={(event) =>
+                update(
+                  'target_mode',
+                  event.target.value as CaptureFormDraft['target_mode'],
+                )
+              }
+            >
+              <MenuItem value="manual">
+                {t('settings.trafficTracer.capture.targetSources.manual')}
+              </MenuItem>
+              <MenuItem value="config">
+                {t('settings.trafficTracer.capture.targetSources.config')}
+              </MenuItem>
+            </TextField>
+            {draft.target_mode === 'config' && (
+              <TextField
+                label={t('settings.trafficTracer.capture.fields.configFile')}
+                value={draft.config_path}
+                error={Boolean(targetConfigError || showError('config_path'))}
+                helperText={
+                  targetConfigError ||
+                  showError('config_path') ||
+                  t('settings.trafficTracer.capture.hints.configFile')
+                }
+                slotProps={{
+                  input: {
+                    readOnly: true,
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        {draft.config_path && (
+                          <Button
+                            disabled={targetConfigLoading}
+                            onClick={() =>
+                              void loadTargetConfig(
+                                draft.config_path,
+                                draft.selected_target_index,
+                              )
+                            }
+                          >
+                            <RefreshRounded fontSize="small" />
+                          </Button>
+                        )}
+                        <Button
+                          disabled={targetConfigLoading}
+                          onClick={() => void pickTargetConfig()}
+                        >
+                          {t('settings.trafficTracer.common.actions.browse')}
+                        </Button>
+                      </InputAdornment>
+                    ),
+                  },
+                }}
+              />
+            )}
+            {draft.target_mode === 'config' && targetConfig && (
+              <TextField
+                select
+                label={t('settings.trafficTracer.capture.fields.configTarget')}
+                value={draft.selected_target_index ?? ''}
+                onChange={(event) => selectTarget(Number(event.target.value))}
+              >
+                {targetConfig.targets.map((target) => (
+                  <MenuItem key={target.index} value={target.index}>
+                    {target.domain} — {target.url}
+                  </MenuItem>
+                ))}
+              </TextField>
+            )}
+            <TextField
               label={t('settings.trafficTracer.capture.fields.url')}
               value={draft.url}
               error={Boolean(showError('url'))}
@@ -278,6 +402,9 @@ export function TrafficTracerCaptureForm({
                   domain: deriveDomain(url) || current.domain,
                 }))
               }}
+              slotProps={{
+                input: { readOnly: draft.target_mode === 'config' },
+              }}
             />
             <TextField
               label={t('settings.trafficTracer.capture.fields.domain')}
@@ -288,6 +415,9 @@ export function TrafficTracerCaptureForm({
                 t('settings.trafficTracer.capture.hints.domain')
               }
               onChange={(event) => update('domain', event.target.value)}
+              slotProps={{
+                input: { readOnly: draft.target_mode === 'config' },
+              }}
             />
             <TextField
               label={t('settings.trafficTracer.capture.fields.duration')}
@@ -295,10 +425,16 @@ export function TrafficTracerCaptureForm({
               value={draft.duration_seconds}
               error={Boolean(showError('duration_seconds'))}
               helperText={showError('duration_seconds')}
-              slotProps={{ htmlInput: { min: 1, max: 86_400 } }}
               onChange={(event) =>
                 update('duration_seconds', Number(event.target.value))
               }
+              slotProps={{
+                htmlInput: {
+                  min: 1,
+                  max: 86_400,
+                  readOnly: draft.target_mode === 'config',
+                },
+              }}
             />
             <TextField
               select
@@ -310,6 +446,7 @@ export function TrafficTracerCaptureForm({
                   event.target.value as CaptureFormDraft['network'],
                 )
               }
+              disabled={draft.target_mode === 'config'}
             >
               <MenuItem value="all">TCP + UDP</MenuItem>
               <MenuItem value="tcp">TCP</MenuItem>
@@ -392,6 +529,12 @@ export function TrafficTracerCaptureForm({
               }}
             />
           </Box>
+
+          {targetConfig?.warnings.map((warning) => (
+            <Alert key={warning} severity="warning">
+              {warning}
+            </Alert>
+          ))}
 
           <Stack direction="row" spacing={2} sx={{ flexWrap: 'wrap' }}>
             {(

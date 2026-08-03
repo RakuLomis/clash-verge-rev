@@ -1,8 +1,8 @@
 use super::{CoreManager, RunningMode};
 use crate::{
     AsyncHandler,
-    config::{Config, IClashTemp},
-    core::{handle, logger::Logger, manager::CLASH_LOGGER, service},
+    config::Config,
+    core::{controller, handle, logger::Logger, manager::CLASH_LOGGER, service},
     logging,
     utils::dirs,
 };
@@ -33,6 +33,11 @@ impl CoreManager {
         let core_path = discovery::resolve_core_path(&clash_core)
             .ok_or_else(|| anyhow::anyhow!("Core binary not found: {}", clash_core))?;
         let config_dir = dirs::app_home_dir()?;
+        let controller_ipc = controller::sidecar_ipc_path();
+
+        // Select the sidecar endpoint before spawning. This also drops pooled
+        // clients and WebSockets left over from a previous service-mode core.
+        controller::activate_ipc_path(controller_ipc.clone()).await?;
 
         #[cfg(unix)]
         let previous_mask = unsafe { tauri_plugin_clash_verge_sysinfo::libc::umask(0o007) };
@@ -49,7 +54,7 @@ impl CoreManager {
                 } else {
                     "-ext-ctl-unix"
                 },
-                &IClashTemp::guard_external_controller_ipc(),
+                &controller_ipc,
             ])
             .spawn()?;
         #[cfg(unix)]
@@ -62,6 +67,11 @@ impl CoreManager {
 
         self.set_running_child_sidecar(child);
         self.set_running_mode(RunningMode::Sidecar);
+
+        if let Err(error) = controller::activate_and_wait(controller_ipc).await {
+            self.stop_core_by_sidecar();
+            return Err(error);
+        }
 
         AsyncHandler::spawn(|| async move {
             while let Some(event) = rx.recv().await {
@@ -114,6 +124,18 @@ impl CoreManager {
         logging!(info, Type::Core, "Starting core in service mode");
         let config_file = Config::generate_file(crate::config::ConfigType::Run).await?;
         service::run_core_by_service(&config_file).await?;
+        let controller_ipc = controller::service_ipc_path()?;
+        if let Err(error) = controller::activate_and_wait(controller_ipc).await {
+            if let Err(stop_error) = service::stop_core_by_service().await {
+                logging!(
+                    error,
+                    Type::Service,
+                    "Failed to stop unready service core: {stop_error:#}"
+                );
+            }
+            let _ = controller::activate_ipc_path(controller::sidecar_ipc_path()).await;
+            return Err(error);
+        }
         self.set_running_mode(RunningMode::Service);
         Ok(())
     }

@@ -10,13 +10,13 @@ use tauri::AppHandle;
 
 use super::{CmdResult, StringifyErr as _};
 use crate::{
-    config::{Config, IClashTemp},
+    config::Config,
     core::{
-        service,
+        controller, service,
         traffic_tracer::{
             lock::{CaptureLock, CaptureLockSnapshot},
             manager::{WorkerManager, WorkerManagerState, WorkerRecoveryReport, WorkerRecoveryStatus},
-            protocol::RequestMethod,
+            protocol::{JOB_SCHEMA_VERSION, RequestMethod},
         },
     },
 };
@@ -184,7 +184,7 @@ fn recovery_diagnostic(recovery: Option<WorkerRecoveryReport>) -> Option<Diagnos
 }
 
 fn local_controller_endpoint() -> String {
-    let endpoint = IClashTemp::guard_external_controller_ipc();
+    let endpoint = controller::active_ipc_path();
     if endpoint.starts_with('/') {
         format!("unix://{endpoint}")
     } else if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
@@ -294,16 +294,74 @@ pub struct CaptureStartRequest {
     pub physical_interface: String,
     pub output_root: String,
     pub chrome_binary: String,
+    #[serde(default = "default_wait_load_timeout")]
+    pub wait_load_timeout: u32,
+    #[serde(default = "default_run_label")]
+    pub run_label: String,
+    #[serde(default)]
+    pub target_source: TargetSource,
     #[serde(default)]
     pub options: CaptureOptions,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CaptureNetwork {
     Tcp,
     Udp,
     All,
+}
+
+fn default_wait_load_timeout() -> u32 {
+    30
+}
+
+fn default_run_label() -> String {
+    "all".to_owned()
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TargetSource {
+    Manual,
+    Config {
+        config_path: String,
+        config_sha256: String,
+        target_index: usize,
+    },
+}
+
+impl Default for TargetSource {
+    fn default() -> Self {
+        Self::Manual
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TargetConfigPreview {
+    pub schema_version: u32,
+    pub config_path: String,
+    pub sha256: String,
+    pub targets: Vec<TargetConfigEntry>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TargetConfigEntry {
+    pub index: usize,
+    pub domain: String,
+    pub url: String,
+    pub duration_seconds: u32,
+    pub network: CaptureNetwork,
+    pub run_label: String,
+    pub wait_load_timeout: u32,
+}
+
+#[derive(Serialize)]
+struct TargetConfigPathParams<'a> {
+    path: &'a str,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -386,6 +444,9 @@ struct CaptureJobSpec {
     chrome_binary: String,
     controller: CaptureController,
     options: CaptureOptions,
+    wait_load_timeout: u32,
+    run_label: String,
+    target_source: TargetSource,
 }
 
 #[derive(Serialize)]
@@ -415,6 +476,7 @@ struct CancelJobParams {
 #[tauri::command]
 pub async fn tt_capture_start(app_handle: AppHandle, request: CaptureStartRequest) -> CmdResult<JobSnapshot> {
     validate_capture_request(&request)?;
+    validate_config_target_is_current(&request).await?;
 
     let environment = tt_get_environment(
         app_handle,
@@ -453,7 +515,7 @@ pub async fn tt_capture_start(app_handle: AppHandle, request: CaptureStartReques
             RequestMethod::JobStart,
             CaptureJobParams {
                 job: CaptureJobSpec {
-                    schema_version: 1,
+                    schema_version: JOB_SCHEMA_VERSION,
                     kind: "capture",
                     job_id: job_id.clone(),
                     url: request.url,
@@ -471,6 +533,9 @@ pub async fn tt_capture_start(app_handle: AppHandle, request: CaptureStartReques
                         secret: controller_secret,
                     },
                     options: request.options,
+                    wait_load_timeout: request.wait_load_timeout,
+                    run_label: request.run_label,
+                    target_source: request.target_source,
                 },
             },
         )
@@ -490,6 +555,52 @@ pub async fn tt_capture_start(app_handle: AppHandle, request: CaptureStartReques
             Err(error.to_string().into())
         }
     }
+}
+
+#[tauri::command]
+pub async fn tt_target_config_load(config_path: String) -> CmdResult<TargetConfigPreview> {
+    if !Path::new(&config_path).is_absolute() {
+        return Err("config_path must be an absolute path".into());
+    }
+    WorkerManager::global()
+        .client()
+        .stringify_err()?
+        .request(
+            RequestMethod::ConfigTargetsLoad,
+            TargetConfigPathParams { path: &config_path },
+        )
+        .await
+        .stringify_err()
+}
+
+async fn validate_config_target_is_current(request: &CaptureStartRequest) -> CmdResult {
+    let TargetSource::Config {
+        config_path,
+        config_sha256,
+        target_index,
+    } = &request.target_source
+    else {
+        return Ok(());
+    };
+    let preview = tt_target_config_load(config_path.clone()).await?;
+    if preview.sha256 != *config_sha256 {
+        return Err("target configuration changed after loading; reload it before capture".into());
+    }
+    let target = preview
+        .targets
+        .iter()
+        .find(|target| target.index == *target_index)
+        .ok_or_else(|| smartstring::alias::String::from("selected target no longer exists in the configuration"))?;
+    if target.url != request.url
+        || target.domain != request.domain
+        || target.duration_seconds != request.duration_seconds
+        || target.network != request.network
+        || target.run_label != request.run_label
+        || target.wait_load_timeout != request.wait_load_timeout
+    {
+        return Err("selected target no longer matches the configuration; reload it before capture".into());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -549,6 +660,25 @@ fn validate_capture_request(request: &CaptureStartRequest) -> CmdResult {
     if !(1..=86_400).contains(&request.duration_seconds) {
         return Err("duration_seconds must be between 1 and 86400".into());
     }
+    if !(1..=3_600).contains(&request.wait_load_timeout) {
+        return Err("wait_load_timeout must be between 1 and 3600".into());
+    }
+    if !valid_run_label(&request.run_label) {
+        return Err("run_label contains unsafe characters".into());
+    }
+    if let TargetSource::Config {
+        config_path,
+        config_sha256,
+        ..
+    } = &request.target_source
+    {
+        if !Path::new(config_path).is_absolute() {
+            return Err("target config_path must be an absolute path".into());
+        }
+        if config_sha256.len() != 64 || !config_sha256.chars().all(|character| character.is_ascii_hexdigit()) {
+            return Err("target config_sha256 must be a SHA-256 digest".into());
+        }
+    }
     if request.tun_interface.trim().is_empty() || request.physical_interface.trim().is_empty() {
         return Err("capture interfaces must not be empty".into());
     }
@@ -561,6 +691,14 @@ fn validate_capture_request(request: &CaptureStartRequest) -> CmdResult {
         }
     }
     Ok(())
+}
+
+fn valid_run_label(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.chars().enumerate().all(|(index, character)| {
+            character.is_ascii_alphanumeric() || (index > 0 && matches!(character, '.' | '_' | '-'))
+        })
 }
 
 fn valid_domain(domain: &str) -> bool {
@@ -653,6 +791,8 @@ pub struct SessionManifest {
 pub struct SessionTarget {
     pub url: String,
     pub domain: String,
+    #[serde(default)]
+    pub source: Option<Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -833,7 +973,7 @@ pub async fn tt_analysis_start(session_id: String, options: Option<AnalysisOptio
             RequestMethod::AnalysisStart,
             AnalysisJobParams {
                 job: AnalysisJobSpec {
-                    schema_version: 1,
+                    schema_version: JOB_SCHEMA_VERSION,
                     kind: "analysis",
                     job_id: job_id.clone(),
                     session_dir: session_dir.to_string_lossy().into_owned(),
@@ -1127,10 +1267,11 @@ mod flow_tests {
 #[cfg(test)]
 mod session_tests {
     use super::*;
+    use crate::core::traffic_tracer::protocol::SESSION_SCHEMA_VERSION;
 
     fn manifest(session_dir: &str) -> SessionManifest {
         SessionManifest {
-            schema_version: 1,
+            schema_version: SESSION_SCHEMA_VERSION,
             session_id: "123e4567-e89b-42d3-a456-426614174000".to_owned(),
             job_id: "123e4567-e89b-42d3-a456-426614174001".to_owned(),
             state: JobState::Completed,
@@ -1142,6 +1283,7 @@ mod session_tests {
             target: SessionTarget {
                 url: "https://example.com/".to_owned(),
                 domain: "example.com".to_owned(),
+                source: None,
             },
             component_versions: serde_json::json!({}),
             artifacts: Vec::new(),
@@ -1202,6 +1344,9 @@ mod capture_tests {
             physical_interface: "eth0".to_owned(),
             output_root: "/tmp/traffictracer".to_owned(),
             chrome_binary: "/usr/bin/google-chrome".to_owned(),
+            wait_load_timeout: 30,
+            run_label: "all".to_owned(),
+            target_source: TargetSource::Manual,
             options: CaptureOptions::default(),
         }
     }
@@ -1214,6 +1359,31 @@ mod capture_tests {
 
         request.output_root = "/tmp/traffictracer".to_owned();
         request.duration_seconds = 0;
+        assert!(validate_capture_request(&request).is_err());
+    }
+
+    #[test]
+    fn capture_spec_validates_config_target_provenance() {
+        let mut request = valid_request();
+        request.target_source = TargetSource::Config {
+            config_path: "/tmp/sites.yaml".to_owned(),
+            config_sha256: "a".repeat(64),
+            target_index: 0,
+        };
+        validate_capture_request(&request).unwrap();
+
+        request.target_source = TargetSource::Config {
+            config_path: "sites.yaml".to_owned(),
+            config_sha256: "a".repeat(64),
+            target_index: 0,
+        };
+        assert!(validate_capture_request(&request).is_err());
+
+        request.target_source = TargetSource::Config {
+            config_path: "/tmp/sites.yaml".to_owned(),
+            config_sha256: "not-a-digest".to_owned(),
+            target_index: 0,
+        };
         assert!(validate_capture_request(&request).is_err());
     }
 

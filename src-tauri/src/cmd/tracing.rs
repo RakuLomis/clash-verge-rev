@@ -1,6 +1,6 @@
 use super::CmdResult;
 use super::StringifyErr as _;
-use crate::config::IClashTemp;
+use crate::core::controller;
 use crate::core::traffic_tracer::lock::CaptureLock;
 use reqwest::{Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,7 @@ pub struct TracingPatch {
 }
 
 fn tracing_client() -> Result<Client, String> {
-    let socket_path = IClashTemp::guard_external_controller_ipc();
+    let socket_path = controller::active_ipc_path();
     let builder = ClientBuilder::new().timeout(REQUEST_TIMEOUT);
     #[cfg(unix)]
     let builder = builder.unix_socket(socket_path);

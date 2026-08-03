@@ -453,12 +453,12 @@ mod tests {
 
     fn ready(recovery: serde_json::Value) -> String {
         serde_json::json!({
-            "api_version": 1,
+            "api_version": WORKER_API_VERSION,
             "type": "notification",
             "method": "worker.ready",
             "params": {
                 "version": "0.1.0",
-                "api_version": 1,
+                "api_version": WORKER_API_VERSION,
                 "output_root": "/tmp/traffictracer-sessions",
                 "recovery": recovery
             }

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-pub const WORKER_API_VERSION: u32 = 1;
-pub const JOB_SCHEMA_VERSION: u32 = 1;
+pub const WORKER_API_VERSION: u32 = 2;
+pub const JOB_SCHEMA_VERSION: u32 = 2;
 pub const SESSION_SCHEMA_VERSION: u32 = 1;
 pub const FLOW_SCHEMA_VERSION: u32 = 1;
 
@@ -26,6 +26,8 @@ pub enum RequestMethod {
     Hello,
     #[serde(rename = "environment.diagnose")]
     EnvironmentDiagnose,
+    #[serde(rename = "config.targets.load")]
+    ConfigTargetsLoad,
     #[serde(rename = "job.start")]
     JobStart,
     #[serde(rename = "job.cancel")]

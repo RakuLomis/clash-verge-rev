@@ -625,7 +625,7 @@ mod tests {
 
     #[test]
     fn inbound_message_type_matches_protocol_tag() {
-        let raw = r#"{"type":"notification","api_version":1,"method":"worker.ready","params":{}}"#;
+        let raw = r#"{"type":"notification","api_version":2,"method":"worker.ready","params":{}}"#;
         let InboundMessage::Notification {
             api_version,
             method,
