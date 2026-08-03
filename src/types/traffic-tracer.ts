@@ -46,6 +46,9 @@ export interface CompleteIntegrationStatus {
   current_core: string
   tun_enabled: boolean
   service_available: boolean
+  configured_tun_device: string
+  automatic_tun_device: string
+  capture_tun_interface: string
   worker: WorkerManagerState
 }
 

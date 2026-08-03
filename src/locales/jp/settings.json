@@ -104,8 +104,6 @@
           "clashCore": "Clashコア",
           "openUwpTool": "UWPツールを開く",
           "updateGeoData": "GeoDataを更新",
-          "tracing": "トラフィックトレーサー",
-          "tracingOutput": "出力パス",
           "tunnels": {
             "title": "トンネル管理",
             "localAddr": "ローカル待受アドレス",
@@ -135,8 +133,7 @@
           "networkInterface": "ネットワークインターフェース",
           "unifiedDelay": "統一遅延を有効にすると、2回の遅延テストが行われ、接続ハンドシェイクなどによる異なるタイプのノードの遅延差を解消します。",
           "logLevel": "ログディレクトリのServiceフォルダ内のコアログファイルにのみ適用されます。",
-          "openUwpTool": "Windows 8以降では、UWPアプリケーション（Microsoft Storeなど）がローカルホストのネットワークサービスに直接アクセスすることが制限されています。このツールを使用すると、この制限を回避できます。",
-          "tracingOutput": "トラフィックトレースログファイルの出力パス。空の場合はstdoutに出力します"
+          "openUwpTool": "Windows 8以降では、UWPアプリケーション（Microsoft Storeなど）がローカルホストのネットワークサービスに直接アクセスすることが制限されています。このツールを使用すると、この制限を回避できます。"
         },
         "options": {
           "logLevel": {
@@ -675,7 +672,7 @@
     },
     "locks": {
       "captureActive": "TrafficTracer capture is active.",
-      "coreTracing": "Core, profile, and manual tracing controls are locked.",
+      "coreTracing": "Core and profile controls are locked.",
       "profiles": "Profile switching and reactivation are locked.",
       "proxyLifecycle": "TUN, system proxy, and service changes are locked.",
       "job": "Job {{id}}"
@@ -700,7 +697,8 @@
         "localController": "Local controller",
         "notSelected": "Not selected",
         "tunServiceReady": "Enabled · service ready",
-        "tunServiceUnavailable": "Enabled · service unavailable"
+        "tunServiceUnavailable": "Enabled · service unavailable",
+        "automaticTun": "Auto ({device})"
       },
       "actions": {
         "retry": "Retry",

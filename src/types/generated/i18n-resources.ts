@@ -1088,8 +1088,6 @@ export interface TranslationResources {
               logLevel: string
               openUwpTool: string
               portConfig: string
-              tracing: string
-              tracingOutput: string
               tunnels: {
                 actions: {
                   add: string
@@ -1131,7 +1129,6 @@ export interface TranslationResources {
               logLevel: string
               networkInterface: string
               openUwpTool: string
-              tracingOutput: string
               unifiedDelay: string
             }
           }
@@ -1433,6 +1430,7 @@ export interface TranslationResources {
           }
           title: string
           values: {
+            automaticTun: string
             localController: string
             notSelected: string
             tunServiceReady: string

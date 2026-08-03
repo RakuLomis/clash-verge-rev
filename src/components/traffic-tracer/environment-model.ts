@@ -120,6 +120,7 @@ export interface EnvironmentSummaryText {
   disabled: string
   tunServiceReady: string
   tunServiceUnavailable: string
+  automaticTun: string
 }
 
 const defaultSummaryText: EnvironmentSummaryText = {
@@ -139,6 +140,7 @@ const defaultSummaryText: EnvironmentSummaryText = {
   disabled: 'Disabled',
   tunServiceReady: 'Enabled · service ready',
   tunServiceUnavailable: 'Enabled · service unavailable',
+  automaticTun: 'Auto ({device})',
 }
 
 export function buildEnvironmentSummary(
@@ -182,7 +184,15 @@ export function buildEnvironmentSummary(
     {
       id: 'tun-interface',
       label: text.labels['tun-interface'],
-      value: request?.tun_interface || text.notSelected,
+      value: report
+        ? (report.integration.configured_tun_device ||
+            text.automaticTun.replace(
+              '{device}',
+              report.integration.automatic_tun_device,
+            )) +
+          ' → ' +
+          (report.integration.capture_tun_interface || text.notSelected)
+        : request?.tun_interface || text.notSelected,
       state: stateFor(checksFor(report, 'tun-interface')),
     },
     {

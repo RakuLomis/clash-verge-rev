@@ -28,6 +28,8 @@ import { areValidIpCidrs } from '@/utils/network'
 import { StackModeSwitch } from './stack-mode-switch'
 
 const OS = getSystem()
+const DEFAULT_TUN_DEVICE = OS === 'macos' ? 'utun1024' : ''
+const TUN_DEVICE_PLACEHOLDER = OS === 'macos' ? 'utun1024' : 'Auto (Meta)'
 
 const splitRouteExcludeAddress = (value: string) =>
   value
@@ -43,7 +45,7 @@ export function TunViewer({ ref }: { ref?: Ref<DialogRef> }) {
   const [open, setOpen] = useState(false)
   const [values, setValues] = useState({
     stack: 'mixed',
-    device: OS === 'macos' ? 'utun1024' : 'Mihomo',
+    device: DEFAULT_TUN_DEVICE,
     autoRoute: true,
     routeExcludeAddress: '',
     autoRedirect: false,
@@ -73,7 +75,7 @@ export function TunViewer({ ref }: { ref?: Ref<DialogRef> }) {
         OS === 'linux' ? (nextAutoRoute ? rawAutoRedirect : false) : false
       setValues({
         stack: clash?.tun.stack ?? 'gvisor',
-        device: clash?.tun.device ?? (OS === 'macos' ? 'utun1024' : 'Mihomo'),
+        device: clash?.tun.device ?? DEFAULT_TUN_DEVICE,
         autoRoute: nextAutoRoute,
         routeExcludeAddress: (clash?.tun['route-exclude-address'] ?? []).join(
           ',',
@@ -101,12 +103,7 @@ export function TunViewer({ ref }: { ref?: Ref<DialogRef> }) {
 
       const tun: IConfigData['tun'] = {
         stack: values.stack,
-        device:
-          values.device === ''
-            ? OS === 'macos'
-              ? 'utun1024'
-              : 'Mihomo'
-            : values.device,
+        device: values.device.trim(),
         'auto-route': values.autoRoute,
         'route-exclude-address': routeExcludeAddress,
         ...(OS === 'linux'
@@ -149,7 +146,7 @@ export function TunViewer({ ref }: { ref?: Ref<DialogRef> }) {
             onClick={async () => {
               const tun: IConfigData['tun'] = {
                 stack: 'gvisor',
-                device: OS === 'macos' ? 'utun1024' : 'Mihomo',
+                device: DEFAULT_TUN_DEVICE,
                 'auto-route': true,
                 ...(OS === 'linux'
                   ? {
@@ -164,7 +161,7 @@ export function TunViewer({ ref }: { ref?: Ref<DialogRef> }) {
               }
               setValues({
                 stack: 'gvisor',
-                device: OS === 'macos' ? 'utun1024' : 'Mihomo',
+                device: DEFAULT_TUN_DEVICE,
                 autoRoute: true,
                 routeExcludeAddress: '',
                 autoRedirect: false,
@@ -218,7 +215,7 @@ export function TunViewer({ ref }: { ref?: Ref<DialogRef> }) {
             spellCheck="false"
             sx={{ width: 250 }}
             value={values.device}
-            placeholder="Mihomo"
+            placeholder={TUN_DEVICE_PLACEHOLDER}
             onChange={(e) =>
               setValues((v) => ({ ...v, device: e.target.value }))
             }

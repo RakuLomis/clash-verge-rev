@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -10,6 +10,9 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn() }))
 vi.mock('react-router', () => ({ useNavigate: () => vi.fn() }))
 vi.mock('@/services/cmds', () => ({
   getNetworkInterfaces: vi.fn(async () => ['mihomo', 'eth0']),
+  getVergeConfig: vi.fn(async () => ({
+    traffic_tracer_output_root: '/tmp/persisted sessions',
+  })),
 }))
 
 import { formatTrafficTracerCaptureLock } from '@/hooks/use-traffic-tracer-worker'
@@ -25,6 +28,7 @@ import {
   applyTargetConfigEntry,
   captureRequestFromDraft,
   defaultCaptureFormDraft,
+  suggestCaptureInterfaces,
   validateCaptureForm,
 } from './capture-form-model'
 import { TrafficTracerEnvironmentCard } from './environment-card'
@@ -54,6 +58,9 @@ const blockingEnvironment: CompleteEnvironmentReport = {
     current_core: 'verge-mihomo',
     tun_enabled: true,
     service_available: true,
+    configured_tun_device: '',
+    automatic_tun_device: 'Meta',
+    capture_tun_interface: 'mihomo',
     worker: { state: 'stopped' },
   },
 }
@@ -107,6 +114,45 @@ const flow: FlowRecord = {
 }
 
 describe('TrafficTracer Complete workspace', () => {
+  it('uses the persisted Verge workspace and does not mirror it to localStorage', async () => {
+    localStorage.setItem(
+      'traffictracer.captureForm.v1',
+      JSON.stringify({ output_root: '/tmp/legacy browser root' }),
+    )
+    render(<TrafficTracerCaptureForm onDiagnose={vi.fn()} onSubmit={vi.fn()} />)
+
+    expect(
+      await screen.findByDisplayValue('/tmp/persisted sessions'),
+    ).toBeInTheDocument()
+    await waitFor(() => {
+      const stored = JSON.parse(
+        localStorage.getItem('traffictracer.captureForm.v1') ?? '{}',
+      ) as Record<string, unknown>
+      expect(stored).not.toHaveProperty('output_root')
+    })
+  })
+
+  it('restores the accepted workspace after a switch error', async () => {
+    const view = render(
+      <TrafficTracerCaptureForm onDiagnose={vi.fn()} onSubmit={vi.fn()} />,
+    )
+    const output = await screen.findByLabelText('Session output directory')
+    await userEvent.clear(output)
+    await userEvent.type(output, '/tmp/rejected root')
+
+    view.rerender(
+      <TrafficTracerCaptureForm
+        diagnosticError={new Error('SESSION_ROOT_BUSY')}
+        onDiagnose={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    )
+
+    expect(
+      await screen.findByDisplayValue('/tmp/persisted sessions'),
+    ).toBeInTheDocument()
+  })
+
   it('keeps Start capture disabled while environment diagnostics are blocking', async () => {
     const diagnosticRequest = {
       tun_interface: 'mihomo',
@@ -250,6 +296,17 @@ describe('TrafficTracer Complete workspace', () => {
         config_sha256: 'a'.repeat(64),
         target_index: 3,
       },
+    })
+  })
+
+  it('does not guess when multiple TUN interfaces are present', () => {
+    expect(suggestCaptureInterfaces(['Meta', 'Meta0', 'eth0'])).toEqual({
+      tun: '',
+      physical: 'eth0',
+    })
+    expect(suggestCaptureInterfaces(['Meta', 'eth0'])).toEqual({
+      tun: 'Meta',
+      physical: 'eth0',
     })
   })
 

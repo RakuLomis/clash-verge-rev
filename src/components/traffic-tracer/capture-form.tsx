@@ -24,6 +24,7 @@ import { useNavigate } from 'react-router'
 
 import {
   getNetworkInterfaces,
+  getVergeConfig,
   loadTrafficTracerTargetConfig,
 } from '@/services/cmds'
 import { showNotice } from '@/services/notice-service'
@@ -69,6 +70,8 @@ function restoredDraft(): CaptureFormDraft {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (!stored) return defaultCaptureFormDraft
     const parsed = JSON.parse(stored) as Partial<CaptureFormDraft>
+    // The workspace root is owned by persisted Verge config, not browser storage.
+    delete parsed.output_root
     return {
       ...defaultCaptureFormDraft,
       ...parsed,
@@ -105,8 +108,8 @@ export function TrafficTracerCaptureForm({
 
   useEffect(() => {
     let disposed = false
-    Promise.all([getNetworkInterfaces(), appDataDir()])
-      .then(async ([available, dataDir]) => {
+    Promise.all([getNetworkInterfaces(), appDataDir(), getVergeConfig()])
+      .then(async ([available, dataDir, verge]) => {
         if (disposed) return
         setInterfaces(available)
         const suggested = suggestCaptureInterfaces(available)
@@ -119,7 +122,10 @@ export function TrafficTracerCaptureForm({
             suggested.tun ||
             defaultCaptureFormDraft.tun_interface,
           physical_interface: current.physical_interface || suggested.physical,
-          output_root: current.output_root || outputRoot,
+          output_root:
+            current.output_root ||
+            verge?.traffic_tracer_output_root ||
+            outputRoot,
         }))
       })
       .catch(console.error)
@@ -129,8 +135,31 @@ export function TrafficTracerCaptureForm({
   }, [])
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(draft))
+    const browserDraft: Partial<CaptureFormDraft> = { ...draft }
+    delete browserDraft.output_root
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(browserDraft))
   }, [draft])
+
+  useEffect(() => {
+    if (!diagnosticError) return
+    let disposed = false
+    Promise.all([getVergeConfig(), appDataDir()])
+      .then(async ([verge, dataDir]) => {
+        const defaultRoot = await join(dataDir, 'traffictracer-sessions')
+        if (disposed) return
+        const acceptedRoot =
+          verge?.traffic_tracer_output_root?.trim() || defaultRoot
+        setDraft((current) =>
+          current.output_root === acceptedRoot
+            ? current
+            : { ...current, output_root: acceptedRoot },
+        )
+      })
+      .catch(console.error)
+    return () => {
+      disposed = true
+    }
+  }, [diagnosticError])
 
   useEffect(() => {
     const chromeCheck = environment?.checks.find(

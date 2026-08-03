@@ -10,7 +10,7 @@ use tauri::AppHandle;
 
 use super::{CmdResult, StringifyErr as _};
 use crate::{
-    config::Config,
+    config::{Config, IVerge},
     core::{
         controller, service,
         traffic_tracer::{
@@ -19,6 +19,7 @@ use crate::{
             protocol::{JOB_SCHEMA_VERSION, RequestMethod},
         },
     },
+    feat,
 };
 
 const TRAFFIC_TRACER_CORE: &str = "verge-mihomo-tt";
@@ -65,6 +66,9 @@ pub struct CompleteIntegrationStatus {
     pub current_core: String,
     pub tun_enabled: bool,
     pub service_available: bool,
+    pub configured_tun_device: String,
+    pub automatic_tun_device: String,
+    pub capture_tun_interface: String,
     pub worker: WorkerManagerState,
 }
 
@@ -107,9 +111,11 @@ pub async fn tt_get_environment(
     drop(verge);
 
     let clash = Config::clash().await.latest_arc();
+    let configured_tun_device = tun_device_from_mapping(&clash.0);
     let controller_secret = clash.get_client_info().secret.unwrap_or_default();
     drop(clash);
 
+    let capture_tun_interface = request.tun_interface.clone();
     let service_available = service::is_service_available().await.is_ok();
     let controller_endpoint = local_controller_endpoint();
     let manager = WorkerManager::global();
@@ -117,17 +123,20 @@ pub async fn tt_get_environment(
     if !requested_root.is_absolute() {
         return Err("output_root must be an absolute path".into());
     }
-    if matches!(
-        manager.state(),
-        WorkerManagerState::Stopped | WorkerManagerState::Failed { .. }
-    ) {
-        manager
-            .start(&app_handle, requested_root, &controller_endpoint, &controller_secret)
-            .await
-            .stringify_err()?;
-    } else {
-        manager.require_session_root(requested_root).stringify_err()?;
-    }
+    let active_root = manager
+        .ensure_session_root(&app_handle, requested_root, &controller_endpoint, &controller_secret)
+        .await
+        .stringify_err()?;
+    let active_root_string = active_root.to_string_lossy().into_owned();
+    feat::patch_verge(
+        &IVerge {
+            traffic_tracer_output_root: Some(active_root_string.clone().into()),
+            ..IVerge::default()
+        },
+        false,
+    )
+    .await
+    .stringify_err()?;
     let client = manager.client().stringify_err()?;
     let mut worker_report = client
         .request::<_, WorkerDiagnosticReport>(
@@ -142,7 +151,7 @@ pub async fn tt_get_environment(
                 } else {
                     request.chrome_binary
                 },
-                output_root: request.output_root,
+                output_root: active_root_string,
                 min_free_bytes: request.min_free_bytes,
             },
         )
@@ -158,6 +167,9 @@ pub async fn tt_get_environment(
             current_core,
             tun_enabled,
             service_available,
+            configured_tun_device,
+            automatic_tun_device: automatic_tun_device().to_owned(),
+            capture_tun_interface,
             worker: manager.state(),
         },
     ))
@@ -181,6 +193,28 @@ fn recovery_diagnostic(recovery: Option<WorkerRecoveryReport>) -> Option<Diagnos
             "errors": recovery.errors,
         }),
     })
+}
+
+fn tun_device_from_mapping(config: &serde_yaml_ng::Mapping) -> String {
+    config
+        .get("tun")
+        .and_then(serde_yaml_ng::Value::as_mapping)
+        .and_then(|tun| tun.get("device"))
+        .and_then(serde_yaml_ng::Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn automatic_tun_device() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "utun1024"
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "Meta"
+    }
 }
 
 fn local_controller_endpoint() -> String {
@@ -1413,6 +1447,9 @@ mod tests {
             current_core: core.to_owned(),
             tun_enabled,
             service_available,
+            configured_tun_device: String::new(),
+            automatic_tun_device: "Meta".to_owned(),
+            capture_tun_interface: "Meta".to_owned(),
             worker: WorkerManagerState::Ready,
         }
     }
@@ -1426,6 +1463,17 @@ mod tests {
             remediation: String::new(),
             details: Value::Object(Default::default()),
         }
+    }
+
+    #[test]
+    fn reads_configured_tun_device_without_inventing_a_default() {
+        let configured: serde_yaml_ng::Mapping =
+            serde_yaml_ng::from_str("tun:\n  device: \"  Mihomo-custom  \"\n").unwrap();
+        assert_eq!(tun_device_from_mapping(&configured), "Mihomo-custom");
+
+        let automatic: serde_yaml_ng::Mapping = serde_yaml_ng::from_str("tun: {}\n").unwrap();
+        assert_eq!(tun_device_from_mapping(&automatic), "");
+        assert!(!automatic_tun_device().is_empty());
     }
 
     #[test]

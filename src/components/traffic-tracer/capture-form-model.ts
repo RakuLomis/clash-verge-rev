@@ -230,8 +230,10 @@ export function environmentRequestsEqual(
 
 export function suggestCaptureInterfaces(interfaces: string[]) {
   const usable = interfaces.filter(Boolean)
-  const tun =
-    usable.find((name) => /^(meta|mihomo|clash|utun|tun)/i.test(name)) ?? ''
+  const tunCandidates = usable.filter((name) =>
+    /^(meta|mihomo|clash|utun|tun)/i.test(name),
+  )
+  const tun = tunCandidates.length === 1 ? tunCandidates[0] : ''
   const physical =
     usable.find(
       (name) =>

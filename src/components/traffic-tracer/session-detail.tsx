@@ -21,6 +21,7 @@ import { TrafficTracerArtifactList } from './artifact-list'
 
 export interface TrafficTracerSessionDetailProps {
   sessionId: string | null
+  workspaceRoot?: string
   onClose: () => void
 }
 
@@ -30,11 +31,12 @@ function versionLabel(version: string, commit: string) {
 
 export function TrafficTracerSessionDetail({
   sessionId,
+  workspaceRoot = '',
   onClose,
 }: TrafficTracerSessionDetailProps) {
   const { t } = useTranslation()
   const { session, sessionQuery, startAnalysis, analysisMutation } =
-    useTrafficTracerSession(sessionId)
+    useTrafficTracerSession(sessionId, true, workspaceRoot)
 
   const analyzeAgain = async () => {
     try {

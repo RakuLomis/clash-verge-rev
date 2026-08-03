@@ -89,6 +89,7 @@ export function TrafficTracerEnvironmentCard({
     tunServiceUnavailable: t(
       'settings.trafficTracer.environment.values.tunServiceUnavailable',
     ),
+    automaticTun: t('settings.trafficTracer.environment.values.automaticTun'),
   })
   const failingChecks = report?.checks.filter((check) => !check.ok) ?? []
   const level = report?.level ?? 'blocking'

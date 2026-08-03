@@ -104,8 +104,6 @@
           "clashCore": "Clash-Kern",
           "openUwpTool": "UWP-Tool öffnen",
           "updateGeoData": "Geo-Daten aktualisieren",
-          "tracing": "TrafficTracer",
-          "tracingOutput": "Ausgabepfad",
           "tunnels": {
             "title": "Tunnel-Verwaltung",
             "localAddr": "Lokale Abhöradresse",
@@ -135,8 +133,7 @@
           "networkInterface": "Netzwerkschnittstelle",
           "unifiedDelay": "Wenn die einheitliche Latenz aktiviert ist, werden zwei Latenztests durchgeführt, um die Latenzunterschiede zwischen verschiedenen Knotentypen aufgrund von Verbindungsaufbau und anderen Faktoren zu eliminieren.",
           "logLevel": "Dies wirkt sich nur auf die Kernprotokolldateien im Verzeichnis Service im Protokollverzeichnis aus.",
-          "openUwpTool": "Ab Windows 8 wird die direkte Netzwerkverbindung von UWP-Anwendungen (z. B. Microsoft Store) zu lokalen Hosts eingeschränkt. Mit diesem Tool können Sie diese Einschränkung umgehen.",
-          "tracingOutput": "Ausgabepfad für die Traffic-Trace-Protokolldatei. Leer lassen, um in stdout auszugeben"
+          "openUwpTool": "Ab Windows 8 wird die direkte Netzwerkverbindung von UWP-Anwendungen (z. B. Microsoft Store) zu lokalen Hosts eingeschränkt. Mit diesem Tool können Sie diese Einschränkung umgehen."
         },
         "options": {
           "logLevel": {
@@ -675,7 +672,7 @@
     },
     "locks": {
       "captureActive": "TrafficTracer capture is active.",
-      "coreTracing": "Core, profile, and manual tracing controls are locked.",
+      "coreTracing": "Core and profile controls are locked.",
       "profiles": "Profile switching and reactivation are locked.",
       "proxyLifecycle": "TUN, system proxy, and service changes are locked.",
       "job": "Job {{id}}"
@@ -700,7 +697,8 @@
         "localController": "Local controller",
         "notSelected": "Not selected",
         "tunServiceReady": "Enabled · service ready",
-        "tunServiceUnavailable": "Enabled · service unavailable"
+        "tunServiceUnavailable": "Enabled · service unavailable",
+        "automaticTun": "Auto ({device})"
       },
       "actions": {
         "retry": "Retry",

@@ -104,8 +104,6 @@
           "clashCore": "Clash 內核",
           "openUwpTool": "UWP 工具",
           "updateGeoData": "更新 GeoData",
-          "tracing": "流量追蹤",
-          "tracingOutput": "輸出路徑",
           "tunnels": {
             "title": "流量隧道管理",
             "localAddr": "本地監聽位址",
@@ -135,8 +133,7 @@
           "networkInterface": "網路介面",
           "unifiedDelay": "開啟統一延遲時，會進行兩次延遲測試，以消除連線握手等帶來的不同類型節點的延遲差異",
           "logLevel": "僅對日誌目錄 Service 資料夾下的內核日誌檔案生效",
-          "openUwpTool": "Windows 8 開始限制 UWP 應用程式（如Microsoft Store）直接存取本機主機的網路服務，使用此工具可繞過該限制",
-          "tracingOutput": "流量追蹤日誌檔案的輸出路徑。留空則輸出到標準輸出"
+          "openUwpTool": "Windows 8 開始限制 UWP 應用程式（如Microsoft Store）直接存取本機主機的網路服務，使用此工具可繞過該限制"
         },
         "options": {
           "logLevel": {
@@ -675,7 +672,7 @@
     },
     "locks": {
       "captureActive": "TrafficTracer capture is active.",
-      "coreTracing": "Core, profile, and manual tracing controls are locked.",
+      "coreTracing": "Core and profile controls are locked.",
       "profiles": "Profile switching and reactivation are locked.",
       "proxyLifecycle": "TUN, system proxy, and service changes are locked.",
       "job": "Job {{id}}"
@@ -700,7 +697,8 @@
         "localController": "Local controller",
         "notSelected": "Not selected",
         "tunServiceReady": "Enabled · service ready",
-        "tunServiceUnavailable": "Enabled · service unavailable"
+        "tunServiceUnavailable": "Enabled · service unavailable",
+        "automaticTun": "Auto ({device})"
       },
       "actions": {
         "retry": "Retry",

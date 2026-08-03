@@ -31,8 +31,10 @@ const PAGE_SIZE = 8
 
 export function TrafficTracerSessionsView({
   enabled = true,
+  workspaceRoot = '',
 }: {
   enabled?: boolean
+  workspaceRoot?: string
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
@@ -42,7 +44,12 @@ export function TrafficTracerSessionsView({
   )
   const [openingSessionId, setOpeningSessionId] = useState<string | null>(null)
   const { sessions, corrupt, total, sessionsQuery, refreshSessions } =
-    useTrafficTracerSessions((page - 1) * PAGE_SIZE, PAGE_SIZE, enabled)
+    useTrafficTracerSessions(
+      (page - 1) * PAGE_SIZE,
+      PAGE_SIZE,
+      enabled,
+      workspaceRoot,
+    )
 
   const analysisMutation = useMutation({
     mutationFn: (sessionId: string) =>
@@ -181,6 +188,7 @@ export function TrafficTracerSessionsView({
       </Stack>
       <TrafficTracerSessionDetail
         sessionId={selectedSessionId}
+        workspaceRoot={workspaceRoot}
         onClose={() => setSelectedSessionId(null)}
       />
     </Paper>

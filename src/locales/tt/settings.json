@@ -104,8 +104,6 @@
           "clashCore": "Clash ядросы",
           "openUwpTool": "UWP инструментын ачу",
           "updateGeoData": "GeoData яңарту",
-          "tracing": "Трафик Трассер",
-          "tracingOutput": "Чыгару юлы",
           "tunnels": {
             "title": "Tunnel İdäräse",
             "localAddr": "Urınçı Adres",
@@ -135,8 +133,7 @@
           "networkInterface": "Челтәр интерфейсы",
           "unifiedDelay": "Бердәм задержка актив булганда, төрле типтагы узеллар өчен икеләтә тест башкарыла, TCP установканы раслау аермаларын тигезләү максатында",
           "logLevel": "Бу фәкать сервис режимында эшләгән вакытта системалы журнал файлларына кагыла",
-          "openUwpTool": "Windows 8'дән башлап UWP кушымталары (Microsoft Store кебек) локаль хосттагы челтәр хезмәтләренә турыдан-туры тоташа алмый. Бу инструмент әлеге чикләүне әйләнеп узарга ярдәм итә",
-          "tracingOutput": "Трафик трассировкасе журналы файлы өчен чыгару юлы. Stdout'ка чыгару өчен буш калдырыгыз"
+          "openUwpTool": "Windows 8'дән башлап UWP кушымталары (Microsoft Store кебек) локаль хосттагы челтәр хезмәтләренә турыдан-туры тоташа алмый. Бу инструмент әлеге чикләүне әйләнеп узарга ярдәм итә"
         },
         "options": {
           "logLevel": {
@@ -675,7 +672,7 @@
     },
     "locks": {
       "captureActive": "TrafficTracer capture is active.",
-      "coreTracing": "Core, profile, and manual tracing controls are locked.",
+      "coreTracing": "Core and profile controls are locked.",
       "profiles": "Profile switching and reactivation are locked.",
       "proxyLifecycle": "TUN, system proxy, and service changes are locked.",
       "job": "Job {{id}}"
@@ -700,7 +697,8 @@
         "localController": "Local controller",
         "notSelected": "Not selected",
         "tunServiceReady": "Enabled · service ready",
-        "tunServiceUnavailable": "Enabled · service unavailable"
+        "tunServiceUnavailable": "Enabled · service unavailable",
+        "automaticTun": "Auto ({device})"
       },
       "actions": {
         "retry": "Retry",

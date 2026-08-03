@@ -587,14 +587,6 @@ export const isPortInUse = async (port: number) => {
   }
 }
 
-export async function getTracingState() {
-  return invoke<ITracingState>('get_tracing_state')
-}
-
-export async function patchTracingState(payload: ITracingPatch) {
-  return invoke<ITracingState>('patch_tracing_state', { payload })
-}
-
 export function getTrafficTracerEnvironment(
   request: TrafficTracer.EnvironmentRequest,
 ) {

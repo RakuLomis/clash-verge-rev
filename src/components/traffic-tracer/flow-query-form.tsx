@@ -83,8 +83,10 @@ async function queryAllSessions(
 
 export function TrafficTracerFlowQueryForm({
   enabled = true,
+  workspaceRoot = '',
 }: {
   enabled?: boolean
+  workspaceRoot?: string
 }) {
   const { t } = useTranslation()
   const [draft, setDraft] = useState(defaultFlowQueryDraft)
@@ -96,6 +98,7 @@ export function TrafficTracerFlowQueryForm({
     0,
     Number.MAX_SAFE_INTEGER,
     enabled,
+    workspaceRoot,
   )
   const errors = useMemo(() => validateFlowQuery(draft), [draft])
   const errorText = (code: 'ip' | 'port' | undefined) =>

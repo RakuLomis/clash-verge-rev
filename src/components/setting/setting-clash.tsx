@@ -9,7 +9,6 @@ import { updateGeo } from 'tauri-plugin-mihomo-api'
 import { type DialogRef, Switch, TooltipIcon } from '@/components/base'
 import { useClash } from '@/hooks/use-clash'
 import { useClashLog } from '@/hooks/use-clash-log'
-import { useTracing } from '@/hooks/use-tracing'
 import { useTrafficTracerCaptureLock } from '@/hooks/use-traffic-tracer-worker'
 import { useVerge } from '@/hooks/use-verge'
 import { invoke_uwp_tool } from '@/services/cmds'
@@ -38,12 +37,6 @@ const SettingClash = ({ onError }: Props) => {
 
   const { clash, version, mutateClash, patchClash } = useClash()
   const { verge, patchVerge } = useVerge()
-  const {
-    tracing,
-    patchTracing,
-    isError: tracingIsError,
-    error: tracingError,
-  } = useTracing()
   const { captureLock, captureLockReason } = useTrafficTracerCaptureLock()
   const captureLocked = captureLock?.locked ?? false
   const [, setClashLog] = useClashLog()
@@ -304,58 +297,6 @@ const SettingClash = ({ onError }: Props) => {
         <Alert severity="warning" sx={{ mx: 2, my: 1 }}>
           {captureLockReason} {t('settings.trafficTracer.locks.coreTracing')}
         </Alert>
-      )}
-
-      <SettingItem label={t('settings.sections.clash.form.fields.tracing')}>
-        <GuardState
-          value={tracing?.enabled ?? false}
-          valueProps="checked"
-          onCatch={onError}
-          onFormat={onSwitchFormat}
-          onChange={() => {}}
-          onGuard={(e) => patchTracing({ enabled: e })}
-        >
-          <Switch edge="end" disabled={captureLocked} />
-        </GuardState>
-      </SettingItem>
-
-      {tracingIsError && (
-        <Alert severity="error" sx={{ mx: 2, my: 1 }}>
-          {tracingError instanceof Error
-            ? tracingError.message
-            : String(tracingError)}
-        </Alert>
-      )}
-
-      {tracing?.enabled && (
-        <SettingItem
-          label={t('settings.sections.clash.form.fields.tracingOutput')}
-          extra={
-            <TooltipIcon
-              title={t('settings.sections.clash.form.tooltips.tracingOutput')}
-              sx={{ opacity: '0.7' }}
-            />
-          }
-        >
-          <TextField
-            autoComplete="new-password"
-            size="small"
-            disabled={captureLocked}
-            value={tracing?.output ?? ''}
-            placeholder="stdout"
-            sx={{ width: 250, input: { py: '7.5px' } }}
-            onBlur={(e) => {
-              if (e.target.value !== tracing?.output) {
-                void patchTracing({ output: e.target.value || '' }).catch(
-                  (error) =>
-                    onError(
-                      error instanceof Error ? error : new Error(String(error)),
-                    ),
-                )
-              }
-            }}
-          />
-        </SettingItem>
       )}
     </SettingList>
   )

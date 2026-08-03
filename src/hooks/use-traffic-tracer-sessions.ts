@@ -20,8 +20,10 @@ export const trafficTracerSessionDetailsKey = [
   'trafficTracer',
   'session',
 ] as const
-export const trafficTracerSessionKey = (sessionId: string) =>
-  [...trafficTracerSessionDetailsKey, sessionId] as const
+export const trafficTracerSessionKey = (
+  sessionId: string,
+  workspaceRoot = '',
+) => [...trafficTracerSessionDetailsKey, workspaceRoot, sessionId] as const
 export const trafficTracerFlowsKey = ['trafficTracer', 'flows'] as const
 
 export interface SessionPage {
@@ -55,10 +57,11 @@ export function useTrafficTracerSessions(
   offset = 0,
   limit = 20,
   enabled = true,
+  workspaceRoot = '',
 ) {
   const queryClient = useQueryClient()
   const sessionsQuery = useQuery({
-    queryKey: trafficTracerSessionsKey,
+    queryKey: [...trafficTracerSessionsKey, workspaceRoot],
     queryFn: listTrafficTracerSessions,
     enabled,
   })
@@ -100,7 +103,7 @@ export function useTrafficTracerSessions(
       unlisteners.forEach((unlisten) => unlisten())
       unlisteners = []
     }
-  }, [enabled, queryClient])
+  }, [enabled, queryClient, workspaceRoot])
 
   return {
     ...paginateTrafficTracerSessions(sessionsQuery.data, offset, limit),
@@ -112,11 +115,12 @@ export function useTrafficTracerSessions(
 export function useTrafficTracerSession(
   sessionId: string | null,
   enabled = true,
+  workspaceRoot = '',
 ) {
   const queryClient = useQueryClient()
   const sessionQuery = useQuery({
     queryKey: sessionId
-      ? trafficTracerSessionKey(sessionId)
+      ? trafficTracerSessionKey(sessionId, workspaceRoot)
       : ['trafficTracer', 'session', 'none'],
     queryFn: () => getTrafficTracerSession(sessionId!),
     enabled: enabled && sessionId !== null,
@@ -132,7 +136,7 @@ export function useTrafficTracerSession(
       void queryClient.invalidateQueries({ queryKey: trafficTracerSessionsKey })
       if (sessionId) {
         void queryClient.invalidateQueries({
-          queryKey: trafficTracerSessionKey(sessionId),
+          queryKey: trafficTracerSessionKey(sessionId, workspaceRoot),
         })
       }
     },

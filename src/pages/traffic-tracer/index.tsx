@@ -74,10 +74,18 @@ const TrafficTracerPage = () => {
           onSubmit={handleStartCapture}
         />
         <Box sx={{ mt: 2 }}>
-          <TrafficTracerSessionsView enabled={environment !== undefined} />
+          <TrafficTracerSessionsView
+            key={diagnosticRequest?.output_root ?? 'sessions-disabled'}
+            enabled={environment !== undefined}
+            workspaceRoot={diagnosticRequest?.output_root ?? ''}
+          />
         </Box>
         <Box sx={{ mt: 2 }}>
-          <TrafficTracerFlowQueryForm enabled={environment !== undefined} />
+          <TrafficTracerFlowQueryForm
+            key={diagnosticRequest?.output_root ?? 'flows-disabled'}
+            enabled={environment !== undefined}
+            workspaceRoot={diagnosticRequest?.output_root ?? ''}
+          />
         </Box>
       </Box>
     </BasePage>

@@ -1,12 +1,16 @@
 use std::{
+    fs::{self, OpenOptions},
+    io::Write as _,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Result, bail};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use tauri::AppHandle;
 use tokio::sync::broadcast;
 
@@ -75,6 +79,7 @@ pub struct WorkerManager {
     recovery: Mutex<Option<WorkerRecoveryReport>>,
     active_job: Arc<Mutex<Option<String>>>,
     lifecycle: tokio::sync::Mutex<()>,
+    workspace: tokio::sync::Mutex<()>,
 }
 
 impl WorkerManager {
@@ -89,6 +94,7 @@ impl WorkerManager {
             recovery: Mutex::new(None),
             active_job: Arc::new(Mutex::new(None)),
             lifecycle: tokio::sync::Mutex::new(()),
+            workspace: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -161,6 +167,55 @@ impl WorkerManager {
         self.finish_start()
     }
 
+    pub async fn ensure_session_root(
+        &self,
+        app_handle: &AppHandle,
+        requested_root: &Path,
+        controller_endpoint: &str,
+        controller_secret: &str,
+    ) -> Result<PathBuf> {
+        let _workspace = self.workspace.lock().await;
+        let current_root = self.session_root.lock().clone();
+        if session_root_action(&self.state(), current_root.as_deref(), requested_root)? == SessionRootAction::Reuse {
+            return Ok(current_root.expect("a reused Worker has a Session root"));
+        }
+        let requested_root = prepare_session_root(requested_root)?;
+        match session_root_action(&self.state(), current_root.as_deref(), &requested_root)? {
+            SessionRootAction::Reuse => return Ok(current_root.unwrap_or(requested_root)),
+            SessionRootAction::Start => {
+                self.start(app_handle, &requested_root, controller_endpoint, controller_secret)
+                    .await?;
+                return Ok(requested_root);
+            }
+            SessionRootAction::Switch => {}
+        }
+
+        let previous_root = current_root.expect("a ready Worker has a Session root");
+        self.begin_workspace_switch()?;
+        self.graceful_stop().await?;
+        if let Err(error) = self
+            .start(app_handle, &requested_root, controller_endpoint, controller_secret)
+            .await
+        {
+            let rollback = self
+                .start(app_handle, &previous_root, controller_endpoint, controller_secret)
+                .await;
+            return match rollback {
+                Ok(()) => Err(anyhow::anyhow!(
+                    "failed to switch TrafficTracer Session root to {}: {error}; restored {}",
+                    requested_root.display(),
+                    previous_root.display()
+                )),
+                Err(rollback_error) => Err(anyhow::anyhow!(
+                    "failed to switch TrafficTracer Session root to {}: {error}; failed to restore {}: {rollback_error}",
+                    requested_root.display(),
+                    previous_root.display()
+                )),
+            };
+        }
+        Ok(requested_root)
+    }
+
     pub async fn graceful_stop(&self) -> Result<bool> {
         let _lifecycle = self.lifecycle.lock().await;
         if !self.process.is_running() {
@@ -203,18 +258,6 @@ impl WorkerManager {
             .ok_or_else(|| anyhow::anyhow!("TrafficTracer Session root is unavailable"))
     }
 
-    pub fn require_session_root(&self, requested: &Path) -> Result<PathBuf> {
-        let configured = self.session_root()?;
-        if normalize_path(&configured) != normalize_path(requested) {
-            bail!(
-                "TrafficTracer Worker is using Session root '{}'; stop it before selecting '{}'",
-                configured.display(),
-                requested.display()
-            );
-        }
-        Ok(configured)
-    }
-
     pub fn mark_busy(&self, job_id: &str) -> Result<()> {
         if job_id.trim().is_empty() {
             bail!("TrafficTracer Job ID must not be empty");
@@ -238,6 +281,16 @@ impl WorkerManager {
         *active_job = None;
         *state = WorkerManagerState::Ready;
         true
+    }
+
+    fn begin_workspace_switch(&self) -> Result<()> {
+        let active_job = self.active_job.lock();
+        let mut state = self.state.lock();
+        if *state != WorkerManagerState::Ready || active_job.is_some() {
+            bail!("SESSION_ROOT_BUSY: TrafficTracer Worker state changed before workspace switch");
+        }
+        *state = WorkerManagerState::Starting;
+        Ok(())
     }
 
     fn reset_stopped(&self) {
@@ -328,6 +381,63 @@ impl WorkerManager {
             }
         })
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionRootAction {
+    Reuse,
+    Start,
+    Switch,
+}
+
+fn session_root_action(
+    state: &WorkerManagerState,
+    current: Option<&Path>,
+    requested: &Path,
+) -> Result<SessionRootAction> {
+    if current.is_some_and(|path| normalize_path(path) == normalize_path(requested)) {
+        return Ok(SessionRootAction::Reuse);
+    }
+    match state {
+        WorkerManagerState::Stopped | WorkerManagerState::Failed { .. } => Ok(SessionRootAction::Start),
+        WorkerManagerState::Ready => Ok(SessionRootAction::Switch),
+        WorkerManagerState::Busy => bail!(
+            "SESSION_ROOT_BUSY: TrafficTracer is using {} while a Job is active",
+            current.map_or_else(
+                || "an unknown Session root".to_owned(),
+                |path| path.display().to_string()
+            )
+        ),
+        WorkerManagerState::Starting => bail!("SESSION_ROOT_STARTING: TrafficTracer Worker is starting"),
+    }
+}
+
+fn prepare_session_root(requested: &Path) -> Result<PathBuf> {
+    if !requested.is_absolute() {
+        bail!("TrafficTracer Session root must be an absolute path");
+    }
+    let create_with_private_permissions = !requested.exists();
+    fs::create_dir_all(requested)?;
+    #[cfg(unix)]
+    if create_with_private_permissions {
+        fs::set_permissions(requested, fs::Permissions::from_mode(0o700))?;
+    }
+    let root = dunce::canonicalize(requested)?;
+    if !root.is_dir() {
+        bail!("TrafficTracer Session root is not a directory: {}", root.display());
+    }
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let probe = root.join(format!(".traffictracer-write-probe-{}-{nonce}", std::process::id()));
+    let probe_result = (|| -> Result<()> {
+        let mut file = OpenOptions::new().write(true).create_new(true).open(&probe)?;
+        file.write_all(b"TrafficTracer workspace probe\n")?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    let cleanup_result = fs::remove_file(&probe);
+    probe_result?;
+    cleanup_result?;
+    Ok(root)
 }
 
 async fn wait_for_worker_ready(
@@ -542,6 +652,16 @@ mod tests {
     }
 
     #[test]
+    fn workspace_switch_reserves_ready_state_before_shutdown() {
+        let manager = WorkerManager::new();
+        manager.begin_start().unwrap();
+        manager.finish_start().unwrap();
+        manager.begin_workspace_switch().unwrap();
+        assert_eq!(manager.state(), WorkerManagerState::Starting);
+        assert!(manager.mark_busy("late-job").is_err());
+    }
+
+    #[test]
     fn failed_start_can_be_retried() {
         let manager = WorkerManager::new();
         manager.begin_start().unwrap();
@@ -583,5 +703,56 @@ mod tests {
 
         assert_eq!(successes.load(Ordering::SeqCst), 1);
         assert_eq!(manager.state(), WorkerManagerState::Starting);
+    }
+
+    #[test]
+    fn session_root_actions_reuse_and_reject_busy_switches() {
+        let current = Path::new("/tmp/traffictracer-current");
+        assert_eq!(
+            session_root_action(&WorkerManagerState::Ready, Some(current), current).unwrap(),
+            SessionRootAction::Reuse
+        );
+        let error = session_root_action(
+            &WorkerManagerState::Busy,
+            Some(current),
+            Path::new("/tmp/traffictracer-next"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().starts_with("SESSION_ROOT_BUSY:"));
+        assert_eq!(
+            session_root_action(&WorkerManagerState::Stopped, None, Path::new("/tmp/traffictracer-next"),).unwrap(),
+            SessionRootAction::Start
+        );
+    }
+
+    #[test]
+    fn prepares_a_writable_canonical_session_root() {
+        let root = std::env::temp_dir().join(format!(
+            "traffictracer-root-test-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let nested = root.join("nested");
+        let prepared = prepare_session_root(&nested).unwrap();
+        assert!(prepared.is_absolute());
+        assert!(prepared.is_dir());
+        #[cfg(unix)]
+        assert_eq!(fs::metadata(&prepared).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(prepared, dunce::canonicalize(&nested).unwrap());
+        assert!(fs::read_dir(&prepared).unwrap().next().is_none());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn rejects_relative_and_file_session_roots() {
+        assert!(prepare_session_root(Path::new("relative/sessions")).is_err());
+        let file = std::env::temp_dir().join(format!(
+            "traffictracer-root-file-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::write(&file, b"not a directory").unwrap();
+        assert!(prepare_session_root(&file).is_err());
+        fs::remove_file(file).unwrap();
     }
 }

@@ -104,8 +104,6 @@
           "clashCore": "Clash Çekirdeği",
           "openUwpTool": "UWP Aracını Aç",
           "updateGeoData": "GeoData'yı Güncelle",
-          "tracing": "Trafik İzleyici",
-          "tracingOutput": "Çıktı Yolu",
           "tunnels": {
             "title": "Tünel Yönetimi",
             "localAddr": "Yerel Dinleme Adresi",
@@ -135,8 +133,7 @@
           "networkInterface": "Ağ Arayüzü",
           "unifiedDelay": "Birleşik gecikme açıldığında, bağlantı el sıkışmaları vb. nedeniyle farklı tür düğümler arasındaki gecikme farklarını ortadan kaldırmak için iki gecikme testi gerçekleştirilir",
           "logLevel": "Bu parametre yalnızca günlük dizini Hizmet klasöründeki çekirdek günlük dosyaları için geçerlidir",
-          "openUwpTool": "Windows 8'den beri, UWP uygulamaları (Microsoft Store gibi) yerel ana bilgisayar ağ hizmetlerine doğrudan erişmekten kısıtlanmıştır ve bu araç bu kısıtlamayı atlatmak için kullanılabilir",
-          "tracingOutput": "Trafik izleme günlük dosyası için çıktı yolu. Stdout'a çıktı için boş bırakın"
+          "openUwpTool": "Windows 8'den beri, UWP uygulamaları (Microsoft Store gibi) yerel ana bilgisayar ağ hizmetlerine doğrudan erişmekten kısıtlanmıştır ve bu araç bu kısıtlamayı atlatmak için kullanılabilir"
         },
         "options": {
           "logLevel": {
@@ -675,7 +672,7 @@
     },
     "locks": {
       "captureActive": "TrafficTracer capture is active.",
-      "coreTracing": "Core, profile, and manual tracing controls are locked.",
+      "coreTracing": "Core and profile controls are locked.",
       "profiles": "Profile switching and reactivation are locked.",
       "proxyLifecycle": "TUN, system proxy, and service changes are locked.",
       "job": "Job {{id}}"
@@ -700,7 +697,8 @@
         "localController": "Local controller",
         "notSelected": "Not selected",
         "tunServiceReady": "Enabled · service ready",
-        "tunServiceUnavailable": "Enabled · service unavailable"
+        "tunServiceUnavailable": "Enabled · service unavailable",
+        "automaticTun": "Auto ({device})"
       },
       "actions": {
         "retry": "Retry",

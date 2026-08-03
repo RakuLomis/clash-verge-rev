@@ -257,6 +257,10 @@ pub struct IVerge {
 
     /// 启用外部控制器
     pub enable_external_controller: Option<bool>,
+
+    /// TrafficTracer Worker workspace root (persisted only after a successful switch)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub traffic_tracer_output_root: Option<String>,
 }
 
 #[derive(Default, Debug, Clone, Deserialize, Serialize)]
@@ -550,6 +554,7 @@ impl IVerge {
         patch!(enable_dns_settings);
         patch!(home_cards);
         patch!(enable_external_controller);
+        patch!(traffic_tracer_output_root);
     }
 
     pub const fn get_singleton_port() -> u16 {
@@ -571,5 +576,23 @@ impl IVerge {
         } else {
             LevelFilter::Info
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn patches_traffic_tracer_workspace_root() {
+        let mut config = IVerge {
+            traffic_tracer_output_root: Some("/old/root".into()),
+            ..IVerge::default()
+        };
+        config.patch_config(&IVerge {
+            traffic_tracer_output_root: Some("/new root".into()),
+            ..IVerge::default()
+        });
+        assert_eq!(config.traffic_tracer_output_root.as_deref(), Some("/new root"));
     }
 }

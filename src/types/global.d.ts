@@ -984,6 +984,7 @@ interface IVergeConfig {
   enable_hover_jump_navigator?: boolean
   hover_jump_navigator_delay?: number
   enable_external_controller?: boolean
+  traffic_tracer_output_root?: string
 }
 
 interface IWebDavFile {
@@ -1090,13 +1091,3 @@ interface ITrafficWorkerLogMessage {
 type TrafficWorkerResponseMessage =
   | ITrafficWorkerSnapshotMessage
   | ITrafficWorkerLogMessage
-
-interface ITracingState {
-  enabled: boolean
-  output: string
-}
-
-interface ITracingPatch {
-  enabled?: boolean
-  output?: string
-}

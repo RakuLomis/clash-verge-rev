@@ -104,8 +104,6 @@
           "clashCore": "هسته Clash",
           "openUwpTool": "باز کردن ابزار UWP",
           "updateGeoData": "به‌روزرسانی GeoData",
-          "tracing": "ردیاب ترافیک",
-          "tracingOutput": "مسیر خروجی",
           "tunnels": {
             "title": "مدیریت تونل‌ها",
             "localAddr": "آدرس شنود محلی",
@@ -135,8 +133,7 @@
           "networkInterface": "رابط شبکه",
           "unifiedDelay": "معادلDELAY را فعال کنید تا ترافیک شبکه به سرعت رسید",
           "logLevel": "این فقط روی فایل‌های لاگ هسته تحت فایل سرویس در فهرست ورود اثر می‌گذارد.",
-          "openUwpTool": "از ویندوز 8 به بعد، برنامه‌های UWP (مانند Microsoft Store) از دسترسی مستقیم به خدمات شبکه محلی محدود شده‌اند و این ابزار می‌تواند برای دور زدن این محدودیت استفاده شود",
-          "tracingOutput": "مسیر خروجی برای فایل لاگ ردیابی ترافیک. خالی بگذارید تا در stdout خروجی داده شود"
+          "openUwpTool": "از ویندوز 8 به بعد، برنامه‌های UWP (مانند Microsoft Store) از دسترسی مستقیم به خدمات شبکه محلی محدود شده‌اند و این ابزار می‌تواند برای دور زدن این محدودیت استفاده شود"
         },
         "options": {
           "logLevel": {
@@ -675,7 +672,7 @@
     },
     "locks": {
       "captureActive": "TrafficTracer capture is active.",
-      "coreTracing": "Core, profile, and manual tracing controls are locked.",
+      "coreTracing": "Core and profile controls are locked.",
       "profiles": "Profile switching and reactivation are locked.",
       "proxyLifecycle": "TUN, system proxy, and service changes are locked.",
       "job": "Job {{id}}"
@@ -700,7 +697,8 @@
         "localController": "Local controller",
         "notSelected": "Not selected",
         "tunServiceReady": "Enabled · service ready",
-        "tunServiceUnavailable": "Enabled · service unavailable"
+        "tunServiceUnavailable": "Enabled · service unavailable",
+        "automaticTun": "Auto ({device})"
       },
       "actions": {
         "retry": "Retry",
