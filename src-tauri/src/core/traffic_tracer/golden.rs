@@ -6,6 +6,8 @@ use std::{
 
 use serde::Deserialize;
 
+use super::protocol::{EmptyParams, Request, RequestMethod, WORKER_API_VERSION};
+
 #[derive(Debug, Deserialize)]
 struct GoldenEvent {
     schema_version: u32,
@@ -131,4 +133,17 @@ fn golden_complete_tracing_events() {
     assert!(coverage.ipv6, "{coverage:?}");
     assert!(coverage.shared, "{coverage:?}");
     assert!(coverage.error, "{coverage:?}");
+}
+
+#[test]
+fn golden_complete_worker_batch_request() {
+    let root = env::var_os("TRAFFICTRACER_CONTRACT_DIR")
+        .map(PathBuf::from)
+        .expect("TRAFFICTRACER_CONTRACT_DIR is required for the cross-language contract gate");
+    let raw = fs::read_to_string(root.join("worker-request-batch-valid.json"))
+        .expect("shared batch Worker fixture should be readable");
+    let request: Request<EmptyParams> =
+        serde_json::from_str(&raw).expect("shared batch Worker fixture should deserialize");
+    assert_eq!(request.api_version, WORKER_API_VERSION);
+    assert_eq!(request.method, RequestMethod::BatchList);
 }
