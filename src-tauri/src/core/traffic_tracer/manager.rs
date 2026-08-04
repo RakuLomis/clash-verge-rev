@@ -706,19 +706,30 @@ mod tests {
     }
 
     #[test]
-    fn session_root_actions_reuse_and_reject_busy_switches() {
-        let current = Path::new("/tmp/traffictracer-current");
+    fn busy_workspace_switch_preserves_the_active_job_and_root() {
+        let manager = WorkerManager::new();
+        let current = PathBuf::from("/tmp/traffictracer-current");
+        manager.begin_start().unwrap();
+        *manager.session_root.lock() = Some(current.clone());
+        manager.finish_start().unwrap();
+        manager.mark_busy("job-in-progress").unwrap();
+
         assert_eq!(
-            session_root_action(&WorkerManagerState::Ready, Some(current), current).unwrap(),
+            session_root_action(&manager.state(), Some(&current), &current).unwrap(),
             SessionRootAction::Reuse
         );
-        let error = session_root_action(
-            &WorkerManagerState::Busy,
-            Some(current),
-            Path::new("/tmp/traffictracer-next"),
-        )
-        .unwrap_err();
+        let error =
+            session_root_action(&manager.state(), Some(&current), Path::new("/tmp/traffictracer-next")).unwrap_err();
         assert!(error.to_string().starts_with("SESSION_ROOT_BUSY:"));
+        assert_eq!(manager.state(), WorkerManagerState::Busy);
+        assert_eq!(manager.session_root().unwrap(), current);
+        assert_eq!(manager.active_job.lock().as_deref(), Some("job-in-progress"));
+        assert!(manager.mark_ready("job-in-progress"));
+        assert_eq!(manager.state(), WorkerManagerState::Ready);
+    }
+
+    #[test]
+    fn stopped_worker_starts_in_the_requested_workspace() {
         assert_eq!(
             session_root_action(&WorkerManagerState::Stopped, None, Path::new("/tmp/traffictracer-next"),).unwrap(),
             SessionRootAction::Start
