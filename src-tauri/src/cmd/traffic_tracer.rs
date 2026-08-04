@@ -682,6 +682,250 @@ pub fn tt_get_capture_lock() -> CaptureLockSnapshot {
     CaptureLock::global().snapshot()
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BatchStartRequest {
+    pub config_path: String,
+    pub config_sha256: String,
+    pub targets: Vec<TargetConfigEntry>,
+    pub tun_interface: String,
+    pub physical_interface: String,
+    pub output_root: String,
+    pub chrome_binary: String,
+    pub options: CaptureOptions,
+    pub fail_fast: bool,
+}
+
+#[derive(Serialize)]
+struct BatchJobParams {
+    job: BatchJobSpec,
+}
+
+#[derive(Serialize)]
+struct BatchJobSpec {
+    schema_version: u32,
+    kind: &'static str,
+    job_id: String,
+    config_path: String,
+    config_sha256: String,
+    targets: Vec<TargetConfigEntry>,
+    interfaces: CaptureInterfaces,
+    output_root: String,
+    chrome_binary: String,
+    controller: CaptureController,
+    options: CaptureOptions,
+    fail_fast: bool,
+}
+
+#[derive(Serialize)]
+struct BatchIdParams {
+    batch_id: String,
+}
+
+#[derive(Serialize)]
+struct BatchCancelParams {
+    batch_id: String,
+    reason: String,
+}
+
+#[tauri::command]
+pub async fn tt_batch_start(app_handle: AppHandle, request: BatchStartRequest) -> CmdResult<JobSnapshot> {
+    if request.targets.is_empty() {
+        return Err("batch targets must not be empty".into());
+    }
+    if !request.options.analyze_after_capture {
+        return Err("batch requires analysis after every capture".into());
+    }
+    let preview = tt_target_config_load(request.config_path.clone()).await?;
+    validate_batch_selection(&preview, &request)?;
+    let selected_indexes = request
+        .targets
+        .iter()
+        .map(|target| target.index)
+        .collect::<std::collections::HashSet<_>>();
+    let ordered_targets = preview
+        .targets
+        .iter()
+        .filter(|target| selected_indexes.contains(&target.index))
+        .cloned()
+        .collect::<Vec<_>>();
+    debug_assert_eq!(ordered_targets.len(), request.targets.len());
+    let mut request = request;
+    request.targets = ordered_targets;
+    let environment = tt_get_environment(
+        app_handle,
+        EnvironmentRequest {
+            tun_interface: request.tun_interface.clone(),
+            physical_interface: request.physical_interface.clone(),
+            chrome_binary: request.chrome_binary.clone(),
+            output_root: request.output_root.clone(),
+            min_free_bytes: None,
+        },
+    )
+    .await?;
+    if environment.level == CompleteEnvironmentLevel::Blocking {
+        return Err("TrafficTracer environment has blocking diagnostics".into());
+    }
+    let manager = WorkerManager::global();
+    let client = manager.client().stringify_err()?;
+    let secret = Config::clash()
+        .await
+        .latest_arc()
+        .get_client_info()
+        .secret
+        .unwrap_or_default();
+    let job_id = new_job_id()?;
+    let lock = CaptureLock::global();
+    lock.acquire(job_id.clone(), "TrafficTracer batch capture is active")
+        .stringify_err()?;
+    if let Err(error) = manager.mark_busy(&job_id) {
+        let _ = lock.release(&job_id);
+        return Err(error.to_string().into());
+    }
+    let result = client
+        .request::<_, JobSnapshot>(
+            RequestMethod::BatchStart,
+            BatchJobParams {
+                job: BatchJobSpec {
+                    schema_version: JOB_SCHEMA_VERSION,
+                    kind: "batch",
+                    job_id: job_id.clone(),
+                    config_path: request.config_path,
+                    config_sha256: request.config_sha256,
+                    targets: request.targets,
+                    interfaces: CaptureInterfaces {
+                        tun: request.tun_interface,
+                        physical: request.physical_interface,
+                    },
+                    output_root: request.output_root,
+                    chrome_binary: request.chrome_binary,
+                    controller: CaptureController {
+                        endpoint: local_controller_endpoint(),
+                        secret,
+                    },
+                    options: request.options,
+                    fail_fast: request.fail_fast,
+                },
+            },
+        )
+        .await;
+    finish_batch_request(result, &job_id, manager)
+}
+
+fn finish_batch_request(
+    result: Result<JobSnapshot, crate::core::traffic_tracer::client::ClientError>,
+    job_id: &str,
+    manager: &WorkerManager,
+) -> CmdResult<JobSnapshot> {
+    match result {
+        Ok(snapshot) => {
+            if snapshot.state.terminal() {
+                let _ = CaptureLock::global().release(job_id);
+                let _ = manager.mark_ready(job_id);
+            }
+            Ok(snapshot)
+        }
+        Err(error) => {
+            let _ = CaptureLock::global().release(job_id);
+            let _ = manager.mark_ready(job_id);
+            Err(error.to_string().into())
+        }
+    }
+}
+
+fn validate_batch_selection(preview: &TargetConfigPreview, request: &BatchStartRequest) -> CmdResult {
+    if preview.sha256 != request.config_sha256 {
+        return Err("target configuration changed after loading; reload it before batch capture".into());
+    }
+    let mut indexes = std::collections::HashSet::new();
+    for selected in &request.targets {
+        if !indexes.insert(selected.index) {
+            return Err("batch target indexes must be unique".into());
+        }
+        if !preview.targets.iter().any(|target| target == selected) {
+            return Err("selected batch target no longer matches the configuration".into());
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn tt_batch_status(batch_id: String) -> CmdResult<Value> {
+    validate_job_id(&batch_id)?;
+    let manager = WorkerManager::global();
+    let value: Value = manager
+        .client()
+        .stringify_err()?
+        .request(
+            RequestMethod::BatchStatus,
+            BatchIdParams {
+                batch_id: batch_id.clone(),
+            },
+        )
+        .await
+        .stringify_err()?;
+    let terminal = value
+        .pointer("/batch/state")
+        .and_then(Value::as_str)
+        .is_some_and(|state| matches!(state, "completed" | "failed" | "cancelled" | "interrupted"));
+    if terminal {
+        let _ = CaptureLock::global().release(&batch_id);
+        let _ = manager.mark_ready(&batch_id);
+    }
+    Ok(value)
+}
+
+#[tauri::command]
+pub async fn tt_batch_list() -> CmdResult<Value> {
+    WorkerManager::global()
+        .client()
+        .stringify_err()?
+        .request(RequestMethod::BatchList, serde_json::json!({}))
+        .await
+        .stringify_err()
+}
+
+#[tauri::command]
+pub async fn tt_batch_cancel(batch_id: String, reason: Option<String>) -> CmdResult<Value> {
+    validate_job_id(&batch_id)?;
+    WorkerManager::global()
+        .client()
+        .stringify_err()?
+        .request(
+            RequestMethod::BatchCancel,
+            BatchCancelParams {
+                batch_id,
+                reason: reason.unwrap_or_else(|| "Cancelled by user.".to_owned()),
+            },
+        )
+        .await
+        .stringify_err()
+}
+
+#[tauri::command]
+pub async fn tt_batch_resume(batch_id: String) -> CmdResult<JobSnapshot> {
+    validate_job_id(&batch_id)?;
+    let manager = WorkerManager::global();
+    let lock = CaptureLock::global();
+    lock.acquire(batch_id.clone(), "TrafficTracer batch capture is active")
+        .stringify_err()?;
+    if let Err(error) = manager.mark_busy(&batch_id) {
+        let _ = lock.release(&batch_id);
+        return Err(error.to_string().into());
+    }
+    let result = manager
+        .client()
+        .stringify_err()?
+        .request::<_, JobSnapshot>(
+            RequestMethod::BatchResume,
+            BatchIdParams {
+                batch_id: batch_id.clone(),
+            },
+        )
+        .await;
+    finish_batch_request(result, &batch_id, manager)
+}
+
 fn validate_capture_request(request: &CaptureStartRequest) -> CmdResult {
     if !(request.url.starts_with("http://") || request.url.starts_with("https://"))
         || request.url.chars().any(char::is_whitespace)
@@ -1531,6 +1775,67 @@ mod capture_tests {
         assert!(JobState::Cancelled.terminal());
         assert!(JobState::Interrupted.terminal());
         assert!(!JobState::Capturing.terminal());
+    }
+
+    fn batch_target(index: usize, domain: &str) -> TargetConfigEntry {
+        TargetConfigEntry {
+            index,
+            domain: domain.to_owned(),
+            url: format!("https://{domain}/video"),
+            duration_seconds: 10,
+            network: CaptureNetwork::All,
+            run_label: "video".to_owned(),
+            wait_load_timeout: 30,
+        }
+    }
+
+    fn batch_request(targets: Vec<TargetConfigEntry>) -> BatchStartRequest {
+        BatchStartRequest {
+            config_path: "/tmp/targets.yaml".to_owned(),
+            config_sha256: "a".repeat(64),
+            targets,
+            tun_interface: "Meta".to_owned(),
+            physical_interface: "eth0".to_owned(),
+            output_root: "/tmp/sessions".to_owned(),
+            chrome_binary: "/usr/bin/chromium".to_owned(),
+            options: CaptureOptions::default(),
+            fail_fast: true,
+        }
+    }
+
+    #[test]
+    fn batch_selection_rejects_changed_config_and_duplicate_indexes() {
+        let targets = vec![batch_target(0, "example.com")];
+        let preview = TargetConfigPreview {
+            schema_version: 1,
+            config_path: "/tmp/targets.yaml".to_owned(),
+            sha256: "b".repeat(64),
+            targets: targets.clone(),
+            warnings: Vec::new(),
+        };
+        assert!(validate_batch_selection(&preview, &batch_request(targets.clone())).is_err());
+
+        let preview = TargetConfigPreview {
+            sha256: "a".repeat(64),
+            ..preview
+        };
+        let request = batch_request(vec![targets[0].clone(), targets[0].clone()]);
+        assert!(validate_batch_selection(&preview, &request).is_err());
+    }
+
+    #[test]
+    fn batch_selection_uses_indexes_even_when_target_values_repeat() {
+        let first = batch_target(3, "example.com");
+        let mut second = first.clone();
+        second.index = 9;
+        let preview = TargetConfigPreview {
+            schema_version: 1,
+            config_path: "/tmp/targets.yaml".to_owned(),
+            sha256: "a".repeat(64),
+            targets: vec![first.clone(), second.clone()],
+            warnings: Vec::new(),
+        };
+        validate_batch_selection(&preview, &batch_request(vec![second, first])).unwrap();
     }
 }
 #[cfg(test)]

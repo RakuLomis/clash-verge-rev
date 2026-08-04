@@ -30,6 +30,7 @@ import {
 import { showNotice } from '@/services/notice-service'
 import type {
   CaptureStartRequest,
+  BatchStartRequest,
   CompleteEnvironmentReport,
   DiagnosticCheck,
   EnvironmentRequest,
@@ -38,6 +39,7 @@ import type {
 
 import {
   applyTargetConfigEntry,
+  batchRequestFromDraft,
   captureRequestFromDraft,
   defaultCaptureFormDraft,
   deriveDomain,
@@ -63,6 +65,7 @@ export interface TrafficTracerCaptureFormProps {
   onDiagnose: (request: EnvironmentRequest) => void
   onRetryDiagnostics?: () => void
   onSubmit: (request: CaptureStartRequest) => Promise<unknown> | void
+  onSubmitBatch?: (request: BatchStartRequest) => Promise<unknown> | void
 }
 
 function restoredDraft(): CaptureFormDraft {
@@ -92,6 +95,7 @@ export function TrafficTracerCaptureForm({
   onDiagnose,
   onRetryDiagnostics,
   onSubmit,
+  onSubmitBatch,
 }: TrafficTracerCaptureFormProps) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -103,6 +107,9 @@ export function TrafficTracerCaptureForm({
   )
   const [targetConfigError, setTargetConfigError] = useState('')
   const [targetConfigLoading, setTargetConfigLoading] = useState(false)
+  const [selectedTargetIndexes, setSelectedTargetIndexes] = useState<
+    Set<number>
+  >(() => new Set())
   const tunRef = useRef<HTMLInputElement>(null)
   const physicalRef = useRef<HTMLInputElement>(null)
 
@@ -198,6 +205,9 @@ export function TrafficTracerCaptureForm({
     captureLocked ||
     diagnosing ||
     blocking ||
+    (draft.target_mode === 'config' &&
+      Boolean(targetConfig) &&
+      selectedTargetIndexes.size === 0) ||
     Object.keys(errors).length > 0
 
   const update = <Key extends keyof CaptureFormDraft>(
@@ -245,6 +255,9 @@ export function TrafficTracerCaptureForm({
         preview.targets[0]
       if (!selected) throw new Error('Target configuration has no sites.')
       setTargetConfig(preview)
+      setSelectedTargetIndexes(
+        new Set(preview.targets.map((target) => target.index)),
+      )
       setDraft((current) => applyTargetConfigEntry(current, preview, selected))
     } catch (error) {
       setTargetConfig(null)
@@ -293,6 +306,24 @@ export function TrafficTracerCaptureForm({
   const handleSubmit = async () => {
     setSubmitted(true)
     if (disabled) return
+    if (targetConfig && selectedTargetIndexes.size > 1 && onSubmitBatch) {
+      await onSubmitBatch(
+        batchRequestFromDraft(draft, targetConfig, selectedTargetIndexes),
+      )
+      return
+    }
+    if (targetConfig && selectedTargetIndexes.size === 1) {
+      const [index] = selectedTargetIndexes
+      const target = targetConfig.targets.find((item) => item.index === index)
+      if (target) {
+        await onSubmit(
+          captureRequestFromDraft(
+            applyTargetConfigEntry(draft, targetConfig, target),
+          ),
+        )
+        return
+      }
+    }
     await onSubmit(captureRequestFromDraft(draft))
   }
 
@@ -414,6 +445,67 @@ export function TrafficTracerCaptureForm({
                   </MenuItem>
                 ))}
               </TextField>
+            )}
+            {draft.target_mode === 'config' && targetConfig && (
+              <Paper variant="outlined" sx={{ p: 1.5, gridColumn: '1 / -1' }}>
+                <Stack spacing={0.5}>
+                  <Stack
+                    direction="row"
+                    sx={{
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <Typography variant="subtitle2">
+                      Serial batch targets ({selectedTargetIndexes.size}/
+                      {targetConfig.targets.length})
+                    </Typography>
+                    <Button
+                      size="small"
+                      onClick={() =>
+                        setSelectedTargetIndexes(
+                          selectedTargetIndexes.size ===
+                            targetConfig.targets.length
+                            ? new Set()
+                            : new Set(
+                                targetConfig.targets.map(
+                                  (target) => target.index,
+                                ),
+                              ),
+                        )
+                      }
+                    >
+                      {selectedTargetIndexes.size ===
+                      targetConfig.targets.length
+                        ? 'Clear all'
+                        : 'Select all'}
+                    </Button>
+                  </Stack>
+                  {targetConfig.targets.map((target, position) => (
+                    <FormControlLabel
+                      key={target.index}
+                      control={
+                        <Checkbox
+                          checked={selectedTargetIndexes.has(target.index)}
+                          onChange={(_, checked) =>
+                            setSelectedTargetIndexes((current) => {
+                              const next = new Set(current)
+                              if (checked) next.add(target.index)
+                              else next.delete(target.index)
+                              return next
+                            })
+                          }
+                        />
+                      }
+                      label={`${position + 1}. ${target.domain} — ${target.url}`}
+                    />
+                  ))}
+                  <Typography variant="caption" color="text.secondary">
+                    Selected targets run sequentially in YAML order. Each
+                    capture is cleaned up and analyzed before the next starts.
+                  </Typography>
+                </Stack>
+              </Paper>
             )}
             <TextField
               label={t('settings.trafficTracer.capture.fields.url')}
@@ -580,7 +672,16 @@ export function TrafficTracerCaptureForm({
                 label={t(`settings.trafficTracer.capture.options.${label}`)}
                 control={
                   <Checkbox
-                    checked={draft.options[key]}
+                    checked={
+                      key === 'analyze_after_capture' &&
+                      selectedTargetIndexes.size > 1
+                        ? true
+                        : draft.options[key]
+                    }
+                    disabled={
+                      key === 'analyze_after_capture' &&
+                      selectedTargetIndexes.size > 1
+                    }
                     onChange={(_, checked) => updateOption(key, checked)}
                   />
                 }

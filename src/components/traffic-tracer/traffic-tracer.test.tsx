@@ -8,6 +8,10 @@ vi.mock('@tauri-apps/api/path', () => ({
 }))
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn() }))
 vi.mock('react-router', () => ({ useNavigate: () => vi.fn() }))
+vi.mock('./session-detail', () => ({
+  TrafficTracerSessionDetail: ({ sessionId }: { sessionId: string | null }) =>
+    sessionId ? <div>Opened analysis for {sessionId}</div> : null,
+}))
 vi.mock('@/services/cmds', () => ({
   getNetworkInterfaces: vi.fn(async () => ['mihomo', 'eth0']),
   getVergeConfig: vi.fn(async () => ({
@@ -17,6 +21,7 @@ vi.mock('@/services/cmds', () => ({
 
 import { formatTrafficTracerCaptureLock } from '@/hooks/use-traffic-tracer-worker'
 import type {
+  BatchStatusResult,
   CompleteEnvironmentReport,
   ConnectionIndexRecord,
   CoverageSummary,
@@ -26,11 +31,14 @@ import type {
   RequestIndexRecord,
 } from '@/types/traffic-tracer'
 
+import { TrafficTracerBatchProgress } from './batch-progress'
 import { TrafficTracerCaptureForm } from './capture-form'
 import {
   applyTargetConfigEntry,
+  batchRequestFromDraft,
   captureRequestFromDraft,
   defaultCaptureFormDraft,
+  selectedTargetsInConfigOrder,
   suggestCaptureInterfaces,
   validateCaptureForm,
 } from './capture-form-model'
@@ -312,6 +320,133 @@ describe('TrafficTracer Complete workspace', () => {
       tun: 'Meta',
       physical: 'eth0',
     })
+  })
+
+  it('keeps a selected YAML subset in file order and identifies duplicates by index', () => {
+    const duplicate = {
+      domain: 'example.com',
+      url: 'https://example.com/video',
+      duration_seconds: 10,
+      network: 'all' as const,
+      run_label: 'video',
+      wait_load_timeout: 30,
+    }
+    const preview = {
+      schema_version: 1 as const,
+      config_path: '/tmp/sites.yaml',
+      sha256: 'b'.repeat(64),
+      warnings: [],
+      targets: [
+        { index: 4, ...duplicate },
+        {
+          index: 8,
+          ...duplicate,
+          domain: 'cdn.example.com',
+          url: 'https://cdn.example.com/a',
+        },
+        { index: 12, ...duplicate },
+      ],
+    }
+    const selected = new Set([12, 4])
+
+    expect(
+      selectedTargetsInConfigOrder(preview, selected).map(
+        (target) => target.index,
+      ),
+    ).toEqual([4, 12])
+    expect(
+      batchRequestFromDraft(
+        {
+          ...defaultCaptureFormDraft,
+          tun_interface: 'Meta',
+          physical_interface: 'eth0',
+          output_root: '/tmp/sessions',
+          chrome_binary: '/usr/bin/chromium',
+          options: {
+            ...defaultCaptureFormDraft.options,
+            analyze_after_capture: false,
+          },
+        },
+        preview,
+        selected,
+      ),
+    ).toMatchObject({
+      config_sha256: 'b'.repeat(64),
+      targets: [{ index: 4 }, { index: 12 }],
+      options: { analyze_after_capture: true },
+      fail_fast: true,
+    })
+  })
+
+  it('renders serial batch progress and opens a child analysis', async () => {
+    const status: BatchStatusResult = {
+      batch: {
+        schema_version: 1,
+        batch_id: 'batch-one',
+        state: 'running',
+        stage: 'analysis',
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:01:00Z',
+        output_root: '/tmp/sessions',
+        config: { path: '/tmp/sites.yaml', sha256: 'c'.repeat(64) },
+        targets: [
+          {
+            index: 0,
+            domain: 'example.com',
+            url: 'https://example.com/',
+            duration_seconds: 10,
+            network: 'all',
+            run_label: 'all',
+            wait_load_timeout: 30,
+          },
+          {
+            index: 1,
+            domain: 'example.org',
+            url: 'https://example.org/',
+            duration_seconds: 10,
+            network: 'all',
+            run_label: 'all',
+            wait_load_timeout: 30,
+          },
+        ],
+        current_index: 1,
+        children: [
+          {
+            target_index: 0,
+            state: 'completed',
+            session_id: 'session-one',
+            error: null,
+          },
+          {
+            target_index: 1,
+            state: 'running',
+            session_id: null,
+            error: null,
+          },
+        ],
+        fail_fast: true,
+        cancel_requested: false,
+        resume: { attempt: 0, next_index: 1, resumed_at: null },
+      },
+      job: null,
+    }
+    const onCancel = vi.fn()
+    render(
+      <TrafficTracerBatchProgress
+        status={status}
+        workspaceRoot="/tmp/sessions"
+        onCancel={onCancel}
+        onResume={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText(/Target 2\/2 · analysis/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Analysis' }))
+    expect(
+      screen.getByText('Opened analysis for session-one'),
+    ).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel batch' }))
+    expect(onCancel).toHaveBeenCalledOnce()
   })
 
   it('requires confirmation before cancelling an active Job', async () => {

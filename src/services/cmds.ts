@@ -622,6 +622,31 @@ export function getTrafficTracerCaptureLock() {
   return invoke<TrafficTracer.CaptureLockSnapshot>('tt_get_capture_lock')
 }
 
+export function startTrafficTracerBatch(
+  request: TrafficTracer.BatchStartRequest,
+) {
+  return invoke<TrafficTracer.JobSnapshot>('tt_batch_start', { request })
+}
+
+export function getTrafficTracerBatch(batchId: string) {
+  return invoke<TrafficTracer.BatchStatusResult>('tt_batch_status', { batchId })
+}
+
+export function listTrafficTracerBatches() {
+  return invoke<TrafficTracer.BatchListResult>('tt_batch_list')
+}
+
+export function cancelTrafficTracerBatch(batchId: string, reason?: string) {
+  return invoke<TrafficTracer.BatchStatusResult>('tt_batch_cancel', {
+    batchId,
+    reason,
+  })
+}
+
+export function resumeTrafficTracerBatch(batchId: string) {
+  return invoke<TrafficTracer.JobSnapshot>('tt_batch_resume', { batchId })
+}
+
 export function listTrafficTracerSessions() {
   return invoke<TrafficTracer.SessionListResult>('tt_session_list')
 }

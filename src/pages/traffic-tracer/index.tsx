@@ -3,15 +3,18 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { BasePage } from '@/components/base'
+import { TrafficTracerBatchProgress } from '@/components/traffic-tracer/batch-progress'
 import { TrafficTracerCaptureForm } from '@/components/traffic-tracer/capture-form'
 import { TrafficTracerFlowQueryForm } from '@/components/traffic-tracer/flow-query-form'
 import { TrafficTracerJobProgress } from '@/components/traffic-tracer/job-progress'
 import { TrafficTracerSessionsView } from '@/components/traffic-tracer/sessions-view'
 import { useCaptureJob } from '@/hooks/use-capture-job'
+import { useTrafficTracerBatches } from '@/hooks/use-traffic-tracer-batches'
 import { useTrafficTracerWorker } from '@/hooks/use-traffic-tracer-worker'
 import { showNotice } from '@/services/notice-service'
 import type {
   CaptureStartRequest,
+  BatchStartRequest,
   EnvironmentRequest,
 } from '@/types/traffic-tracer'
 
@@ -30,6 +33,10 @@ const TrafficTracerPage = () => {
     cancelJob,
     cancelMutation,
   } = useCaptureJob()
+  const batches = useTrafficTracerBatches(
+    diagnosticRequest?.output_root ?? '',
+    environment !== undefined,
+  )
 
   const handleStartCapture = async (request: CaptureStartRequest) => {
     try {
@@ -43,6 +50,15 @@ const TrafficTracerPage = () => {
   const handleCancel = async (reason?: string) => {
     try {
       await cancelJob({ reason })
+    } catch (error) {
+      showNotice.error(error)
+    }
+  }
+
+  const handleStartBatch = async (request: BatchStartRequest) => {
+    try {
+      await batches.startBatch(request)
+      showNotice.success('settings.trafficTracer.notifications.captureStarted')
     } catch (error) {
       showNotice.error(error)
     }
@@ -62,16 +78,35 @@ const TrafficTracerPage = () => {
             />
           </Box>
         )}
+        {batches.batchStatus && (
+          <Box sx={{ mb: 2 }}>
+            <TrafficTracerBatchProgress
+              status={batches.batchStatus}
+              workspaceRoot={diagnosticRequest?.output_root ?? ''}
+              cancelling={batches.cancelMutation.isPending}
+              resuming={batches.resumeMutation.isPending}
+              onCancel={() =>
+                void batches.cancelBatch(
+                  'Cancelled from the TrafficTracer workspace.',
+                )
+              }
+              onResume={() => void batches.resumeBatch()}
+            />
+          </Box>
+        )}
         <TrafficTracerCaptureForm
           environment={environment}
           diagnosticRequest={diagnosticRequest}
           diagnosing={environmentQuery.isFetching}
           diagnosticError={environmentQuery.error}
           captureLocked={captureLock?.locked}
-          submitting={startMutation.isPending}
+          submitting={
+            startMutation.isPending || batches.startMutation.isPending
+          }
           onDiagnose={setDiagnosticRequest}
           onRetryDiagnostics={() => void environmentQuery.refetch()}
           onSubmit={handleStartCapture}
+          onSubmitBatch={handleStartBatch}
         />
         <Box sx={{ mt: 2 }}>
           <TrafficTracerSessionsView

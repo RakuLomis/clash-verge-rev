@@ -44,6 +44,16 @@ pub enum RequestMethod {
     SessionDelete,
     #[serde(rename = "flow.query")]
     FlowQuery,
+    #[serde(rename = "batch.start")]
+    BatchStart,
+    #[serde(rename = "batch.status")]
+    BatchStatus,
+    #[serde(rename = "batch.cancel")]
+    BatchCancel,
+    #[serde(rename = "batch.list")]
+    BatchList,
+    #[serde(rename = "batch.resume")]
+    BatchResume,
     #[serde(rename = "worker.shutdown")]
     WorkerShutdown,
 }

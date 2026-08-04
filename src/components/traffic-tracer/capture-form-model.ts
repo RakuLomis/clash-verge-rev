@@ -2,6 +2,7 @@ import type {
   CaptureNetwork,
   CaptureOptions,
   CaptureStartRequest,
+  BatchStartRequest,
   EnvironmentRequest,
   TargetConfigEntry,
   TargetConfigPreview,
@@ -25,6 +26,33 @@ export interface CaptureFormDraft {
   wait_load_timeout: number
   run_label: string
   options: CaptureOptions
+}
+
+export function selectedTargetsInConfigOrder(
+  preview: TargetConfigPreview,
+  selectedIndexes: ReadonlySet<number>,
+) {
+  return preview.targets.filter((target) => selectedIndexes.has(target.index))
+}
+
+export function batchRequestFromDraft(
+  draft: CaptureFormDraft,
+  preview: TargetConfigPreview,
+  selectedIndexes: ReadonlySet<number>,
+): BatchStartRequest {
+  const targets = selectedTargetsInConfigOrder(preview, selectedIndexes)
+  if (!targets.length) throw new Error('Select at least one batch target.')
+  return {
+    config_path: preview.config_path,
+    config_sha256: preview.sha256,
+    targets,
+    tun_interface: draft.tun_interface.trim(),
+    physical_interface: draft.physical_interface.trim(),
+    output_root: draft.output_root.trim(),
+    chrome_binary: draft.chrome_binary.trim(),
+    options: { ...draft.options, analyze_after_capture: true },
+    fail_fast: true,
+  }
 }
 
 export type CaptureFormErrors = Partial<

@@ -102,7 +102,7 @@ export interface TargetConfigPreview {
 
 export interface JobSnapshot {
   job_id: string
-  kind: 'capture' | 'analysis'
+  kind: 'capture' | 'analysis' | 'batch'
   state: JobState
   stage: string
   progress: number
@@ -111,6 +111,72 @@ export interface JobSnapshot {
   cancel_requested_now?: boolean | null
   result?: unknown
   error?: unknown
+}
+
+export interface BatchStartRequest {
+  config_path: string
+  config_sha256: string
+  targets: TargetConfigEntry[]
+  tun_interface: string
+  physical_interface: string
+  output_root: string
+  chrome_binary: string
+  options: CaptureOptions
+  fail_fast: boolean
+}
+
+export type BatchState =
+  | 'created'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'interrupted'
+
+export interface BatchChild {
+  target_index: number
+  state:
+    | 'pending'
+    | 'running'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+    | 'interrupted'
+  session_id: string | null
+  error: { code: string; message: string } | null
+}
+
+export interface BatchManifest {
+  schema_version: 1
+  batch_id: string
+  state: BatchState
+  stage:
+    | 'queued'
+    | 'capture'
+    | 'quiescence'
+    | 'analysis'
+    | 'checkpoint'
+    | 'finished'
+  created_at: string
+  updated_at: string
+  output_root: string
+  config: { path: string; sha256: string }
+  targets: TargetConfigEntry[]
+  current_index: number | null
+  children: BatchChild[]
+  fail_fast: boolean
+  cancel_requested: boolean
+  resume: { attempt: number; next_index: number; resumed_at: string | null }
+}
+
+export interface BatchStatusResult {
+  batch: BatchManifest
+  job: JobSnapshot | null
+}
+
+export interface BatchListResult {
+  batches: BatchManifest[]
+  corrupt: Array<{ path: string; message: string }>
 }
 
 export interface CaptureLockSnapshot {
