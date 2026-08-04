@@ -32,10 +32,11 @@ export function TrafficTracerArtifactList({
   const [openError, setOpenError] = useState<string | null>(null)
 
   const openArtifact = async (artifact: SessionArtifact) => {
+    const artifactId = artifact.artifact_id ?? artifact.name
     try {
       setOpenError(null)
-      setOpeningName(artifact.name)
-      await openTrafficTracerArtifact(sessionId, artifact.name)
+      setOpeningName(artifactId)
+      await openTrafficTracerArtifact(sessionId, artifactId)
     } catch (error) {
       setOpenError(String(error))
     } finally {
@@ -57,7 +58,7 @@ export function TrafficTracerArtifactList({
       <Stack divider={<Divider flexItem />}>
         {artifacts.map((artifact) => (
           <Stack
-            key={artifact.name}
+            key={artifact.artifact_id ?? artifact.path}
             direction="row"
             spacing={1}
             sx={{
@@ -71,7 +72,11 @@ export function TrafficTracerArtifactList({
                 {artifact.name}
               </Typography>
               <Stack direction="row" spacing={0.75} sx={{ flexWrap: 'wrap' }}>
-                <Chip size="small" variant="outlined" label={artifact.kind} />
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={artifact.role ?? artifact.kind ?? 'other'}
+                />
                 <Chip
                   size="small"
                   variant="outlined"
@@ -91,7 +96,7 @@ export function TrafficTracerArtifactList({
               disabled={openingName !== null}
               onClick={() => void openArtifact(artifact)}
             >
-              {openingName === artifact.name
+              {openingName === (artifact.artifact_id ?? artifact.name)
                 ? t('settings.trafficTracer.common.progress.opening')
                 : t('settings.trafficTracer.common.actions.open')}
             </Button>

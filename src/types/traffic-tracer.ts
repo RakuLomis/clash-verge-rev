@@ -166,7 +166,11 @@ export interface ComponentVersions {
 
 export interface SessionArtifact {
   name: string
-  kind: string
+  kind?: string | null
+  artifact_id?: string | null
+  phase?: 'capture' | 'analysis' | 'diagnostic' | null
+  role?: string | null
+  generation_id?: string | null
   path: string
   media_type: string
   size_bytes: number
@@ -182,8 +186,83 @@ export interface SessionError {
 
 export interface AnalysisOptions {
   split_pcaps: boolean
+  pcap_split_mode: 'none' | 'unique_connections'
   write_flow_index: boolean
   overwrite: boolean
+}
+
+export type AnalysisArtifactRole =
+  | 'request_index'
+  | 'connection_index'
+  | 'pcap_index'
+  | 'coverage_summary'
+
+export interface CoveragePartition {
+  total: number
+  matched: number
+  ambiguous: number
+  unmatched: number
+}
+
+export interface LayeredCoverage {
+  browser_requests: CoveragePartition
+  transport_connections: CoveragePartition
+  core_logical_flows: {
+    total: number
+    with_post_flow: number
+    shared: number
+    missing_post_flow: number
+  }
+  unmatched_reasons: Record<string, number>
+}
+
+export interface RequestIndexRecord {
+  request_id: string
+  url: string
+  resource_type: string
+  relation: string
+  connection_id: string | null
+  candidate_connection_ids: string[]
+  attribution: {
+    status: 'matched' | 'ambiguous' | 'unmatched'
+    method: string
+    confidence: number
+    evidence: string[]
+    unmatched_reason?: string
+  }
+}
+
+export interface ConnectionIndexRecord {
+  connection_id: string
+  protocol: FlowNetwork
+  pre_flow: NormalizedFlowTuple
+  post_flow: NormalizedFlowTuple | null
+  shared: boolean
+  request_ids: string[]
+  match: {
+    status: 'matched' | 'ambiguous' | 'unmatched'
+    method: string
+    confidence: number
+    evidence: string[]
+    unmatched_reason?: string
+    candidates: Array<{
+      connection_id: string
+      score: number
+      evidence: string[]
+    }>
+  }
+}
+
+export interface AnalysisIndex<T> {
+  analysis_generation_id: string
+  items: T[]
+}
+
+export interface CoverageSummary {
+  analysis_generation_id?: string
+  coverage: LayeredCoverage
+  match_method_counts: Record<string, number>
+  coverage_source: string
 }
 
 export interface FlowQueryRequest {

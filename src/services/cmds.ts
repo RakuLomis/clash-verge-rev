@@ -641,6 +641,13 @@ export function openTrafficTracerArtifact(
   return invoke<string>('tt_session_open_artifact', { sessionId, artifactId })
 }
 
+export function readTrafficTracerAnalysis<T>(
+  sessionId: string,
+  role: TrafficTracer.AnalysisArtifactRole,
+) {
+  return invoke<T>('tt_session_read_analysis', { sessionId, role })
+}
+
 export function startTrafficTracerAnalysis(
   sessionId: string,
   options?: Partial<TrafficTracer.AnalysisOptions>,

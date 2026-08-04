@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub const WORKER_API_VERSION: u32 = 2;
 pub const JOB_SCHEMA_VERSION: u32 = 2;
-pub const SESSION_SCHEMA_VERSION: u32 = 1;
+pub const SESSION_SCHEMA_VERSION: u32 = 2;
 pub const FLOW_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

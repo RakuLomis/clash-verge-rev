@@ -18,9 +18,12 @@ vi.mock('@/services/cmds', () => ({
 import { formatTrafficTracerCaptureLock } from '@/hooks/use-traffic-tracer-worker'
 import type {
   CompleteEnvironmentReport,
+  ConnectionIndexRecord,
+  CoverageSummary,
   FlowRecord,
   JobSnapshot,
   SessionManifest,
+  RequestIndexRecord,
 } from '@/types/traffic-tracer'
 
 import { TrafficTracerCaptureForm } from './capture-form'
@@ -31,6 +34,7 @@ import {
   suggestCaptureInterfaces,
   validateCaptureForm,
 } from './capture-form-model'
+import { TrafficTracerConnectionResults } from './connection-results'
 import { TrafficTracerEnvironmentCard } from './environment-card'
 import { TrafficTracerFlowTable } from './flow-table'
 import { TrafficTracerJobProgress } from './job-progress'
@@ -353,6 +357,100 @@ describe('TrafficTracer Complete workspace', () => {
     expect(screen.getByText('No complete post-proxy tuple')).toBeInTheDocument()
     await userEvent.click(screen.getByTestId('flow-row-session-one-flow-one'))
     expect(onSelect).toHaveBeenCalledWith(flow)
+  })
+
+  it('shows shared requests, ambiguity, and missing post flow by connection', () => {
+    const connectionId = `conn-${'1'.repeat(32)}`
+    const requests: RequestIndexRecord[] = ['one', 'two'].map((id) => ({
+      request_id: id,
+      url: `https://cdn.example/${id}.js`,
+      resource_type: 'Script',
+      relation: 'cross_site',
+      connection_id: connectionId,
+      candidate_connection_ids: [connectionId],
+      attribution: {
+        status: 'matched',
+        method: 'netlog_socket',
+        confidence: 1,
+        evidence: ['transport_request_ids'],
+      },
+    }))
+    const connections: ConnectionIndexRecord[] = [
+      {
+        connection_id: connectionId,
+        protocol: 'tcp',
+        pre_flow: flow.pre_flow,
+        post_flow: null,
+        shared: true,
+        request_ids: ['one', 'two'],
+        match: {
+          status: 'ambiguous',
+          method: 'endpoint_time',
+          confidence: 0.78,
+          evidence: ['top_score_tie'],
+          unmatched_reason: 'multiple_candidates',
+          candidates: [
+            {
+              connection_id: `conn-${'2'.repeat(32)}`,
+              score: 0.78,
+              evidence: [],
+            },
+            {
+              connection_id: `conn-${'3'.repeat(32)}`,
+              score: 0.78,
+              evidence: [],
+            },
+          ],
+        },
+      },
+    ]
+    const summary: CoverageSummary = {
+      coverage_source: 'v2_indexes',
+      match_method_counts: { endpoint_time: 1 },
+      coverage: {
+        browser_requests: { total: 2, matched: 2, ambiguous: 0, unmatched: 0 },
+        transport_connections: {
+          total: 1,
+          matched: 0,
+          ambiguous: 1,
+          unmatched: 0,
+        },
+        core_logical_flows: {
+          total: 1,
+          with_post_flow: 0,
+          shared: 1,
+          missing_post_flow: 1,
+        },
+        unmatched_reasons: { multiple_candidates: 1, missing_post_flow: 1 },
+      },
+    }
+    render(
+      <TrafficTracerConnectionResults
+        summary={summary}
+        requests={requests}
+        connections={connections}
+      />,
+    )
+    expect(screen.getByText('https://cdn.example/one.js')).toBeInTheDocument()
+    expect(screen.getByText('https://cdn.example/two.js')).toBeInTheDocument()
+    expect(screen.getByText('2 request(s)')).toBeInTheDocument()
+    expect(screen.getByText('2 candidates')).toBeInTheDocument()
+    expect(
+      screen.getByText(/Core flows: 0\/1 with post flow/),
+    ).toBeInTheDocument()
+  })
+
+  it('explains unavailable connection artifacts for a legacy Session', () => {
+    render(
+      <TrafficTracerConnectionResults
+        requests={[]}
+        connections={[]}
+        unavailable
+      />,
+    )
+    expect(
+      screen.getByText(/legacy Session has no connection-centric/),
+    ).toBeInTheDocument()
   })
 
   it('formats a localized capture lock with its Job identifier', () => {

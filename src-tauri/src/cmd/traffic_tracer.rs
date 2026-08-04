@@ -832,7 +832,16 @@ pub struct SessionTarget {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionArtifact {
     pub name: String,
-    pub kind: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub artifact_id: Option<String>,
+    #[serde(default)]
+    pub phase: Option<String>,
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub generation_id: Option<String>,
     pub path: String,
     pub media_type: String,
     pub size_bytes: u64,
@@ -893,11 +902,62 @@ pub async fn tt_session_open_artifact(session_id: String, artifact_id: String) -
     let artifact = manifest
         .artifacts
         .iter()
-        .find(|artifact| artifact.name == artifact_id)
+        .find(|artifact| artifact.name == artifact_id || artifact.artifact_id.as_deref() == Some(artifact_id.as_str()))
         .ok_or_else(|| smartstring::alias::String::from("artifact_id does not exist in the Session manifest"))?;
     let path = resolve_artifact_path(&manager.session_root().stringify_err()?, &manifest, artifact)?;
     open::that_detached(path.as_os_str()).stringify_err()?;
     Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub async fn tt_session_read_analysis(session_id: String, role: String) -> CmdResult<Value> {
+    const MAX_ANALYSIS_JSON_BYTES: u64 = 16 * 1024 * 1024;
+    validate_session_id(&session_id)?;
+    let filename = match role.as_str() {
+        "request_index" => "request-index-v2.json",
+        "connection_index" => "connection-index-v2.json",
+        "pcap_index" => "pcap-index-v1.json",
+        "coverage_summary" => "summary.json",
+        _ => return Err("unsupported TrafficTracer analysis role".into()),
+    };
+    let manager = WorkerManager::global();
+    let session_root = manager.session_root().stringify_err()?;
+    let manifest = fetch_session(&session_id).await?;
+    let session_dir = resolve_session_dir(&session_root, &manifest)?;
+    let artifact_path = manifest
+        .artifacts
+        .iter()
+        .rev()
+        .find(|artifact| artifact.role.as_deref() == Some(role.as_str()))
+        .map(|artifact| resolve_artifact_path(&session_root, &manifest, artifact))
+        .transpose()?
+        .or_else(|| latest_generation_artifact(&session_dir, filename))
+        .unwrap_or_else(|| session_dir.join("results").join(filename));
+    let canonical = artifact_path.canonicalize().stringify_err()?;
+    if !canonical.starts_with(&session_dir) {
+        return Err("analysis artifact escapes the Session directory".into());
+    }
+    let metadata = canonical.metadata().stringify_err()?;
+    if !metadata.is_file() || metadata.len() > MAX_ANALYSIS_JSON_BYTES {
+        return Err("analysis artifact is missing or exceeds 16 MiB".into());
+    }
+    let content = fs::read_to_string(&canonical).stringify_err()?;
+    serde_json::from_str(&content).stringify_err()
+}
+
+fn latest_generation_artifact(session_dir: &Path, filename: &str) -> Option<PathBuf> {
+    let root = session_dir.join("results").join("generations");
+    let mut candidates = fs::read_dir(root)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path().join(filename);
+            let modified = path.metadata().ok()?.modified().ok()?;
+            Some((modified, path))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    candidates.pop().map(|(_, path)| path)
 }
 
 async fn fetch_session(session_id: &str) -> CmdResult<SessionManifest> {
@@ -962,6 +1022,7 @@ fn validate_session_id(session_id: &str) -> CmdResult {
 #[serde(default, deny_unknown_fields)]
 pub struct AnalysisOptions {
     pub split_pcaps: bool,
+    pub pcap_split_mode: String,
     pub write_flow_index: bool,
     pub overwrite: bool,
 }
@@ -970,6 +1031,7 @@ impl Default for AnalysisOptions {
     fn default() -> Self {
         Self {
             split_pcaps: true,
+            pcap_split_mode: "unique_connections".to_owned(),
             write_flow_index: true,
             overwrite: false,
         }
@@ -1293,6 +1355,7 @@ mod flow_tests {
     fn analysis_defaults_produce_the_flow_index() {
         let options = AnalysisOptions::default();
         assert!(options.split_pcaps);
+        assert_eq!(options.pcap_split_mode, "unique_connections");
         assert!(options.write_flow_index);
         assert!(!options.overwrite);
     }
@@ -1331,7 +1394,11 @@ mod session_tests {
         let manifest = manifest("/tmp/sessions/20260801_123e4567-e89b-42d3-a456-426614174000");
         let artifact = SessionArtifact {
             name: "report".to_owned(),
-            kind: "report".to_owned(),
+            kind: Some("diagnostic".to_owned()),
+            artifact_id: None,
+            phase: None,
+            role: None,
+            generation_id: None,
             path: "../outside.html".to_owned(),
             media_type: "text/html".to_owned(),
             size_bytes: 1,
@@ -1361,6 +1428,34 @@ mod session_tests {
         .unwrap();
         assert!(result.sessions.is_empty());
         assert!(result.corrupt.is_empty());
+    }
+
+    #[test]
+    fn session_artifact_accepts_v1_and_v2_shapes() {
+        let legacy: SessionArtifact = serde_json::from_value(serde_json::json!({
+            "name": "flow-index.json",
+            "kind": "derived",
+            "path": "results/flow-index.json",
+            "media_type": "application/json",
+            "size_bytes": 42
+        }))
+        .unwrap();
+        assert_eq!(legacy.kind.as_deref(), Some("derived"));
+        assert!(legacy.role.is_none());
+
+        let current: SessionArtifact = serde_json::from_value(serde_json::json!({
+            "artifact_id": "analysis-flow-index",
+            "name": "flow-index.json",
+            "phase": "analysis",
+            "role": "flow_index",
+            "generation_id": "78fdab68-4e5d-4b67-9910-33da00a2632a",
+            "path": "results/flow-index.json",
+            "media_type": "application/json",
+            "size_bytes": 42
+        }))
+        .unwrap();
+        assert_eq!(current.role.as_deref(), Some("flow_index"));
+        assert!(current.kind.is_none());
     }
 }
 

@@ -14,10 +14,12 @@ import {
 } from '@mui/material'
 import { useTranslation } from 'react-i18next'
 
+import { useTrafficTracerAnalysis } from '@/hooks/use-traffic-tracer-analysis'
 import { useTrafficTracerSession } from '@/hooks/use-traffic-tracer-sessions'
 import { showNotice } from '@/services/notice-service'
 
 import { TrafficTracerArtifactList } from './artifact-list'
+import { TrafficTracerConnectionResults } from './connection-results'
 
 export interface TrafficTracerSessionDetailProps {
   sessionId: string | null
@@ -37,11 +39,13 @@ export function TrafficTracerSessionDetail({
   const { t } = useTranslation()
   const { session, sessionQuery, startAnalysis, analysisMutation } =
     useTrafficTracerSession(sessionId, true, workspaceRoot)
+  const analysis = useTrafficTracerAnalysis(sessionId, Boolean(session))
 
   const analyzeAgain = async () => {
     try {
       await startAnalysis({
         split_pcaps: true,
+        pcap_split_mode: 'unique_connections',
         write_flow_index: true,
         overwrite: true,
       })
@@ -132,6 +136,20 @@ export function TrafficTracerSessionDetail({
                   )}
                 </Typography>
               </Stack>
+            </Box>
+
+            <Divider />
+            <Box>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                Connection-centric analysis
+              </Typography>
+              <TrafficTracerConnectionResults
+                summary={analysis.summary}
+                requests={analysis.requests}
+                connections={analysis.connections}
+                isLoading={analysis.isLoading}
+                unavailable={analysis.unavailable}
+              />
             </Box>
 
             <Divider />

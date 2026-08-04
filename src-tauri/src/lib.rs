@@ -188,6 +188,7 @@ mod app_init {
             cmd::tt_session_get,
             cmd::tt_session_open_directory,
             cmd::tt_session_open_artifact,
+            cmd::tt_session_read_analysis,
             cmd::tt_analysis_start,
             cmd::tt_flow_query,
             cmd::patch_clash_mode,
