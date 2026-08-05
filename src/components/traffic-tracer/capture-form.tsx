@@ -457,7 +457,7 @@ export function TrafficTracerCaptureForm({
                     }}
                   >
                     <Typography variant="subtitle2">
-                      Serial batch targets ({selectedTargetIndexes.size}/
+                      Capture group targets ({selectedTargetIndexes.size}/
                       {targetConfig.targets.length})
                     </Typography>
                     <Button
@@ -497,7 +497,7 @@ export function TrafficTracerCaptureForm({
                           }
                         />
                       }
-                      label={`${position + 1}. ${target.domain} — ${target.url}`}
+                      label={`${position + 1}. ${target.page_type} — ${target.domain} — ${target.url}`}
                     />
                   ))}
                   <Typography variant="caption" color="text.secondary">

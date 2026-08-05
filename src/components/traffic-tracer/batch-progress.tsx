@@ -52,7 +52,7 @@ export function TrafficTracerBatchProgress({
         >
           <Box>
             <Typography variant="h6" sx={{ fontSize: 17, fontWeight: 600 }}>
-              Serial capture batch
+              Capture group
             </Typography>
             <Typography variant="body2" color="text.secondary">
               Target {Math.min(position + 1, batch.targets.length)}/
@@ -74,7 +74,7 @@ export function TrafficTracerBatchProgress({
         {batch.cancel_requested && (
           <Alert severity="info">
             Cancellation requested. The current Chrome cleanup must finish
-            before the batch stops.
+            before the capture group stops.
           </Alert>
         )}
         <Stack spacing={0.75}>
@@ -116,7 +116,7 @@ export function TrafficTracerBatchProgress({
               disabled={cancelling || batch.cancel_requested}
               onClick={onCancel}
             >
-              {cancelling ? 'Cancelling…' : 'Cancel batch'}
+              {cancelling ? 'Cancelling…' : 'Cancel capture group'}
             </Button>
           )}
           {canResume && (

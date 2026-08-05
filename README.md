@@ -40,9 +40,19 @@ make dev
 3. 在“代理/Proxies”测速并选择节点。
 4. 安装服务，开启 TUN。
 5. 打开“流量追踪”，手工填写单目标，或加载 `sites.yaml` 后全选/选择子集；再填写接口、浏览器和输出目录。
-6. “检测环境”通过后开始捕获。多目标严格按 YAML 顺序逐项执行捕获、Chrome 清理、分析和 checkpoint，最大并发为 1。
-7. 批次可在 UI 查看进度、取消，并在失败或 Worker 中断后从准确目标继续；每个完成的子 Session 均可直接打开分析。
+6. “检测环境”通过后开始捕获。Capture group 严格按 YAML 顺序逐项执行捕获、Chrome 清理、分析和 checkpoint，最大并发为 1。
+7. Capture group 可在 UI 查看进度、取消，并在失败或 Worker 中断后从准确目标继续；每个完成的页面 Session 均可直接打开分析。
 8. 在“会话”查看/重新分析；在“规范化流”用代理前五元组查询全部匹配逻辑流和实际代理后五元组。
+
+推荐在每个 `sites[]` 项中填写唯一的 `page_type`（例如 `main-page`、`video-play1`）。输出布局为：
+
+```text
+<output-root>/<capture-time>/<domain>/<page_type>__<readable-url>/
+├── raw/
+└── analysis/pcap/<ordinal>__<readable-url>/
+```
+
+PCAP URL 目录中的 `mapping.json` 保留稳定 `connection_id`、全部 URL 和 request ID，因此简化目录不会丢失连接信息。UI 不再暴露独立的 “Serial capture batch” 模块；串行调度只是 Capture group 的内部执行方式。
 
 当前完整安装包以 Linux x86-64 为验证目标。Complete 页面是 tracing 的唯一 UI 入口，设置侧栏不再有第二个 tracing 开关；TUN 未显式设置 device 时使用 Mihomo 的 `Meta` 默认名。详见 [TrafficTracer Complete UI QuickStart](./docs/TRAFFIC_TRACER_QUICKSTART.md)，其中包含服务授权、`IPC path not ready`、自定义 Session root、批次恢复、采集权限与结果语义。
 

@@ -78,6 +78,7 @@ export interface CaptureStartRequest {
   chrome_binary: string
   wait_load_timeout: number
   run_label: string
+  page_type: string
   target_source: TargetSource
   options?: Partial<CaptureOptions>
 }
@@ -90,6 +91,7 @@ export interface TargetConfigEntry {
   network: CaptureNetwork
   run_label: string
   wait_load_timeout: number
+  page_type: string
 }
 
 export interface TargetConfigPreview {
@@ -98,6 +100,7 @@ export interface TargetConfigPreview {
   sha256: string
   targets: TargetConfigEntry[]
   warnings: string[]
+  suggested_output_root: string | null
 }
 
 export interface JobSnapshot {
@@ -317,6 +320,8 @@ export interface ConnectionIndexRecord {
   post_flow: NormalizedFlowTuple | null
   shared: boolean
   request_ids: string[]
+  primary_url: string | null
+  urls: string[]
   match: {
     status: 'matched' | 'ambiguous' | 'unmatched'
     method: string

@@ -26,6 +26,7 @@ export interface CaptureFormDraft {
   wait_load_timeout: number
   run_label: string
   options: CaptureOptions
+  page_type: string
 }
 
 export function selectedTargetsInConfigOrder(
@@ -91,6 +92,7 @@ export const defaultCaptureFormDraft: CaptureFormDraft = {
   chrome_binary: 'google-chrome',
   wait_load_timeout: 30,
   run_label: 'all',
+  page_type: 'capture',
   options: {
     capture_packets: true,
     collect_cdp: true,
@@ -210,6 +212,7 @@ export function captureRequestFromDraft(
     chrome_binary: draft.chrome_binary.trim(),
     wait_load_timeout: draft.wait_load_timeout,
     run_label: draft.run_label,
+    page_type: draft.page_type,
     target_source:
       draft.target_mode === 'config'
         ? {
@@ -240,6 +243,7 @@ export function applyTargetConfigEntry(
     network: target.network,
     wait_load_timeout: target.wait_load_timeout,
     run_label: target.run_label,
+    page_type: target.page_type,
   }
 }
 

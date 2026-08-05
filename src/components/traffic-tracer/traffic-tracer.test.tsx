@@ -245,6 +245,7 @@ describe('TrafficTracer Complete workspace', () => {
         chrome_binary: 'google-chrome',
         wait_load_timeout: 30,
         run_label: 'all',
+        page_type: 'capture',
         options: {
           capture_packets: true,
           collect_cdp: true,
@@ -270,6 +271,7 @@ describe('TrafficTracer Complete workspace', () => {
       config_path: '/tmp/sites.yaml',
       sha256: 'a'.repeat(64),
       warnings: [],
+      suggested_output_root: null,
       targets: [
         {
           index: 3,
@@ -279,6 +281,7 @@ describe('TrafficTracer Complete workspace', () => {
           network: 'all' as const,
           run_label: 'browser',
           wait_load_timeout: 45,
+          page_type: 'browser',
         },
       ],
     }
@@ -302,6 +305,7 @@ describe('TrafficTracer Complete workspace', () => {
       network: 'all',
       wait_load_timeout: 45,
       run_label: 'browser',
+      page_type: 'browser',
       target_source: {
         mode: 'config',
         config_path: '/tmp/sites.yaml',
@@ -330,12 +334,14 @@ describe('TrafficTracer Complete workspace', () => {
       network: 'all' as const,
       run_label: 'video',
       wait_load_timeout: 30,
+      page_type: 'video',
     }
     const preview = {
       schema_version: 1 as const,
       config_path: '/tmp/sites.yaml',
       sha256: 'b'.repeat(64),
       warnings: [],
+      suggested_output_root: null,
       targets: [
         { index: 4, ...duplicate },
         {
@@ -378,7 +384,7 @@ describe('TrafficTracer Complete workspace', () => {
     })
   })
 
-  it('renders serial batch progress and opens a child analysis', async () => {
+  it('renders capture group progress and opens a child analysis', async () => {
     const status: BatchStatusResult = {
       batch: {
         schema_version: 1,
@@ -398,6 +404,7 @@ describe('TrafficTracer Complete workspace', () => {
             network: 'all',
             run_label: 'all',
             wait_load_timeout: 30,
+            page_type: 'main-page',
           },
           {
             index: 1,
@@ -407,6 +414,7 @@ describe('TrafficTracer Complete workspace', () => {
             network: 'all',
             run_label: 'all',
             wait_load_timeout: 30,
+            page_type: 'video-play1',
           },
         ],
         current_index: 1,
@@ -445,7 +453,9 @@ describe('TrafficTracer Complete workspace', () => {
     expect(
       screen.getByText('Opened analysis for session-one'),
     ).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'Cancel batch' }))
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Cancel capture group' }),
+    )
     expect(onCancel).toHaveBeenCalledOnce()
   })
 
@@ -526,6 +536,8 @@ describe('TrafficTracer Complete workspace', () => {
         },
         shared: true,
         request_ids: ['one', 'two'],
+        primary_url: 'https://cdn.example/one.js',
+        urls: ['https://cdn.example/one.js', 'https://cdn.example/two.js'],
         match: {
           status: 'ambiguous',
           method: 'endpoint_time',
@@ -574,9 +586,9 @@ describe('TrafficTracer Complete workspace', () => {
         connections={connections}
       />,
     )
-    expect(screen.getByText('https://cdn.example/one.js')).toBeInTheDocument()
+    expect(screen.getAllByText('https://cdn.example/one.js')).toHaveLength(2)
     expect(screen.getByText('https://cdn.example/two.js')).toBeInTheDocument()
-    expect(screen.getByText('2 request(s)')).toBeInTheDocument()
+    expect(screen.getByText(/2 request\(s\).*2 URL\(s\)/)).toBeInTheDocument()
     expect(screen.getByText('dial_error · dial')).toBeInTheDocument()
     expect(screen.getByText('2 candidates')).toBeInTheDocument()
     expect(

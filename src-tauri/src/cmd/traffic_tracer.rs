@@ -332,6 +332,8 @@ pub struct CaptureStartRequest {
     pub wait_load_timeout: u32,
     #[serde(default = "default_run_label")]
     pub run_label: String,
+    #[serde(default = "default_run_label")]
+    pub page_type: String,
     #[serde(default)]
     pub target_source: TargetSource,
     #[serde(default)]
@@ -379,6 +381,7 @@ pub struct TargetConfigPreview {
     pub sha256: String,
     pub targets: Vec<TargetConfigEntry>,
     pub warnings: Vec<String>,
+    pub suggested_output_root: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -391,6 +394,7 @@ pub struct TargetConfigEntry {
     pub network: CaptureNetwork,
     pub run_label: String,
     pub wait_load_timeout: u32,
+    pub page_type: String,
 }
 
 #[derive(Serialize)]
@@ -480,6 +484,7 @@ struct CaptureJobSpec {
     options: CaptureOptions,
     wait_load_timeout: u32,
     run_label: String,
+    page_type: String,
     target_source: TargetSource,
 }
 
@@ -569,6 +574,7 @@ pub async fn tt_capture_start(app_handle: AppHandle, request: CaptureStartReques
                     options: request.options,
                     wait_load_timeout: request.wait_load_timeout,
                     run_label: request.run_label,
+                    page_type: request.page_type,
                     target_source: request.target_source,
                 },
             },
@@ -1719,6 +1725,7 @@ mod capture_tests {
             chrome_binary: "/usr/bin/google-chrome".to_owned(),
             wait_load_timeout: 30,
             run_label: "all".to_owned(),
+            page_type: "capture".to_owned(),
             target_source: TargetSource::Manual,
             options: CaptureOptions::default(),
         }
@@ -1786,6 +1793,7 @@ mod capture_tests {
             network: CaptureNetwork::All,
             run_label: "video".to_owned(),
             wait_load_timeout: 30,
+            page_type: "video".to_owned(),
         }
     }
 
@@ -1812,6 +1820,7 @@ mod capture_tests {
             sha256: "b".repeat(64),
             targets: targets.clone(),
             warnings: Vec::new(),
+            suggested_output_root: None,
         };
         assert!(validate_batch_selection(&preview, &batch_request(targets.clone())).is_err());
 
@@ -1834,6 +1843,7 @@ mod capture_tests {
             sha256: "a".repeat(64),
             targets: vec![first.clone(), second.clone()],
             warnings: Vec::new(),
+            suggested_output_root: None,
         };
         validate_batch_selection(&preview, &batch_request(vec![second, first])).unwrap();
     }

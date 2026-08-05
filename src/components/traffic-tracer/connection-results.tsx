@@ -155,8 +155,15 @@ export function TrafficTracerConnectionResults({
                     <Typography variant="caption">
                       {connection.connection_id}
                     </Typography>
+                    <Typography
+                      variant="body2"
+                      sx={{ maxWidth: 360, overflowWrap: 'anywhere' }}
+                    >
+                      {connection.primary_url || 'No attributed URL'}
+                    </Typography>
                     <Typography variant="body2">
-                      {connection.request_ids.length} request(s)
+                      {connection.request_ids.length} request(s) ·{' '}
+                      {connection.urls.length} URL(s)
                     </Typography>
                   </TableCell>
                   <TableCell>{endpoint(connection.pre_flow)}</TableCell>
