@@ -144,6 +144,7 @@ export function TrafficTracerConnectionResults({
                 <TableCell>Connection / requests</TableCell>
                 <TableCell>Pre-proxy flow</TableCell>
                 <TableCell>Post-proxy flow</TableCell>
+                <TableCell>Lifecycle</TableCell>
                 <TableCell>Match</TableCell>
               </TableRow>
             </TableHead>
@@ -160,6 +161,44 @@ export function TrafficTracerConnectionResults({
                   </TableCell>
                   <TableCell>{endpoint(connection.pre_flow)}</TableCell>
                   <TableCell>{endpoint(connection.post_flow)}</TableCell>
+                  <TableCell>
+                    {connection.terminal ? (
+                      <>
+                        <Chip
+                          size="small"
+                          color={
+                            connection.terminal.status === 'closed'
+                              ? 'success'
+                              : connection.terminal.status.endsWith('error')
+                                ? 'error'
+                                : 'warning'
+                          }
+                          label={`${connection.terminal.status}${
+                            connection.terminal.stage
+                              ? ` · ${connection.terminal.stage}`
+                              : ''
+                          }`}
+                        />
+                        {connection.terminal.error && (
+                          <Typography
+                            variant="caption"
+                            title={connection.terminal.error}
+                            sx={{
+                              display: 'block',
+                              maxWidth: 280,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {connection.terminal.error}
+                          </Typography>
+                        )}
+                      </>
+                    ) : (
+                      '—'
+                    )}
+                  </TableCell>
                   <TableCell>
                     <Chip
                       size="small"

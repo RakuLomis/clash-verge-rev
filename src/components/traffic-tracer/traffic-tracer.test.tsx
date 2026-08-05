@@ -516,6 +516,14 @@ describe('TrafficTracer Complete workspace', () => {
         protocol: 'tcp',
         pre_flow: flow.pre_flow,
         post_flow: null,
+        terminal: {
+          status: 'dial_error',
+          stage: 'dial',
+          error: 'connection timed out',
+          bytes_up: 0,
+          bytes_down: 0,
+          duration_ms: 30000,
+        },
         shared: true,
         request_ids: ['one', 'two'],
         match: {
@@ -569,6 +577,7 @@ describe('TrafficTracer Complete workspace', () => {
     expect(screen.getByText('https://cdn.example/one.js')).toBeInTheDocument()
     expect(screen.getByText('https://cdn.example/two.js')).toBeInTheDocument()
     expect(screen.getByText('2 request(s)')).toBeInTheDocument()
+    expect(screen.getByText('dial_error · dial')).toBeInTheDocument()
     expect(screen.getByText('2 candidates')).toBeInTheDocument()
     expect(
       screen.getByText(/Core flows: 0\/1 with post flow/),

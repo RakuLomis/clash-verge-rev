@@ -298,10 +298,22 @@ export interface RequestIndexRecord {
   }
 }
 
+export interface FlowTerminal {
+  status: string
+  stage: string
+  error: string
+  bytes_up: number
+  bytes_down: number
+  duration_ms: number
+}
+
 export interface ConnectionIndexRecord {
   connection_id: string
   protocol: FlowNetwork
   pre_flow: NormalizedFlowTuple
+  terminal?: FlowTerminal
+  netlog_source_id?: number
+  mihomo_connection_id?: string
   post_flow: NormalizedFlowTuple | null
   shared: boolean
   request_ids: string[]
