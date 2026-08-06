@@ -43,6 +43,27 @@ function endpoint(flow: ConnectionIndexRecord['pre_flow'] | null) {
   return `${flow.network} ${src}:${flow.src_port} → ${dst}:${flow.dst_port}`
 }
 
+function groupedConnectionFailures(connections: ConnectionIndexRecord[]) {
+  const groups = new Map<string, number>()
+  connections.forEach((connection) => {
+    if (!connection.terminal?.status.endsWith('error')) return
+    let host = 'unknown host'
+    if (connection.primary_url) {
+      try {
+        host = new URL(connection.primary_url).hostname || host
+      } catch {
+        // Retain the value-safe fallback for malformed legacy URLs.
+      }
+    }
+    const errorClass = connection.terminal.error_class || 'transport_error'
+    const key = `${host} · ${errorClass}`
+    groups.set(key, (groups.get(key) || 0) + 1)
+  })
+  return [...groups.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
+  )
+}
+
 export function TrafficTracerConnectionResults({
   summary,
   requests,
@@ -65,26 +86,49 @@ export function TrafficTracerConnectionResults({
       </Alert>
     )
   }
+  const pageCoverage = summary?.coverage.page_attributed
+  const globalCoverage = summary?.coverage.capture_global
+  const browserCoverage =
+    pageCoverage?.browser_requests ?? summary?.coverage.browser_requests
+  const transportCoverage =
+    pageCoverage?.transport_connections ??
+    summary?.coverage.transport_connections
+  const connectionFailures = groupedConnectionFailures(connections)
   return (
     <Stack spacing={2} data-testid="traffic-tracer-connection-results">
       {summary && (
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
+          <Chip label={partitionLabel('Browser requests', browserCoverage!)} />
           <Chip
-            label={partitionLabel(
-              'Browser requests',
-              summary.coverage.browser_requests,
-            )}
+            label={partitionLabel('Transport connections', transportCoverage!)}
           />
           <Chip
-            label={partitionLabel(
-              'Transport connections',
-              summary.coverage.transport_connections,
-            )}
+            label={
+              pageCoverage
+                ? `Page flows: ${pageCoverage.logical_flows.with_post_flow}/${pageCoverage.logical_flows.total} with post flow · ${pageCoverage.logical_flows.shared} shared`
+                : `Core flows: ${summary.coverage.core_logical_flows.with_post_flow}/${summary.coverage.core_logical_flows.total} with post flow · ${summary.coverage.core_logical_flows.shared} shared`
+            }
           />
-          <Chip
-            label={`Core flows: ${summary.coverage.core_logical_flows.with_post_flow}/${summary.coverage.core_logical_flows.total} with post flow · ${summary.coverage.core_logical_flows.shared} shared`}
-          />
+          {globalCoverage && (
+            <Chip
+              variant="outlined"
+              label={`Capture-global core flows: ${globalCoverage.core_logical_flows.with_post_flow}/${globalCoverage.core_logical_flows.total} with post flow · ${globalCoverage.core_logical_flows.missing_post_flow} missing`}
+            />
+          )}
         </Stack>
+      )}
+
+      {connectionFailures.length > 0 && (
+        <Alert severity="warning">
+          <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+            Page connection failures
+          </Typography>
+          <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
+            {connectionFailures.map(([label, count]) => (
+              <Chip key={label} size="small" label={`${label}: ${count}`} />
+            ))}
+          </Stack>
+        </Alert>
       )}
 
       <Box>

@@ -530,6 +530,7 @@ describe('TrafficTracer Complete workspace', () => {
           status: 'dial_error',
           stage: 'dial',
           error: 'connection timed out',
+          error_class: 'ipv4_timeout',
           bytes_up: 0,
           bytes_down: 0,
           duration_ms: 30000,
@@ -548,6 +549,7 @@ describe('TrafficTracer Complete workspace', () => {
           selected_type: 'Vless',
           evidence: 'mihomo_trace_and_session_proxy_snapshot',
         },
+
         request_ids: ['one', 'two'],
         primary_url: 'https://cdn.example/one.js',
         urls: ['https://cdn.example/one.js', 'https://cdn.example/two.js'],
@@ -595,6 +597,37 @@ describe('TrafficTracer Complete workspace', () => {
           shared: 1,
           missing_post_flow: 1,
         },
+        page_attributed: {
+          browser_requests: {
+            total: 3,
+            matched: 2,
+            ambiguous: 0,
+            unmatched: 0,
+            non_network: 1,
+          },
+          transport_connections: {
+            total: 1,
+            matched: 0,
+            ambiguous: 1,
+            unmatched: 0,
+          },
+          logical_flows: {
+            total: 1,
+            with_post_flow: 0,
+            shared: 1,
+            missing_post_flow: 1,
+          },
+          unmatched_reasons: { multiple_candidates: 1, missing_post_flow: 1 },
+        },
+        capture_global: {
+          core_logical_flows: {
+            total: 3,
+            with_post_flow: 1,
+            shared: 1,
+            missing_post_flow: 2,
+          },
+          unmatched_reasons: { missing_post_flow: 2 },
+        },
         unmatched_reasons: { multiple_candidates: 1, missing_post_flow: 1 },
       },
     }
@@ -616,7 +649,13 @@ describe('TrafficTracer Complete workspace', () => {
     expect(screen.getByText('request multiplexing')).toBeInTheDocument()
     expect(screen.getByText(/1 non-network/)).toBeInTheDocument()
     expect(
-      screen.getByText(/Core flows: 0\/1 with post flow/),
+      screen.getByText(/Page flows: 0\/1 with post flow/),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/Capture-global core flows: 1\/3 with post flow/),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('cdn.example · ipv4_timeout: 1'),
     ).toBeInTheDocument()
   })
 

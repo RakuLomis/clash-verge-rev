@@ -292,14 +292,26 @@ export interface CoveragePartition {
   non_network?: number
 }
 
+export interface LogicalFlowCoverage {
+  total: number
+  with_post_flow: number
+  shared: number
+  missing_post_flow: number
+}
+
 export interface LayeredCoverage {
   browser_requests: CoveragePartition
   transport_connections: CoveragePartition
-  core_logical_flows: {
-    total: number
-    with_post_flow: number
-    shared: number
-    missing_post_flow: number
+  core_logical_flows: LogicalFlowCoverage
+  page_attributed?: {
+    browser_requests: CoveragePartition
+    transport_connections: CoveragePartition
+    logical_flows: LogicalFlowCoverage
+    unmatched_reasons: Record<string, number>
+  }
+  capture_global?: {
+    core_logical_flows: LogicalFlowCoverage
+    unmatched_reasons: Record<string, number>
   }
   unmatched_reasons: Record<string, number>
 }
@@ -334,6 +346,7 @@ export interface FlowTerminal {
   bytes_up: number
   bytes_down: number
   duration_ms: number
+  error_class?: string
 }
 
 export interface ConnectionIndexRecord {
