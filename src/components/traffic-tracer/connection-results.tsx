@@ -30,7 +30,10 @@ export interface TrafficTracerConnectionResultsProps {
 }
 
 function partitionLabel(name: string, value: CoveragePartition) {
-  return `${name}: ${value.matched}/${value.total} matched · ${value.ambiguous} ambiguous · ${value.unmatched} unmatched`
+  const nonNetwork = value.non_network
+    ? ` · ${value.non_network} non-network`
+    : ''
+  return `${name}: ${value.matched}/${value.total} matched · ${value.ambiguous} ambiguous · ${value.unmatched} unmatched${nonNetwork}`
 }
 
 function endpoint(flow: ConnectionIndexRecord['pre_flow'] | null) {
@@ -114,17 +117,28 @@ export function TrafficTracerConnectionResults({
                       '—'}
                   </TableCell>
                   <TableCell>
-                    <Chip
-                      size="small"
-                      color={
-                        request.attribution.status === 'matched'
-                          ? 'success'
-                          : request.attribution.status === 'ambiguous'
-                            ? 'warning'
-                            : 'default'
-                      }
-                      label={`${request.attribution.status} · ${request.attribution.method}`}
-                    />
+                    {request.network_observation &&
+                    !['network', 'unknown'].includes(
+                      request.network_observation,
+                    ) ? (
+                      <Chip
+                        size="small"
+                        color="info"
+                        label={`non-network · ${request.network_observation}`}
+                      />
+                    ) : (
+                      <Chip
+                        size="small"
+                        color={
+                          request.attribution.status === 'matched'
+                            ? 'success'
+                            : request.attribution.status === 'ambiguous'
+                              ? 'warning'
+                              : 'default'
+                        }
+                        label={`${request.attribution.status} · ${request.attribution.method}`}
+                      />
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
@@ -144,6 +158,7 @@ export function TrafficTracerConnectionResults({
                 <TableCell>Connection / requests</TableCell>
                 <TableCell>Pre-proxy flow</TableCell>
                 <TableCell>Post-proxy flow</TableCell>
+                <TableCell>Egress / sharing</TableCell>
                 <TableCell>Lifecycle</TableCell>
                 <TableCell>Match</TableCell>
               </TableRow>
@@ -168,6 +183,42 @@ export function TrafficTracerConnectionResults({
                   </TableCell>
                   <TableCell>{endpoint(connection.pre_flow)}</TableCell>
                   <TableCell>{endpoint(connection.post_flow)}</TableCell>
+                  <TableCell>
+                    {connection.egress ? (
+                      <>
+                        <Chip
+                          size="small"
+                          color={
+                            connection.egress.mode === 'proxy'
+                              ? 'primary'
+                              : connection.egress.mode === 'direct'
+                                ? 'success'
+                                : 'default'
+                          }
+                          label={connection.egress.mode}
+                        />
+                        <Typography variant="caption" sx={{ display: 'block' }}>
+                          {connection.egress.selection_chain.join(' → ') || '—'}
+                        </Typography>
+                      </>
+                    ) : (
+                      '—'
+                    )}
+                    {connection.sharing && (
+                      <Typography variant="caption" sx={{ display: 'block' }}>
+                        {[
+                          connection.sharing.request_multiplexed &&
+                            'request multiplexing',
+                          connection.sharing.post_flow_shared &&
+                            'shared post-flow',
+                          connection.sharing.outer_connection_reused &&
+                            'outer reuse',
+                        ]
+                          .filter(Boolean)
+                          .join(' · ') || 'not shared'}
+                      </Typography>
+                    )}
+                  </TableCell>
                   <TableCell>
                     {connection.terminal ? (
                       <>

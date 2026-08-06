@@ -535,6 +535,19 @@ describe('TrafficTracer Complete workspace', () => {
           duration_ms: 30000,
         },
         shared: true,
+        sharing: {
+          request_multiplexed: true,
+          post_flow_shared: false,
+          outer_connection_reused: false,
+        },
+        egress: {
+          mode: 'proxy',
+          policy: 'Youtube',
+          selection_chain: ['Youtube', 'Proxy group', 'Vless node'],
+          selected_node: 'Vless node',
+          selected_type: 'Vless',
+          evidence: 'mihomo_trace_and_session_proxy_snapshot',
+        },
         request_ids: ['one', 'two'],
         primary_url: 'https://cdn.example/one.js',
         urls: ['https://cdn.example/one.js', 'https://cdn.example/two.js'],
@@ -563,7 +576,13 @@ describe('TrafficTracer Complete workspace', () => {
       coverage_source: 'v2_indexes',
       match_method_counts: { endpoint_time: 1 },
       coverage: {
-        browser_requests: { total: 2, matched: 2, ambiguous: 0, unmatched: 0 },
+        browser_requests: {
+          total: 3,
+          matched: 2,
+          ambiguous: 0,
+          unmatched: 0,
+          non_network: 1,
+        },
         transport_connections: {
           total: 1,
           matched: 0,
@@ -591,6 +610,11 @@ describe('TrafficTracer Complete workspace', () => {
     expect(screen.getByText(/2 request\(s\).*2 URL\(s\)/)).toBeInTheDocument()
     expect(screen.getByText('dial_error · dial')).toBeInTheDocument()
     expect(screen.getByText('2 candidates')).toBeInTheDocument()
+    expect(
+      screen.getByText('Youtube → Proxy group → Vless node'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('request multiplexing')).toBeInTheDocument()
+    expect(screen.getByText(/1 non-network/)).toBeInTheDocument()
     expect(
       screen.getByText(/Core flows: 0\/1 with post flow/),
     ).toBeInTheDocument()

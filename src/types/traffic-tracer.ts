@@ -289,6 +289,7 @@ export interface CoveragePartition {
   matched: number
   ambiguous: number
   unmatched: number
+  non_network?: number
 }
 
 export interface LayeredCoverage {
@@ -310,6 +311,13 @@ export interface RequestIndexRecord {
   relation: string
   connection_id: string | null
   candidate_connection_ids: string[]
+  network_observation?:
+    | 'network'
+    | 'disk_cache'
+    | 'service_worker'
+    | 'prefetch_cache'
+    | 'browser_internal'
+    | 'unknown'
   attribution: {
     status: 'matched' | 'ambiguous' | 'unmatched'
     method: string
@@ -337,6 +345,19 @@ export interface ConnectionIndexRecord {
   mihomo_connection_id?: string
   post_flow: NormalizedFlowTuple | null
   shared: boolean
+  sharing?: {
+    request_multiplexed: boolean
+    post_flow_shared: boolean
+    outer_connection_reused: boolean
+  }
+  egress?: {
+    mode: 'direct' | 'proxy' | 'unknown'
+    policy: string | null
+    selection_chain: string[]
+    selected_node: string | null
+    selected_type: string | null
+    evidence: string
+  }
   request_ids: string[]
   primary_url: string | null
   urls: string[]
