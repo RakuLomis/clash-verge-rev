@@ -880,7 +880,13 @@
       "componentVersions": "Component versions",
       "artifactsTitle": "Artifacts",
       "unknownSize": "Unknown size",
-      "startingAnalysis": "Starting analysis…"
+      "startingAnalysis": "Starting analysis…",
+      "chooseFolder": "Choose folder",
+      "clearFolder": "Clear selection",
+      "currentCapture": "Current capture",
+      "noFolderSelected": "No capture folder is selected. Choose a timestamp folder to view its Sessions.",
+      "waitingForCaptureFolder": "Waiting for the current capture folder…",
+      "emptyFolder": "This capture folder has no Sessions yet."
     },
     "flows": {
       "title": "Normalized Flows",

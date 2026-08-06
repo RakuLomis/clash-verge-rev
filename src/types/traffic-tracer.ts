@@ -193,6 +193,24 @@ export interface SessionListResult {
   corrupt: CorruptSession[]
 }
 
+export interface SessionScope {
+  scope_id: string
+  display_name: string
+  directory: string
+  kind: 'capture_group' | 'legacy_session'
+  created_at: string | null
+  exists: boolean
+}
+
+export interface ScopedSessionListResult extends SessionListResult {
+  scope: SessionScope
+}
+
+export type SessionScopeSelector =
+  | { path: string; job_id?: never; batch_id?: never }
+  | { path?: never; job_id: string; batch_id?: never }
+  | { path?: never; job_id?: never; batch_id: string }
+
 export interface CorruptSession {
   session_dir: string
   message: string

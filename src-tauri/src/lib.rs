@@ -190,6 +190,8 @@ mod app_init {
             cmd::tt_capture_cancel,
             cmd::tt_get_capture_lock,
             cmd::tt_session_list,
+            cmd::tt_session_scope_resolve,
+            cmd::tt_session_scope_list,
             cmd::tt_session_get,
             cmd::tt_session_open_directory,
             cmd::tt_session_open_artifact,

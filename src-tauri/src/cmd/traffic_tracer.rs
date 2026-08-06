@@ -1044,6 +1044,39 @@ pub struct SessionListResult {
     pub corrupt: Vec<CorruptSession>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionScope {
+    pub scope_id: String,
+    pub display_name: String,
+    pub directory: String,
+    pub kind: String,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    pub exists: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ScopedSessionListResult {
+    pub scope: SessionScope,
+    pub sessions: Vec<SessionManifest>,
+    pub corrupt: Vec<CorruptSession>,
+}
+
+#[derive(Default, Serialize)]
+struct SessionScopeResolveParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    job_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    batch_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SessionScopeIdParams {
+    scope_id: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CorruptSession {
     pub session_dir: String,
@@ -1120,6 +1153,52 @@ pub async fn tt_session_list() -> CmdResult<SessionListResult> {
         .client()
         .stringify_err()?
         .request(RequestMethod::SessionList, serde_json::json!({}))
+        .await
+        .stringify_err()
+}
+
+#[tauri::command]
+pub async fn tt_session_scope_resolve(
+    path: Option<String>,
+    job_id: Option<String>,
+    batch_id: Option<String>,
+) -> CmdResult<Option<SessionScope>> {
+    let supplied = [path.is_some(), job_id.is_some(), batch_id.is_some()]
+        .into_iter()
+        .filter(|value| *value)
+        .count();
+    if supplied != 1 {
+        return Err("exactly one of path, job_id or batch_id is required".into());
+    }
+    if let Some(value) = job_id.as_deref() {
+        validate_job_id(value)?;
+    }
+    if let Some(value) = batch_id.as_deref() {
+        validate_job_id(value)?;
+    }
+    if path.as_deref().is_some_and(|value| value.trim().is_empty()) {
+        return Err("path must not be empty".into());
+    }
+    WorkerManager::global()
+        .client()
+        .stringify_err()?
+        .request(
+            RequestMethod::SessionScopeResolve,
+            SessionScopeResolveParams { path, job_id, batch_id },
+        )
+        .await
+        .stringify_err()
+}
+
+#[tauri::command]
+pub async fn tt_session_scope_list(scope_id: String) -> CmdResult<ScopedSessionListResult> {
+    if scope_id.trim().is_empty() {
+        return Err("scope_id must not be empty".into());
+    }
+    WorkerManager::global()
+        .client()
+        .stringify_err()?
+        .request(RequestMethod::SessionScopeList, SessionScopeIdParams { scope_id })
         .await
         .stringify_err()
 }
@@ -1251,17 +1330,38 @@ fn resolve_artifact_path(
 fn resolve_session_dir(session_root: &Path, manifest: &SessionManifest) -> CmdResult<PathBuf> {
     let root = fs::canonicalize(session_root).stringify_err()?;
     let session_dir = fs::canonicalize(&manifest.session_dir).stringify_err()?;
-    if session_dir == root || session_dir.parent() != Some(root.as_path()) {
+    let relative = session_dir
+        .strip_prefix(&root)
+        .map_err(|_| "Session directory is outside the configured Session root")?;
+    let components = relative.components().collect::<Vec<_>>();
+    if components.is_empty()
+        || components
+            .iter()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
         return Err("Session directory is outside the configured Session root".into());
     }
-    if !session_dir
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.ends_with(&format!("_{}", manifest.session_id)))
-    {
-        return Err("Session directory does not match the Session ID".into());
+    let legacy = components.len() == 1
+        && session_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(&format!("_{}", manifest.session_id)));
+    let grouped = components.len() == 3 && components[0].as_os_str().to_str().is_some_and(is_capture_group_name);
+    if !legacy && !grouped {
+        return Err("Session directory does not match a supported Session layout".into());
+    }
+    if !session_dir.join("manifest.json").is_file() {
+        return Err("Session manifest is missing".into());
     }
     Ok(session_dir)
+}
+
+fn is_capture_group_name(value: &str) -> bool {
+    value.len() == 19
+        && value.bytes().enumerate().all(|(index, byte)| match index {
+            8 | 15 => byte == b'-',
+            _ => byte.is_ascii_digit(),
+        })
 }
 
 fn validate_session_id(session_id: &str) -> CmdResult {
@@ -1678,6 +1778,33 @@ mod session_tests {
         .unwrap();
         assert!(result.sessions.is_empty());
         assert!(result.corrupt.is_empty());
+    }
+
+    #[test]
+    fn scoped_session_list_accepts_capture_group_metadata() {
+        let result: ScopedSessionListResult = serde_json::from_value(serde_json::json!({
+            "scope": {
+                "scope_id": "20260805-110256-685",
+                "display_name": "20260805-110256-685",
+                "directory": "/tmp/sessions/20260805-110256-685",
+                "kind": "capture_group",
+                "created_at": "2026-08-05T11:02:56.685Z",
+                "exists": true
+            },
+            "sessions": [],
+            "corrupt": []
+        }))
+        .unwrap();
+        assert_eq!(result.scope.scope_id, "20260805-110256-685");
+        assert!(result.scope.exists);
+    }
+
+    #[test]
+    fn capture_group_name_requires_the_exact_timestamp_shape() {
+        assert!(is_capture_group_name("20260805-110256-685"));
+        assert!(!is_capture_group_name("20260805T110256.685Z"));
+        assert!(!is_capture_group_name(".chrome-profiles"));
+        assert!(!is_capture_group_name("20260805-110256-685-extra"));
     }
 
     #[test]

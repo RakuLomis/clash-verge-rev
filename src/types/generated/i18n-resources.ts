@@ -1526,16 +1526,22 @@ export interface TranslationResources {
           artifactsEmpty: string
           artifactsTitle: string
           checkEnvironment: string
+          chooseFolder: string
+          clearFolder: string
           componentVersions: string
           corrupt: string
+          currentCapture: string
           description: string
           details: string
           detailTitle: string
           empty: string
+          emptyFolder: string
+          noFolderSelected: string
           schema: string
           startingAnalysis: string
           title: string
           unknownSize: string
+          waitingForCaptureFolder: string
           warnings_one: string
           warnings_other: string
           workerApi: string

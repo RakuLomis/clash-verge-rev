@@ -38,6 +38,10 @@ pub enum RequestMethod {
     AnalysisStart,
     #[serde(rename = "session.list")]
     SessionList,
+    #[serde(rename = "session.scope.resolve")]
+    SessionScopeResolve,
+    #[serde(rename = "session.scope.list")]
+    SessionScopeList,
     #[serde(rename = "session.get")]
     SessionGet,
     #[serde(rename = "session.delete")]

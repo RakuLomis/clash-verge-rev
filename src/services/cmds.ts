@@ -651,6 +651,23 @@ export function listTrafficTracerSessions() {
   return invoke<TrafficTracer.SessionListResult>('tt_session_list')
 }
 
+export function resolveTrafficTracerSessionScope(
+  selector: TrafficTracer.SessionScopeSelector,
+) {
+  return invoke<TrafficTracer.SessionScope | null>('tt_session_scope_resolve', {
+    path: selector.path,
+    jobId: selector.job_id,
+    batchId: selector.batch_id,
+  })
+}
+
+export function listTrafficTracerScopedSessions(scopeId: string) {
+  return invoke<TrafficTracer.ScopedSessionListResult>(
+    'tt_session_scope_list',
+    { scopeId },
+  )
+}
+
 export function getTrafficTracerSession(sessionId: string) {
   return invoke<TrafficTracer.SessionManifest>('tt_session_get', { sessionId })
 }

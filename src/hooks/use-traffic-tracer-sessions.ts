@@ -5,6 +5,7 @@ import { useEffect } from 'react'
 import { trafficTracerJobKey } from '@/hooks/use-capture-job'
 import {
   getTrafficTracerSession,
+  listTrafficTracerScopedSessions,
   listTrafficTracerSessions,
   startTrafficTracerAnalysis,
 } from '@/services/cmds'
@@ -16,6 +17,11 @@ import type {
 } from '@/types/traffic-tracer'
 
 export const trafficTracerSessionsKey = ['trafficTracer', 'sessions'] as const
+
+export const trafficTracerScopedSessionsKey = (
+  workspaceRoot: string,
+  scopeId: string,
+) => [...trafficTracerSessionsKey, 'scope', workspaceRoot, scopeId] as const
 export const trafficTracerSessionDetailsKey = [
   'trafficTracer',
   'session',
@@ -107,6 +113,68 @@ export function useTrafficTracerSessions(
 
   return {
     ...paginateTrafficTracerSessions(sessionsQuery.data, offset, limit),
+    sessionsQuery,
+    refreshSessions: sessionsQuery.refetch,
+  }
+}
+
+export function useTrafficTracerScopedSessions(
+  scopeId: string | null,
+  offset = 0,
+  limit = 20,
+  enabled = true,
+  workspaceRoot = '',
+) {
+  const queryClient = useQueryClient()
+  const sessionsQuery = useQuery({
+    queryKey: scopeId
+      ? trafficTracerScopedSessionsKey(workspaceRoot, scopeId)
+      : [...trafficTracerSessionsKey, 'scope', workspaceRoot, 'none'],
+    queryFn: () => listTrafficTracerScopedSessions(scopeId!),
+    enabled: enabled && scopeId !== null,
+  })
+
+  useEffect(() => {
+    if (!enabled || !scopeId) return
+
+    let disposed = false
+    let unlisteners: UnlistenFn[] = []
+    const refreshSessions = () => {
+      void queryClient.invalidateQueries({
+        queryKey: trafficTracerScopedSessionsKey(workspaceRoot, scopeId),
+      })
+      void queryClient.invalidateQueries({
+        queryKey: trafficTracerSessionDetailsKey,
+      })
+      void queryClient.invalidateQueries({ queryKey: trafficTracerFlowsKey })
+    }
+
+    Promise.all([
+      listen<JobSnapshot>('traffictracer://job-completed', refreshSessions),
+      listen<JobSnapshot>('traffictracer://job-failed', refreshSessions),
+      listen<JobSnapshot>('traffictracer://job-cancelled', refreshSessions),
+    ])
+      .then((registered) => {
+        if (disposed) registered.forEach((unlisten) => unlisten())
+        else unlisteners = registered
+      })
+      .catch((error) =>
+        console.error(
+          '[TrafficTracer] Scoped Session event registration failed:',
+          error,
+        ),
+      )
+
+    return () => {
+      disposed = true
+      unlisteners.forEach((unlisten) => unlisten())
+      unlisteners = []
+    }
+  }, [enabled, queryClient, scopeId, workspaceRoot])
+
+  return {
+    ...paginateTrafficTracerSessions(sessionsQuery.data, offset, limit),
+    scope: sessionsQuery.data?.scope,
     sessionsQuery,
     refreshSessions: sessionsQuery.refetch,
   }

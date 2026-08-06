@@ -127,9 +127,9 @@ sites:
 
 ## 5. 会话与产物
 
-“会话”显示状态、组件版本、警告和产物。可打开详情/目录，查看 trace、CDP、NetLog、pcap 和关联结果，或“重新分析”。
+“会话”按一个明确的时间戳目录显示状态、组件版本、警告和产物。捕获运行时自动选中本次 Capture group；任务结束且没有手动选择时默认不显示历史内容。点击“选择文件夹”可打开当前会话输出根目录下的历史时间戳目录，点击“清除选择”恢复空闲状态。可打开详情/目录，查看 trace、CDP、NetLog、pcap 和关联结果，或“重新分析”。
 
-输出根目录下每个子目录是一条 session；manifest 是 UI 与 Worker 识别状态、产物的事实来源。任务运行时不要移动或修改它。
+新版时间戳目录内按 `<domain>/<page_type>__<url>/manifest.json` 保存多个页面 Session；旧版直属 `<timestamp>_<session-id>/manifest.json` 仍可作为单 Session 目录选择。不能选择输出根目录本身、domain/page 子目录、隐藏目录、外部目录或软链接。扫描器不会进入 `.chrome-profiles` 和 `.batches`，Chrome 扩展自己的 `manifest.json` 不会被误报为损坏 Session；选定作用域中真正无法解析的 TrafficTracer manifest 仍会报警。任务运行时不要移动或修改当前时间戳目录。
 
 ## 6. 五元组查询
 

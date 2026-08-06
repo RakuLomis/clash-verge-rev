@@ -37,6 +37,19 @@ const TrafficTracerPage = () => {
     diagnosticRequest?.output_root ?? '',
     environment !== undefined,
   )
+  const terminalJobStates = new Set([
+    'completed',
+    'failed',
+    'cancelled',
+    'interrupted',
+  ])
+  const activeJobId =
+    job && !terminalJobStates.has(job.state) ? job.job_id : null
+  const activeBatchId =
+    batches.batchStatus &&
+    !terminalJobStates.has(batches.batchStatus.batch.state)
+      ? batches.batchStatus.batch.batch_id
+      : null
 
   const handleStartCapture = async (request: CaptureStartRequest) => {
     try {
@@ -113,6 +126,8 @@ const TrafficTracerPage = () => {
             key={diagnosticRequest?.output_root ?? 'sessions-disabled'}
             enabled={environment !== undefined}
             workspaceRoot={diagnosticRequest?.output_root ?? ''}
+            activeJobId={activeJobId}
+            activeBatchId={activeBatchId}
           />
         </Box>
         <Box sx={{ mt: 2 }}>
