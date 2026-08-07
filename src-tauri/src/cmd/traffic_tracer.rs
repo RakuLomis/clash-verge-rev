@@ -1261,7 +1261,16 @@ pub async fn tt_session_read_analysis(session_id: String, role: String) -> CmdRe
         .map(|artifact| resolve_artifact_path(&session_root, &manifest, artifact))
         .transpose()?
         .or_else(|| latest_generation_artifact(&session_dir, filename))
-        .unwrap_or_else(|| session_dir.join("results").join(filename));
+        .unwrap_or_else(|| {
+            session_dir
+                .join(if session_dir.join("raw").is_dir() {
+                    "analysis"
+                } else {
+                    "results"
+                })
+                .join(filename)
+        });
+
     let canonical = artifact_path.canonicalize().stringify_err()?;
     if !canonical.starts_with(&session_dir) {
         return Err("analysis artifact escapes the Session directory".into());
