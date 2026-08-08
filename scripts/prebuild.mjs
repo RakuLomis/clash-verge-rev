@@ -31,6 +31,7 @@ import { log_debug, log_error, log_info, log_success } from './utils.mjs'
 const cwd = process.cwd()
 const TEMP_DIR = path.join(cwd, 'node_modules/.verge')
 const FORCE = process.argv.includes('--force') || process.argv.includes('-f')
+const OFFLINE = process.env.TT_PREBUILD_OFFLINE === '1'
 const VERSION_CACHE_FILE = path.join(TEMP_DIR, '.version_cache.json')
 const HASH_CACHE_FILE = path.join(TEMP_DIR, '.hash_cache.json')
 
@@ -64,6 +65,10 @@ const ARCH_MAP = {
 const arg1 = process.argv.slice(2)[0]
 const arg2 = process.argv.slice(2)[1]
 const target = arg1 === '--force' || arg1 === '-f' ? arg2 : arg1
+if (FORCE && OFFLINE) {
+  throw new Error('TT_PREBUILD_OFFLINE=1 cannot be combined with --force')
+}
+
 const { platform, arch } = target
   ? { platform: PLATFORM_MAP[target], arch: ARCH_MAP[target] }
   : process
@@ -113,7 +118,7 @@ async function saveVersionCache(cache) {
 async function getCachedVersion(key) {
   const cache = await loadVersionCache()
   const cached = cache[key]
-  if (cached && Date.now() - cached.timestamp < 3600000) {
+  if (cached && (OFFLINE || Date.now() - cached.timestamp < 3600000)) {
     log_info(`Using cached version for ${key}: ${cached.version}`)
     return cached.version
   }
@@ -233,6 +238,9 @@ async function getLatestAlphaVersion() {
       return
     }
   }
+  if (OFFLINE) {
+    throw new Error('offline prebuild requires cached META_ALPHA_VERSION')
+  }
 
   try {
     const response = await axios.get(META_ALPHA_VERSION_URL, {
@@ -255,6 +263,9 @@ async function getLatestReleaseVersion() {
       META_VERSION = cached
       return
     }
+  }
+  if (OFFLINE) {
+    throw new Error('offline prebuild requires cached META_VERSION')
   }
 
   try {
@@ -314,6 +325,9 @@ function clashMeta() {
 // download helper (增强：status + magic bytes)
 // =======================
 async function downloadFile(url, outPath) {
+  if (OFFLINE) {
+    throw new Error(`offline prebuild cannot download missing resource: ${url}`)
+  }
   const response = await axios.get(url, {
     headers: { 'Content-Type': 'application/octet-stream' },
     maxRedirects: 10,
