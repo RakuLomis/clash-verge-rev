@@ -462,7 +462,7 @@ async function resolveSidecar(binInfo) {
 
 async function resolveTrafficTracer() {
   const targetPath = path.join(SIDECAR_DIR, `verge-mihomo-tt-${SIDECAR_HOST}`)
-  if (!FORCE && fs.existsSync(targetPath)) {
+  if (!FORCE && !OFFLINE && fs.existsSync(targetPath)) {
     log_success('"verge-mihomo-tt" already exists, skipping copy')
     return
   }
@@ -502,7 +502,7 @@ async function resolveTrafficTracerWorker() {
     sidecarDir: SIDECAR_DIR,
     targetTriple: SIDECAR_HOST,
     configuredSource: process.env.TRAFFICTRACER_WORKER_BIN,
-    force: FORCE,
+    force: FORCE || OFFLINE,
   })
 
   if (result.status === 'skipped') {
