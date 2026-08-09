@@ -93,9 +93,36 @@ export function TrafficTracerConnectionResults({
   const transportCoverage =
     pageCoverage?.transport_connections ??
     summary?.coverage.transport_connections
+  const quality = summary?.quality
+  const qualityWarnings = summary?.warnings ?? []
   const connectionFailures = groupedConnectionFailures(connections)
   return (
     <Stack spacing={2} data-testid="traffic-tracer-connection-results">
+      {summary?.quality_state && summary.quality_state !== 'passed' && (
+        <Alert
+          severity={summary.quality_state === 'failed' ? 'error' : 'warning'}
+        >
+          <Typography variant="subtitle2">
+            Analysis quality: {summary.quality_state}
+          </Typography>
+          {qualityWarnings.length > 0 && (
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{ mt: 0.5, flexWrap: 'wrap' }}
+            >
+              {qualityWarnings.map((warning) => (
+                <Chip
+                  key={warning.code}
+                  size="small"
+                  label={`${warning.code}: ${warning.count}`}
+                  title={warning.message}
+                />
+              ))}
+            </Stack>
+          )}
+        </Alert>
+      )}
       {summary && (
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
           <Chip label={partitionLabel('Browser requests', browserCoverage!)} />
@@ -113,6 +140,18 @@ export function TrafficTracerConnectionResults({
             <Chip
               variant="outlined"
               label={`Capture-global core flows: ${globalCoverage.core_logical_flows.with_post_flow}/${globalCoverage.core_logical_flows.total} with post flow · ${globalCoverage.core_logical_flows.missing_post_flow} missing`}
+            />
+          )}
+          {quality && (
+            <Chip
+              variant="outlined"
+              label={`Egress: ${quality.egress_establishment.established}/${quality.egress_establishment.total} established · ${quality.egress_establishment.failed_before_socket} dial failed`}
+            />
+          )}
+          {quality?.pcap_extraction.requested && (
+            <Chip
+              variant="outlined"
+              label={`PCAP pairs: ${quality.pcap_extraction.complete_pairs}/${quality.pcap_extraction.total} · pre ${quality.pcap_extraction.pre_success} · post ${quality.pcap_extraction.post_success}`}
             />
           )}
         </Stack>
@@ -225,7 +264,15 @@ export function TrafficTracerConnectionResults({
                       {connection.urls.length} URL(s)
                     </Typography>
                   </TableCell>
-                  <TableCell>{endpoint(connection.pre_flow)}</TableCell>
+                  <TableCell>
+                    {endpoint(connection.pre_flow)}
+                    <Typography variant="caption" sx={{ display: 'block' }}>
+                      app: {connection.application_protocol || 'unknown'}
+                      {connection.attempted_protocols?.length
+                        ? ` · attempted ${connection.attempted_protocols.join(', ')}`
+                        : ''}
+                    </Typography>
+                  </TableCell>
                   <TableCell>{endpoint(connection.post_flow)}</TableCell>
                   <TableCell>
                     {connection.egress ? (

@@ -524,6 +524,8 @@ describe('TrafficTracer Complete workspace', () => {
       {
         connection_id: connectionId,
         protocol: 'tcp',
+        application_protocol: 'unknown',
+        attempted_protocols: ['QUIC'],
         pre_flow: flow.pre_flow,
         post_flow: null,
         terminal: {
@@ -577,6 +579,41 @@ describe('TrafficTracer Complete workspace', () => {
     const summary: CoverageSummary = {
       coverage_source: 'v2_indexes',
       match_method_counts: { endpoint_time: 1 },
+      quality_state: 'degraded',
+      warnings: [
+        {
+          code: 'EGRESS_DIAL_FAILED',
+          count: 1,
+          message: 'The egress dial failed.',
+        },
+      ],
+      quality: {
+        request_attribution: {
+          eligible: 2,
+          matched: 2,
+          ambiguous: 0,
+          unmatched: 0,
+        },
+        transport_correlation: {
+          total: 1,
+          matched: 0,
+          ambiguous: 1,
+          unmatched: 0,
+        },
+        egress_establishment: {
+          total: 1,
+          established: 0,
+          failed_before_socket: 1,
+          unavailable: 0,
+        },
+        pcap_extraction: {
+          requested: true,
+          total: 1,
+          pre_success: 1,
+          post_success: 0,
+          complete_pairs: 0,
+        },
+      },
       coverage: {
         browser_requests: {
           total: 3,
@@ -656,6 +693,15 @@ describe('TrafficTracer Complete workspace', () => {
     ).toBeInTheDocument()
     expect(
       screen.getByText('cdn.example · ipv4_timeout: 1'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Analysis quality: degraded')).toBeInTheDocument()
+    expect(screen.getByText('EGRESS_DIAL_FAILED: 1')).toBeInTheDocument()
+    expect(
+      screen.getByText(/Egress: 0\/1 established · 1 dial failed/),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/PCAP pairs: 0\/1/)).toBeInTheDocument()
+    expect(
+      screen.getByText('app: unknown · attempted QUIC'),
     ).toBeInTheDocument()
   })
 

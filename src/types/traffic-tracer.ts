@@ -352,6 +352,8 @@ export interface FlowTerminal {
 export interface ConnectionIndexRecord {
   connection_id: string
   protocol: FlowNetwork
+  application_protocol?: 'unknown' | 'h2' | 'h3'
+  attempted_protocols?: string[]
   pre_flow: NormalizedFlowTuple
   terminal?: FlowTerminal
   netlog_source_id?: number
@@ -393,11 +395,43 @@ export interface AnalysisIndex<T> {
   items: T[]
 }
 
+export interface AnalysisWarning {
+  code: string
+  count: number
+  message: string
+}
+
+export interface AnalysisQuality {
+  request_attribution: {
+    eligible: number
+    matched: number
+    ambiguous: number
+    unmatched: number
+  }
+  transport_correlation: CoveragePartition
+  egress_establishment: {
+    total: number
+    established: number
+    failed_before_socket: number
+    unavailable: number
+  }
+  pcap_extraction: {
+    requested: boolean
+    total: number
+    pre_success: number
+    post_success: number
+    complete_pairs: number
+  }
+}
+
 export interface CoverageSummary {
   analysis_generation_id?: string
   coverage: LayeredCoverage
   match_method_counts: Record<string, number>
   coverage_source: string
+  quality_state?: 'passed' | 'degraded' | 'failed'
+  quality?: AnalysisQuality
+  warnings?: AnalysisWarning[]
 }
 
 export interface FlowQueryRequest {
