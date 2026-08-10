@@ -94,7 +94,14 @@ export function TrafficTracerConnectionResults({
     pageCoverage?.transport_connections ??
     summary?.coverage.transport_connections
   const quality = summary?.quality
+  const pageQuality = quality?.page_attributed ?? quality
   const qualityWarnings = summary?.warnings ?? []
+  const pageWarnings = qualityWarnings.filter(
+    (warning) => warning.scope !== 'capture_global',
+  )
+  const globalWarnings = qualityWarnings.filter(
+    (warning) => warning.scope === 'capture_global',
+  )
   const connectionFailures = groupedConnectionFailures(connections)
   return (
     <Stack spacing={2} data-testid="traffic-tracer-connection-results">
@@ -103,15 +110,15 @@ export function TrafficTracerConnectionResults({
           severity={summary.quality_state === 'failed' ? 'error' : 'warning'}
         >
           <Typography variant="subtitle2">
-            Analysis quality: {summary.quality_state}
+            Page analysis quality: {summary.quality_state}
           </Typography>
-          {qualityWarnings.length > 0 && (
+          {pageWarnings.length > 0 && (
             <Stack
               direction="row"
               spacing={1}
               sx={{ mt: 0.5, flexWrap: 'wrap' }}
             >
-              {qualityWarnings.map((warning) => (
+              {pageWarnings.map((warning) => (
                 <Chip
                   key={warning.code}
                   size="small"
@@ -123,6 +130,37 @@ export function TrafficTracerConnectionResults({
           )}
         </Alert>
       )}
+      {summary?.capture_global_quality_state &&
+        summary.capture_global_quality_state !== 'passed' && (
+          <Alert
+            severity={
+              summary.capture_global_quality_state === 'failed'
+                ? 'error'
+                : 'info'
+            }
+          >
+            <Typography variant="subtitle2">
+              Capture-global diagnostics: {summary.capture_global_quality_state}
+            </Typography>
+            {globalWarnings.length > 0 && (
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{ mt: 0.5, flexWrap: 'wrap' }}
+              >
+                {globalWarnings.map((warning) => (
+                  <Chip
+                    key={`${warning.scope}:${warning.code}`}
+                    size="small"
+                    variant="outlined"
+                    label={`${warning.code}: ${warning.count}`}
+                    title={warning.message}
+                  />
+                ))}
+              </Stack>
+            )}
+          </Alert>
+        )}
       {summary && (
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
           <Chip label={partitionLabel('Browser requests', browserCoverage!)} />
@@ -142,16 +180,16 @@ export function TrafficTracerConnectionResults({
               label={`Capture-global core flows: ${globalCoverage.core_logical_flows.with_post_flow}/${globalCoverage.core_logical_flows.total} with post flow · ${globalCoverage.core_logical_flows.missing_post_flow} missing`}
             />
           )}
-          {quality && (
+          {pageQuality && (
             <Chip
               variant="outlined"
-              label={`Egress: ${quality.egress_establishment.established}/${quality.egress_establishment.total} established · ${quality.egress_establishment.failed_before_socket} dial failed`}
+              label={`Egress: ${pageQuality.egress_establishment.established}/${pageQuality.egress_establishment.total} established · ${pageQuality.egress_establishment.failed_before_socket} dial failed`}
             />
           )}
-          {quality?.pcap_extraction.requested && (
+          {pageQuality?.pcap_extraction.requested && (
             <Chip
               variant="outlined"
-              label={`PCAP pairs: ${quality.pcap_extraction.complete_pairs}/${quality.pcap_extraction.total} · pre ${quality.pcap_extraction.pre_success} · post ${quality.pcap_extraction.post_success}`}
+              label={`PCAP pairs: ${pageQuality.pcap_extraction.complete_pairs}/${pageQuality.pcap_extraction.total} · pre ${pageQuality.pcap_extraction.pre_success} · post ${pageQuality.pcap_extraction.post_success}`}
             />
           )}
         </Stack>

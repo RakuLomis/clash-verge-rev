@@ -399,9 +399,12 @@ export interface AnalysisWarning {
   code: string
   count: number
   message: string
+  scope?: 'page_attributed' | 'capture_global'
+  severity?: 'info' | 'warning' | 'error'
+  affects_page_quality?: boolean
 }
 
-export interface AnalysisQuality {
+export interface AnalysisPageQuality {
   request_attribution: {
     eligible: number
     matched: number
@@ -424,12 +427,25 @@ export interface AnalysisQuality {
   }
 }
 
+export interface AnalysisQuality extends AnalysisPageQuality {
+  page_attributed?: AnalysisPageQuality
+  capture_global?: {
+    logical_flows: {
+      total: number
+      with_post_flow: number
+      missing_post_flow: number
+      errors: number
+    }
+  }
+}
+
 export interface CoverageSummary {
   analysis_generation_id?: string
   coverage: LayeredCoverage
   match_method_counts: Record<string, number>
   coverage_source: string
   quality_state?: 'passed' | 'degraded' | 'failed'
+  capture_global_quality_state?: 'passed' | 'degraded' | 'failed'
   quality?: AnalysisQuality
   warnings?: AnalysisWarning[]
 }

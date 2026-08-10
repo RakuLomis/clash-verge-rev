@@ -580,11 +580,23 @@ describe('TrafficTracer Complete workspace', () => {
       coverage_source: 'v2_indexes',
       match_method_counts: { endpoint_time: 1 },
       quality_state: 'degraded',
+      capture_global_quality_state: 'degraded',
       warnings: [
         {
           code: 'EGRESS_DIAL_FAILED',
           count: 1,
           message: 'The egress dial failed.',
+          scope: 'page_attributed',
+          severity: 'warning',
+          affects_page_quality: true,
+        },
+        {
+          code: 'POST_FLOW_UNAVAILABLE',
+          count: 2,
+          message: 'Background flows have no post tuple.',
+          scope: 'capture_global',
+          severity: 'warning',
+          affects_page_quality: false,
         },
       ],
       quality: {
@@ -694,7 +706,13 @@ describe('TrafficTracer Complete workspace', () => {
     expect(
       screen.getByText('cdn.example · ipv4_timeout: 1'),
     ).toBeInTheDocument()
-    expect(screen.getByText('Analysis quality: degraded')).toBeInTheDocument()
+    expect(
+      screen.getByText('Page analysis quality: degraded'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('Capture-global diagnostics: degraded'),
+    ).toBeInTheDocument()
+    expect(screen.getByText('POST_FLOW_UNAVAILABLE: 2')).toBeInTheDocument()
     expect(screen.getByText('EGRESS_DIAL_FAILED: 1')).toBeInTheDocument()
     expect(
       screen.getByText(/Egress: 0\/1 established · 1 dial failed/),
