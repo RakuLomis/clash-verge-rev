@@ -1040,8 +1040,38 @@ fn validate_job_id(job_id: &str) -> CmdResult {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SessionListResult {
-    pub sessions: Vec<SessionManifest>,
+    pub sessions: Vec<SessionSummary>,
     pub corrupt: Vec<CorruptSession>,
+    pub offset: usize,
+    pub limit: usize,
+    pub total: usize,
+    pub has_more: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub schema_version: u32,
+    pub session_id: String,
+    pub job_id: String,
+    pub state: JobState,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+    pub session_dir: String,
+    pub target: SessionTarget,
+    pub artifact_count: usize,
+    pub warning_count: usize,
+    #[serde(default)]
+    pub quality_state: Option<String>,
+    #[serde(default)]
+    pub capture_global_quality_state: Option<String>,
+    #[serde(default)]
+    pub coverage: Option<Value>,
+    #[serde(default)]
+    pub error: Option<SessionError>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1058,8 +1088,12 @@ pub struct SessionScope {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ScopedSessionListResult {
     pub scope: SessionScope,
-    pub sessions: Vec<SessionManifest>,
+    pub sessions: Vec<SessionSummary>,
     pub corrupt: Vec<CorruptSession>,
+    pub offset: usize,
+    pub limit: usize,
+    pub total: usize,
+    pub has_more: bool,
 }
 
 #[derive(Default, Serialize)]
@@ -1075,6 +1109,14 @@ struct SessionScopeResolveParams {
 #[derive(Serialize)]
 struct SessionScopeIdParams {
     scope_id: String,
+    offset: usize,
+    limit: usize,
+}
+
+#[derive(Serialize)]
+struct SessionListParams {
+    offset: usize,
+    limit: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1148,11 +1190,12 @@ struct SessionIdParams {
 }
 
 #[tauri::command]
-pub async fn tt_session_list() -> CmdResult<SessionListResult> {
+pub async fn tt_session_list(offset: usize, limit: usize) -> CmdResult<SessionListResult> {
+    validate_session_page(limit)?;
     WorkerManager::global()
         .client()
         .stringify_err()?
-        .request(RequestMethod::SessionList, serde_json::json!({}))
+        .request(RequestMethod::SessionList, SessionListParams { offset, limit })
         .await
         .stringify_err()
 }
@@ -1191,16 +1234,35 @@ pub async fn tt_session_scope_resolve(
 }
 
 #[tauri::command]
-pub async fn tt_session_scope_list(scope_id: String) -> CmdResult<ScopedSessionListResult> {
+pub async fn tt_session_scope_list(
+    scope_id: String,
+    offset: usize,
+    limit: usize,
+) -> CmdResult<ScopedSessionListResult> {
     if scope_id.trim().is_empty() {
         return Err("scope_id must not be empty".into());
     }
+    validate_session_page(limit)?;
     WorkerManager::global()
         .client()
         .stringify_err()?
-        .request(RequestMethod::SessionScopeList, SessionScopeIdParams { scope_id })
+        .request(
+            RequestMethod::SessionScopeList,
+            SessionScopeIdParams {
+                scope_id,
+                offset,
+                limit,
+            },
+        )
         .await
         .stringify_err()
+}
+
+fn validate_session_page(limit: usize) -> CmdResult {
+    if !(1..=100).contains(&limit) {
+        return Err("limit must be between 1 and 100".into());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1782,7 +1844,11 @@ mod session_tests {
     fn empty_session_list_is_valid() {
         let result: SessionListResult = serde_json::from_value(serde_json::json!({
             "sessions": [],
-            "corrupt": []
+            "corrupt": [],
+            "offset": 0,
+            "limit": 20,
+            "total": 0,
+            "has_more": false
         }))
         .unwrap();
         assert!(result.sessions.is_empty());
@@ -1801,7 +1867,11 @@ mod session_tests {
                 "exists": true
             },
             "sessions": [],
-            "corrupt": []
+            "corrupt": [],
+            "offset": 0,
+            "limit": 20,
+            "total": 0,
+            "has_more": false
         }))
         .unwrap();
         assert_eq!(result.scope.scope_id, "20260805-110256-685");

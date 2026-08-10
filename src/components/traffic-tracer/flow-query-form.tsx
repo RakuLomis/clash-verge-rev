@@ -13,9 +13,12 @@ import { useMutation } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { useTrafficTracerSessions } from '@/hooks/use-traffic-tracer-sessions'
+import {
+  useAllTrafficTracerSessions,
+  useTrafficTracerSession,
+} from '@/hooks/use-traffic-tracer-sessions'
 import { queryTrafficTracerFlows } from '@/services/cmds'
-import type { FlowRecord, SessionManifest } from '@/types/traffic-tracer'
+import type { FlowRecord, SessionSummary } from '@/types/traffic-tracer'
 
 import { TrafficTracerFlowDetail } from './flow-detail'
 import {
@@ -41,7 +44,7 @@ interface CrossSessionResult {
 }
 
 async function querySessionFlows(
-  session: SessionManifest,
+  session: SessionSummary,
   draft: FlowQueryDraft,
 ) {
   const first = await queryTrafficTracerFlows(
@@ -58,26 +61,22 @@ async function querySessionFlows(
 }
 
 async function queryAllSessions(
-  sessions: SessionManifest[],
+  sessions: SessionSummary[],
   draft: FlowQueryDraft,
 ): Promise<CrossSessionResult> {
-  const settled = await Promise.allSettled(
-    sessions.map((session) => querySessionFlows(session, draft)),
-  )
   const flows: FlowRecord[] = []
   const failures: SessionQueryFailure[] = []
-  settled.forEach((result, index) => {
-    const session = sessions[index]
-    if (result.status === 'fulfilled') {
-      flows.push(...result.value)
-    } else {
+  for (const session of sessions) {
+    try {
+      flows.push(...(await querySessionFlows(session, draft)))
+    } catch (error) {
       failures.push({
         sessionId: session.session_id,
         domain: session.target.domain,
-        message: String(result.reason),
+        message: String(error),
       })
     }
-  })
+  }
   return { flows, failures, queriedSessions: sessions.length }
 }
 
@@ -94,9 +93,7 @@ export function TrafficTracerFlowQueryForm({
   const [offset, setOffset] = useState(0)
   const [limit, setLimit] = useState(20)
   const [selectedFlow, setSelectedFlow] = useState<FlowRecord | null>(null)
-  const { sessions, sessionsQuery } = useTrafficTracerSessions(
-    0,
-    Number.MAX_SAFE_INTEGER,
+  const { sessions, sessionsQuery } = useAllTrafficTracerSessions(
     enabled,
     workspaceRoot,
   )
@@ -126,9 +123,11 @@ export function TrafficTracerFlowQueryForm({
 
   const result = queryMutation.data
   const pageFlows = result?.flows.slice(offset, offset + limit) ?? []
-  const selectedSession = selectedFlow
-    ? sessions.find((session) => session.session_id === selectedFlow.session_id)
-    : undefined
+  const { session: selectedSession } = useTrafficTracerSession(
+    selectedFlow?.session_id ?? null,
+    Boolean(selectedFlow),
+    workspaceRoot,
+  )
 
   return (
     <Stack spacing={2} data-testid="traffic-tracer-flow-query">

@@ -44,6 +44,10 @@ export function useTrafficTracerBatches(workspaceRoot = '', enabled = true) {
     }
   }, [recoveredBatch])
 
+  const listedBatch = activeBatchId
+    ? listQuery.data?.batches.find((batch) => batch.batch_id === activeBatchId)
+    : undefined
+
   const statusQuery = useQuery({
     queryKey: activeBatchId
       ? trafficTracerBatchKey(activeBatchId)
@@ -53,6 +57,15 @@ export function useTrafficTracerBatches(workspaceRoot = '', enabled = true) {
     refetchInterval: ({ state }) =>
       state.data && TERMINAL.has(state.data.batch.state) ? false : 1000,
   })
+
+  const liveStatus = statusQuery.data
+  const batchStatus =
+    listedBatch &&
+    (!liveStatus ||
+      Date.parse(listedBatch.updated_at) >=
+        Date.parse(liveStatus.batch.updated_at))
+      ? { batch: listedBatch, job: liveStatus?.job ?? null }
+      : liveStatus
 
   const remember = (id: string) => {
     localStorage.setItem(ACTIVE_BATCH_KEY, id)
@@ -103,7 +116,7 @@ export function useTrafficTracerBatches(workspaceRoot = '', enabled = true) {
 
   return {
     batchId: activeBatchId,
-    batchStatus: statusQuery.data,
+    batchStatus,
     batches: listQuery.data?.batches ?? [],
     corruptBatches: listQuery.data?.corrupt ?? [],
     listQuery,

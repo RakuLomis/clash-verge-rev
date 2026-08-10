@@ -481,25 +481,49 @@ export function TrafficTracerCaptureForm({
                         : 'Select all'}
                     </Button>
                   </Stack>
-                  {targetConfig.targets.map((target, position) => (
-                    <FormControlLabel
-                      key={target.index}
-                      control={
-                        <Checkbox
-                          checked={selectedTargetIndexes.has(target.index)}
-                          onChange={(_, checked) =>
-                            setSelectedTargetIndexes((current) => {
-                              const next = new Set(current)
-                              if (checked) next.add(target.index)
-                              else next.delete(target.index)
-                              return next
-                            })
-                          }
-                        />
-                      }
-                      label={`${position + 1}. ${target.page_type} — ${target.domain} — ${target.url}`}
-                    />
-                  ))}
+                  <Box
+                    sx={{
+                      maxHeight: 240,
+                      overflowY: 'auto',
+                      border: 1,
+                      borderColor: 'divider',
+                      borderRadius: 1,
+                      px: 1,
+                    }}
+                  >
+                    {targetConfig.targets.map((target, position) => (
+                      <FormControlLabel
+                        key={target.index}
+                        sx={{
+                          display: 'flex',
+                          m: 0,
+                          minHeight: 36,
+                          '& .MuiFormControlLabel-label': {
+                            minWidth: 0,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          },
+                        }}
+                        title={`${target.page_type} — ${target.domain} — ${target.url}`}
+                        control={
+                          <Checkbox
+                            size="small"
+                            checked={selectedTargetIndexes.has(target.index)}
+                            onChange={(_, checked) =>
+                              setSelectedTargetIndexes((current) => {
+                                const next = new Set(current)
+                                if (checked) next.add(target.index)
+                                else next.delete(target.index)
+                                return next
+                              })
+                            }
+                          />
+                        }
+                        label={`${position + 1}. ${target.page_type} — ${target.domain} — ${target.url}`}
+                      />
+                    ))}
+                  </Box>
                   <Typography variant="caption" color="text.secondary">
                     Selected targets run sequentially in YAML order. Each
                     capture is cleaned up and analyzed before the next starts.

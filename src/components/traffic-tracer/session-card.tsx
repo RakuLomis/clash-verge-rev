@@ -15,10 +15,10 @@ import {
 } from '@mui/material'
 import { useTranslation } from 'react-i18next'
 
-import type { JobState, SessionManifest } from '@/types/traffic-tracer'
+import type { JobState, SessionSummary } from '@/types/traffic-tracer'
 
 export interface TrafficTracerSessionCardProps {
-  session: SessionManifest
+  session: SessionSummary
   opening?: boolean
   analyzing?: boolean
   analysisBlocked?: boolean
@@ -106,25 +106,25 @@ export function TrafficTracerSessionCard({
             size="small"
             variant="outlined"
             label={t(
-              session.artifacts.length === 1
+              session.artifact_count === 1
                 ? 'settings.trafficTracer.sessions.artifacts_one'
                 : 'settings.trafficTracer.sessions.artifacts_other',
               {
-                count: session.artifacts.length,
+                count: session.artifact_count,
               },
             )}
           />
-          {session.warnings.length > 0 && (
+          {session.warning_count > 0 && (
             <Chip
               size="small"
               color="warning"
               icon={<WarningAmberRounded />}
               label={t(
-                session.warnings.length === 1
+                session.warning_count === 1
                   ? 'settings.trafficTracer.sessions.warnings_one'
                   : 'settings.trafficTracer.sessions.warnings_other',
                 {
-                  count: session.warnings.length,
+                  count: session.warning_count,
                 },
               )}
             />

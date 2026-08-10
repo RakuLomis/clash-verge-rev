@@ -189,8 +189,12 @@ export interface CaptureLockSnapshot {
 }
 
 export interface SessionListResult {
-  sessions: SessionManifest[]
+  sessions: SessionSummary[]
   corrupt: CorruptSession[]
+  offset: number
+  limit: number
+  total: number
+  has_more: boolean
 }
 
 export interface SessionScope {
@@ -214,6 +218,25 @@ export type SessionScopeSelector =
 export interface CorruptSession {
   session_dir: string
   message: string
+}
+
+export interface SessionSummary {
+  schema_version: number
+  session_id: string
+  job_id: string
+  state: JobState
+  created_at: string
+  updated_at: string
+  started_at?: string | null
+  completed_at?: string | null
+  session_dir: string
+  target: SessionTarget
+  artifact_count: number
+  warning_count: number
+  quality_state: string | null
+  capture_global_quality_state: string | null
+  coverage: Record<string, unknown> | null
+  error?: SessionError | null
 }
 
 export interface SessionManifest {

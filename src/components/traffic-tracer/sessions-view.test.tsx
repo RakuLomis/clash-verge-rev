@@ -25,7 +25,7 @@ vi.mock('./session-detail', () => ({
   TrafficTracerSessionDetail: () => null,
 }))
 
-import type { SessionManifest, SessionScope } from '@/types/traffic-tracer'
+import type { SessionScope, SessionSummary } from '@/types/traffic-tracer'
 
 import { TrafficTracerSessionsView } from './sessions-view'
 
@@ -38,7 +38,7 @@ const scope: SessionScope = {
   exists: true,
 }
 
-const session: SessionManifest = {
+const session: SessionSummary = {
   schema_version: 2,
   session_id: '6a877821-2019-4e5f-8297-39e2d77e08a1',
   job_id: '2f746e31-d62a-4e1c-a919-3f88ecde31c2',
@@ -47,14 +47,11 @@ const session: SessionManifest = {
   updated_at: '2026-08-05T11:03:56.685Z',
   session_dir: `${scope.directory}/example.com/main-page__https_example.com`,
   target: { url: 'https://example.com/', domain: 'example.com' },
-  component_versions: {
-    traffictracer: { version: 'complete', commit: 'tt' },
-    mihomo: { version: 'complete', commit: 'mihomo' },
-    clash_verge_rev: { version: 'complete', commit: 'ui' },
-    worker_api: 2,
-  },
-  artifacts: [],
-  warnings: [],
+  artifact_count: 0,
+  warning_count: 0,
+  quality_state: 'passed',
+  capture_global_quality_state: 'passed',
+  coverage: null,
 }
 
 function renderView(props: { activeJobId?: string | null } = {}) {
@@ -95,6 +92,10 @@ describe('TrafficTracer scoped Sessions', () => {
       scope,
       sessions: [session],
       corrupt: [],
+      offset: 0,
+      limit: 8,
+      total: 1,
+      has_more: false,
     })
 
     renderView()
@@ -113,6 +114,10 @@ describe('TrafficTracer scoped Sessions', () => {
       scope,
       sessions: [session],
       corrupt: [],
+      offset: 0,
+      limit: 8,
+      total: 1,
+      has_more: false,
     })
 
     renderView({ activeJobId: session.job_id })
@@ -124,6 +129,6 @@ describe('TrafficTracer scoped Sessions', () => {
     })
     expect(await screen.findByText('Current capture')).toBeInTheDocument()
     expect(await screen.findByText('example.com')).toBeInTheDocument()
-    expect(mocks.listScoped).toHaveBeenCalledWith(scope.scope_id)
+    expect(mocks.listScoped).toHaveBeenCalledWith(scope.scope_id, 0, 8)
   })
 })

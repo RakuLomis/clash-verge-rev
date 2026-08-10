@@ -13,7 +13,7 @@ import type {
   AnalysisOptions,
   JobSnapshot,
   SessionListResult,
-  SessionManifest,
+  SessionSummary,
 } from '@/types/traffic-tracer'
 
 export const trafficTracerSessionsKey = ['trafficTracer', 'sessions'] as const
@@ -33,7 +33,7 @@ export const trafficTracerSessionKey = (
 export const trafficTracerFlowsKey = ['trafficTracer', 'flows'] as const
 
 export interface SessionPage {
-  sessions: SessionManifest[]
+  sessions: SessionSummary[]
   corrupt: SessionListResult['corrupt']
   offset: number
   limit: number
@@ -49,13 +49,43 @@ export function paginateTrafficTracerSessions(
     ? Math.max(0, Math.trunc(offset))
     : 0
   const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.trunc(limit)) : 20
-  const sessions = result?.sessions ?? []
   return {
-    sessions: sessions.slice(safeOffset, safeOffset + safeLimit),
+    sessions: result?.sessions ?? [],
     corrupt: result?.corrupt ?? [],
-    offset: safeOffset,
-    limit: safeLimit,
-    total: sessions.length,
+    offset: result?.offset ?? safeOffset,
+    limit: result?.limit ?? safeLimit,
+    total: result?.total ?? 0,
+  }
+}
+
+export function useAllTrafficTracerSessions(
+  enabled = true,
+  workspaceRoot = '',
+) {
+  const sessionsQuery = useQuery({
+    queryKey: [...trafficTracerSessionsKey, workspaceRoot, 'all'],
+    queryFn: async () => {
+      const sessions: SessionSummary[] = []
+      let offset = 0
+      while (true) {
+        const page = await listTrafficTracerSessions(offset, 100)
+        sessions.push(...page.sessions)
+        if (!page.has_more) {
+          return { sessions, corrupt: page.corrupt, total: page.total }
+        }
+        offset += page.sessions.length
+        if (page.sessions.length === 0) {
+          throw new Error('TrafficTracer Session pagination made no progress')
+        }
+      }
+    },
+    enabled,
+  })
+  return {
+    sessions: sessionsQuery.data?.sessions ?? [],
+    corrupt: sessionsQuery.data?.corrupt ?? [],
+    total: sessionsQuery.data?.total ?? 0,
+    sessionsQuery,
   }
 }
 
@@ -67,8 +97,8 @@ export function useTrafficTracerSessions(
 ) {
   const queryClient = useQueryClient()
   const sessionsQuery = useQuery({
-    queryKey: [...trafficTracerSessionsKey, workspaceRoot],
-    queryFn: listTrafficTracerSessions,
+    queryKey: [...trafficTracerSessionsKey, workspaceRoot, offset, limit],
+    queryFn: () => listTrafficTracerSessions(offset, limit),
     enabled,
   })
 
@@ -128,9 +158,13 @@ export function useTrafficTracerScopedSessions(
   const queryClient = useQueryClient()
   const sessionsQuery = useQuery({
     queryKey: scopeId
-      ? trafficTracerScopedSessionsKey(workspaceRoot, scopeId)
+      ? [
+          ...trafficTracerScopedSessionsKey(workspaceRoot, scopeId),
+          offset,
+          limit,
+        ]
       : [...trafficTracerSessionsKey, 'scope', workspaceRoot, 'none'],
-    queryFn: () => listTrafficTracerScopedSessions(scopeId!),
+    queryFn: () => listTrafficTracerScopedSessions(scopeId!, offset, limit),
     enabled: enabled && scopeId !== null,
   })
 

@@ -27,7 +27,7 @@ import type {
   CoverageSummary,
   FlowRecord,
   JobSnapshot,
-  SessionManifest,
+  SessionSummary,
   RequestIndexRecord,
 } from '@/types/traffic-tracer'
 
@@ -77,7 +77,7 @@ const blockingEnvironment: CompleteEnvironmentReport = {
   },
 }
 
-const session: SessionManifest = {
+const session: SessionSummary = {
   schema_version: 1,
   session_id: 'session-one',
   job_id: 'job-one',
@@ -86,14 +86,11 @@ const session: SessionManifest = {
   updated_at: '2026-01-01T00:00:30Z',
   session_dir: '/tmp/session-one',
   target: { url: 'https://example.com/', domain: 'example.com' },
-  component_versions: {
-    traffictracer: { version: '1', commit: 'tt' },
-    mihomo: { version: '1', commit: 'mihomo' },
-    clash_verge_rev: { version: '1', commit: 'ui' },
-    worker_api: 1,
-  },
-  artifacts: [],
-  warnings: [],
+  artifact_count: 0,
+  warning_count: 0,
+  quality_state: 'passed',
+  capture_global_quality_state: 'passed',
+  coverage: null,
 }
 
 const flow: FlowRecord = {

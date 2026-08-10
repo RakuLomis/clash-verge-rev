@@ -3,12 +3,13 @@ import {
   Box,
   Button,
   Chip,
+  Collapse,
   LinearProgress,
   Paper,
   Stack,
   Typography,
 } from '@mui/material'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import type { BatchStatusResult } from '@/types/traffic-tracer'
 
@@ -31,6 +32,25 @@ export function TrafficTracerBatchProgress({
 }) {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const { batch } = status
+  const terminal = ['completed', 'failed', 'cancelled', 'interrupted'].includes(
+    batch.state,
+  )
+  const detailsKey = `${batch.batch_id}:${terminal}`
+  const [detailsOverride, setDetailsOverride] = useState<{
+    key: string
+    open: boolean
+  } | null>(null)
+  const detailsOpen =
+    detailsOverride?.key === detailsKey ? detailsOverride.open : !terminal
+  const currentRowRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!detailsOpen || terminal) return
+    const row = currentRowRef.current
+    if (typeof row?.scrollIntoView === 'function') {
+      row.scrollIntoView({ block: 'nearest' })
+    }
+  }, [batch.current_index, detailsOpen, terminal])
   const position = batch.current_index ?? batch.resume.next_index
   const completed = batch.children.filter(
     (child) => child.state === 'completed',
@@ -77,38 +97,100 @@ export function TrafficTracerBatchProgress({
             before the capture group stops.
           </Alert>
         )}
-        <Stack spacing={0.75}>
-          {batch.children.map((child, index) => {
-            const target = batch.targets[index]
-            return (
-              <Stack
-                key={target.index}
-                direction="row"
-                spacing={1}
-                sx={{ alignItems: 'center' }}
-              >
-                <Chip size="small" label={child.state} />
-                <Typography
-                  variant="body2"
-                  sx={{ flex: 1, overflowWrap: 'anywhere' }}
-                >
-                  {index + 1}. {target.domain} — {target.url}
-                  {child.error
-                    ? ` · ${child.error.code}: ${child.error.message}`
-                    : ''}
-                </Typography>
-                {child.session_id && (
-                  <Button
-                    size="small"
-                    onClick={() => setSessionId(child.session_id)}
-                  >
-                    Analysis
-                  </Button>
-                )}
-              </Stack>
-            )
-          })}
+        <Stack
+          direction="row"
+          sx={{ alignItems: 'center', justifyContent: 'space-between' }}
+        >
+          <Typography variant="body2" color="text.secondary">
+            {completed} completed · {batch.targets.length - completed} remaining
+          </Typography>
+          <Button
+            size="small"
+            onClick={() =>
+              setDetailsOverride({ key: detailsKey, open: !detailsOpen })
+            }
+          >
+            {detailsOpen ? 'Hide targets' : 'Show targets'}
+          </Button>
         </Stack>
+        <Collapse in={detailsOpen}>
+          <Box
+            sx={{
+              maxHeight: 240,
+              overflowY: 'auto',
+              border: 1,
+              borderColor: 'divider',
+              borderRadius: 1,
+              p: 0.75,
+            }}
+          >
+            <Stack spacing={0.5}>
+              {batch.children.map((child, index) => {
+                const target = batch.targets[index]
+                return (
+                  <Stack
+                    key={target.index}
+                    ref={index === batch.current_index ? currentRowRef : null}
+                    direction="row"
+                    spacing={1}
+                    sx={{
+                      alignItems: 'center',
+                      minHeight: 32,
+                      px: 0.5,
+                      borderRadius: 0.5,
+                      bgcolor:
+                        index === batch.current_index
+                          ? 'action.selected'
+                          : 'transparent',
+                    }}
+                  >
+                    <Chip
+                      size="small"
+                      label={child.state}
+                      sx={{ minWidth: 82 }}
+                    />
+                    <Typography
+                      variant="body2"
+                      title={`${target.domain} — ${target.url}`}
+                      sx={{
+                        flex: 1,
+                        minWidth: 0,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {index + 1}. {target.domain} — {target.url}
+                    </Typography>
+                    {child.error && (
+                      <Typography
+                        variant="caption"
+                        color="error"
+                        title={`${child.error.code}: ${child.error.message}`}
+                        sx={{
+                          maxWidth: 220,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {child.error.code}
+                      </Typography>
+                    )}
+                    {child.session_id && (
+                      <Button
+                        size="small"
+                        onClick={() => setSessionId(child.session_id)}
+                      >
+                        Analysis
+                      </Button>
+                    )}
+                  </Stack>
+                )
+              })}
+            </Stack>
+          </Box>
+        </Collapse>
         <Stack direction="row" spacing={1} sx={{ justifyContent: 'flex-end' }}>
           {batch.state === 'running' && (
             <Button

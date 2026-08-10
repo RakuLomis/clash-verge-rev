@@ -647,8 +647,11 @@ export function resumeTrafficTracerBatch(batchId: string) {
   return invoke<TrafficTracer.JobSnapshot>('tt_batch_resume', { batchId })
 }
 
-export function listTrafficTracerSessions() {
-  return invoke<TrafficTracer.SessionListResult>('tt_session_list')
+export function listTrafficTracerSessions(offset = 0, limit = 20) {
+  return invoke<TrafficTracer.SessionListResult>('tt_session_list', {
+    offset,
+    limit,
+  })
 }
 
 export function resolveTrafficTracerSessionScope(
@@ -661,10 +664,14 @@ export function resolveTrafficTracerSessionScope(
   })
 }
 
-export function listTrafficTracerScopedSessions(scopeId: string) {
+export function listTrafficTracerScopedSessions(
+  scopeId: string,
+  offset = 0,
+  limit = 20,
+) {
   return invoke<TrafficTracer.ScopedSessionListResult>(
     'tt_session_scope_list',
-    { scopeId },
+    { scopeId, offset, limit },
   )
 }
 
