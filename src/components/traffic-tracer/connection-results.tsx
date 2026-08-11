@@ -44,6 +44,29 @@ function endpoint(flow: ConnectionIndexRecord['pre_flow'] | null) {
   return `${flow.network} ${src}:${flow.src_port} → ${dst}:${flow.dst_port}`
 }
 
+function egressOutcome(connection: ConnectionIndexRecord) {
+  return connection.egress?.outcome || connection.egress?.mode || 'unknown'
+}
+
+function noSocketEgress(connection: ConnectionIndexRecord) {
+  return ['rejected', 'rejected_drop', 'internal_dns', 'pass'].includes(
+    egressOutcome(connection),
+  )
+}
+
+function egressColor(connection: ConnectionIndexRecord) {
+  const outcome = egressOutcome(connection)
+  if (outcome === 'proxy') return 'primary' as const
+  if (outcome === 'direct') return 'success' as const
+  if (outcome === 'rejected' || outcome === 'rejected_drop') {
+    return 'error' as const
+  }
+  if (outcome === 'internal_dns' || outcome === 'pass') {
+    return 'info' as const
+  }
+  return 'default' as const
+}
+
 function localOnlyConnectionIds(requests: RequestIndexRecord[]) {
   const observations = new Map<string, Set<string>>()
   requests.forEach((request) => {
@@ -129,11 +152,16 @@ export function TrafficTracerConnectionResults({
   const localEndpointCount =
     pageQuality?.egress_establishment.not_applicable_local_endpoint ??
     localConnectionIds.size
+  const noSocketOutcomeCount =
+    pageQuality?.egress_establishment.not_applicable_outcome ??
+    connections.filter(noSocketEgress).length
   const globalLocalEndpointCount =
     quality?.capture_global?.logical_flows.not_applicable_local_endpoint ?? 0
   const applicableEgress = Math.max(
     0,
-    (pageQuality?.egress_establishment.total ?? 0) - localEndpointCount,
+    (pageQuality?.egress_establishment.total ?? 0) -
+      localEndpointCount -
+      noSocketOutcomeCount,
   )
   const applicablePcap =
     pageQuality?.pcap_extraction.applicable ??
@@ -156,6 +184,12 @@ export function TrafficTracerConnectionResults({
         <Alert severity="info">
           Local endpoint probes: {localEndpointCount} · pre-proxy evidence
           retained · post-proxy flow not applicable
+        </Alert>
+      )}
+      {noSocketOutcomeCount > 0 && (
+        <Alert severity="info">
+          Explicit no-socket egress outcomes: {noSocketOutcomeCount} · rejected,
+          internal DNS, or pass flows retain pre-proxy evidence
         </Alert>
       )}
       {summary?.quality_state && summary.quality_state !== 'passed' && (
@@ -241,9 +275,11 @@ export function TrafficTracerConnectionResults({
             <Chip
               variant="outlined"
               label={
-                localEndpointCount > 0
-                  ? `Egress: ${pageQuality.egress_establishment.established}/${applicableEgress} applicable established · ${pageQuality.egress_establishment.failed_before_socket} dial failed · ${localEndpointCount} local N/A`
-                  : `Egress: ${pageQuality.egress_establishment.established}/${pageQuality.egress_establishment.total} established · ${pageQuality.egress_establishment.failed_before_socket} dial failed`
+                noSocketOutcomeCount > 0
+                  ? `Egress: ${pageQuality.egress_establishment.established}/${applicableEgress} socket-applicable established · ${pageQuality.egress_establishment.failed_before_socket} dial failed · ${noSocketOutcomeCount} explicit no-socket`
+                  : localEndpointCount > 0
+                    ? `Egress: ${pageQuality.egress_establishment.established}/${applicableEgress} applicable established · ${pageQuality.egress_establishment.failed_before_socket} dial failed · ${localEndpointCount} local N/A`
+                    : `Egress: ${pageQuality.egress_establishment.established}/${pageQuality.egress_establishment.total} established · ${pageQuality.egress_establishment.failed_before_socket} dial failed`
               }
             />
           )}
@@ -385,20 +421,20 @@ export function TrafficTracerConnectionResults({
                         : ''}
                     </Typography>
                   </TableCell>
-                  <TableCell>{endpoint(connection.post_flow)}</TableCell>
+                  <TableCell>
+                    {connection.post_flow
+                      ? endpoint(connection.post_flow)
+                      : noSocketEgress(connection)
+                        ? `Not applicable · ${egressOutcome(connection)}`
+                        : '—'}
+                  </TableCell>
                   <TableCell>
                     {connection.egress ? (
                       <>
                         <Chip
                           size="small"
-                          color={
-                            connection.egress.mode === 'proxy'
-                              ? 'primary'
-                              : connection.egress.mode === 'direct'
-                                ? 'success'
-                                : 'default'
-                          }
-                          label={connection.egress.mode}
+                          color={egressColor(connection)}
+                          label={egressOutcome(connection)}
                         />
                         <Typography variant="caption" sx={{ display: 'block' }}>
                           {connection.egress.selection_chain.join(' → ') || '—'}

@@ -818,6 +818,57 @@ describe('TrafficTracer Complete workspace', () => {
     ).toBeInTheDocument()
   })
 
+  it('renders explicit rejected egress without treating post-flow as missing', () => {
+    const connection: ConnectionIndexRecord = {
+      connection_id: `conn-${'9'.repeat(32)}`,
+      protocol: 'tcp',
+      pre_flow: flow.pre_flow,
+      post_flow: null,
+      terminal: {
+        status: 'closed',
+        stage: 'reject',
+        error: '',
+        bytes_up: 0,
+        bytes_down: 0,
+        duration_ms: 1,
+      },
+      shared: false,
+      egress: {
+        mode: 'unknown',
+        outcome: 'rejected',
+        policy: 'Taobao',
+        selection_chain: ['Taobao', 'REJECT'],
+        selected_node: 'REJECT',
+        selected_type: 'Reject',
+        evidence: 'mihomo_trace',
+      },
+      request_ids: [],
+      primary_url: 'https://taobao.com/',
+      urls: ['https://taobao.com/'],
+      match: {
+        status: 'matched',
+        method: 'netlog_socket',
+        confidence: 1,
+        evidence: ['mihomo_connection_id'],
+        candidates: [],
+      },
+    }
+
+    render(
+      <TrafficTracerConnectionResults
+        requests={[]}
+        connections={[connection]}
+      />,
+    )
+
+    expect(
+      screen.getByText(/Explicit no-socket egress outcomes: 1/),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Not applicable · rejected')).toBeInTheDocument()
+    expect(screen.getByText('rejected')).toBeInTheDocument()
+    expect(screen.getByText('Taobao → REJECT')).toBeInTheDocument()
+  })
+
   it('explains unavailable connection artifacts for a legacy Session', () => {
     render(
       <TrafficTracerConnectionResults

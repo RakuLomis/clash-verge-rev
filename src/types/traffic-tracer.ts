@@ -393,6 +393,15 @@ export interface ConnectionIndexRecord {
   }
   egress?: {
     mode: 'direct' | 'proxy' | 'unknown'
+    outcome?:
+      | 'direct'
+      | 'proxy'
+      | 'rejected'
+      | 'rejected_drop'
+      | 'internal_dns'
+      | 'pass'
+      | 'compatible'
+      | 'unknown'
     policy: string | null
     selection_chain: string[]
     selected_node: string | null
@@ -444,6 +453,7 @@ export interface AnalysisPageQuality {
     failed_before_socket: number
     unavailable: number
     not_applicable_local_endpoint?: number
+    not_applicable_outcome?: number
   }
   pcap_extraction: {
     requested: boolean
