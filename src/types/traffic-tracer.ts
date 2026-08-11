@@ -352,6 +352,7 @@ export interface RequestIndexRecord {
     | 'service_worker'
     | 'prefetch_cache'
     | 'browser_internal'
+    | 'local_endpoint'
     | 'unknown'
   attribution: {
     status: 'matched' | 'ambiguous' | 'unmatched'
@@ -440,13 +441,16 @@ export interface AnalysisPageQuality {
     established: number
     failed_before_socket: number
     unavailable: number
+    not_applicable_local_endpoint?: number
   }
   pcap_extraction: {
     requested: boolean
     total: number
+    applicable?: number
     pre_success: number
     post_success: number
     complete_pairs: number
+    post_not_applicable?: number
   }
 }
 

@@ -573,6 +573,56 @@ describe('TrafficTracer Complete workspace', () => {
         },
       },
     ]
+    const localConnectionId = `conn-${'4'.repeat(32)}`
+    requests.push({
+      request_id: 'local-probe',
+      url: 'http://localhost.weixin.qq.com/',
+      resource_type: 'Document',
+      relation: 'cross_site',
+      connection_id: localConnectionId,
+      candidate_connection_ids: [localConnectionId],
+      network_observation: 'local_endpoint',
+      attribution: {
+        status: 'matched',
+        method: 'netlog_socket',
+        confidence: 1,
+        evidence: ['transport_request_ids'],
+      },
+    })
+    connections.push({
+      ...connections[0],
+      connection_id: localConnectionId,
+      application_protocol: 'h2',
+      attempted_protocols: [],
+      request_ids: ['local-probe'],
+      primary_url: 'http://localhost.weixin.qq.com/',
+      urls: ['http://localhost.weixin.qq.com/'],
+      terminal: {
+        ...connections[0].terminal!,
+        error: 'connection refused',
+        error_class: 'connection_refused',
+      },
+      sharing: {
+        request_multiplexed: false,
+        post_flow_shared: false,
+        outer_connection_reused: false,
+      },
+      egress: {
+        mode: 'direct',
+        policy: null,
+        selection_chain: [],
+        selected_node: null,
+        selected_type: null,
+        evidence: 'local_endpoint',
+      },
+      match: {
+        status: 'matched',
+        method: 'netlog_socket',
+        confidence: 1,
+        evidence: ['local_endpoint'],
+        candidates: [],
+      },
+    })
     const summary: CoverageSummary = {
       coverage_source: 'v2_indexes',
       match_method_counts: { endpoint_time: 1 },
@@ -610,17 +660,20 @@ describe('TrafficTracer Complete workspace', () => {
           unmatched: 0,
         },
         egress_establishment: {
-          total: 1,
+          total: 2,
           established: 0,
           failed_before_socket: 1,
           unavailable: 0,
+          not_applicable_local_endpoint: 1,
         },
         pcap_extraction: {
           requested: true,
-          total: 1,
+          total: 2,
+          applicable: 1,
           pre_success: 1,
           post_success: 0,
           complete_pairs: 0,
+          post_not_applicable: 1,
         },
       },
       coverage: {
@@ -687,7 +740,7 @@ describe('TrafficTracer Complete workspace', () => {
     expect(screen.getAllByText('https://cdn.example/one.js')).toHaveLength(2)
     expect(screen.getByText('https://cdn.example/two.js')).toBeInTheDocument()
     expect(screen.getByText(/2 request\(s\).*2 URL\(s\)/)).toBeInTheDocument()
-    expect(screen.getByText('dial_error · dial')).toBeInTheDocument()
+    expect(screen.getAllByText('dial_error · dial')).toHaveLength(2)
     expect(screen.getByText('2 candidates')).toBeInTheDocument()
     expect(
       screen.getByText('Youtube → Proxy group → Vless node'),
@@ -704,6 +757,9 @@ describe('TrafficTracer Complete workspace', () => {
       screen.getByText('cdn.example · ipv4_timeout: 1'),
     ).toBeInTheDocument()
     expect(
+      screen.queryByText(/localhost\.weixin\.qq\.com · connection_refused/),
+    ).not.toBeInTheDocument()
+    expect(
       screen.getByText('Page analysis quality: degraded'),
     ).toBeInTheDocument()
     expect(
@@ -712,9 +768,18 @@ describe('TrafficTracer Complete workspace', () => {
     expect(screen.getByText('POST_FLOW_UNAVAILABLE: 2')).toBeInTheDocument()
     expect(screen.getByText('EGRESS_DIAL_FAILED: 1')).toBeInTheDocument()
     expect(
-      screen.getByText(/Egress: 0\/1 established · 1 dial failed/),
+      screen.getByText(
+        /Egress: 0\/1 applicable established · 1 dial failed · 1 local N\/A/,
+      ),
     ).toBeInTheDocument()
-    expect(screen.getByText(/PCAP pairs: 0\/1/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/PCAP pairs: 0\/1 applicable.*1 local post N\/A/),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        /Local endpoint probes: 1.*post-proxy flow not applicable/,
+      ),
+    ).toBeInTheDocument()
     expect(
       screen.getByText('app: unknown · attempted QUIC'),
     ).toBeInTheDocument()

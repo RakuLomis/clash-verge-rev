@@ -43,9 +43,30 @@ function endpoint(flow: ConnectionIndexRecord['pre_flow'] | null) {
   return `${flow.network} ${src}:${flow.src_port} → ${dst}:${flow.dst_port}`
 }
 
-function groupedConnectionFailures(connections: ConnectionIndexRecord[]) {
+function localOnlyConnectionIds(requests: RequestIndexRecord[]) {
+  const observations = new Map<string, Set<string>>()
+  requests.forEach((request) => {
+    if (!request.connection_id) return
+    const values = observations.get(request.connection_id) || new Set<string>()
+    values.add(request.network_observation || 'unknown')
+    observations.set(request.connection_id, values)
+  })
+  return new Set(
+    [...observations.entries()]
+      .filter(([, values]) =>
+        [...values].every((value) => value === 'local_endpoint'),
+      )
+      .map(([connectionId]) => connectionId),
+  )
+}
+
+function groupedConnectionFailures(
+  connections: ConnectionIndexRecord[],
+  localConnectionIds: Set<string>,
+) {
   const groups = new Map<string, number>()
   connections.forEach((connection) => {
+    if (localConnectionIds.has(connection.connection_id)) return
     if (!connection.terminal?.status.endsWith('error')) return
     let host = 'unknown host'
     if (connection.primary_url) {
@@ -102,9 +123,33 @@ export function TrafficTracerConnectionResults({
   const globalWarnings = qualityWarnings.filter(
     (warning) => warning.scope === 'capture_global',
   )
-  const connectionFailures = groupedConnectionFailures(connections)
+  const localConnectionIds = localOnlyConnectionIds(requests)
+  const localEndpointCount =
+    pageQuality?.egress_establishment.not_applicable_local_endpoint ??
+    localConnectionIds.size
+  const applicableEgress = Math.max(
+    0,
+    (pageQuality?.egress_establishment.total ?? 0) - localEndpointCount,
+  )
+  const applicablePcap =
+    pageQuality?.pcap_extraction.applicable ??
+    Math.max(
+      0,
+      (pageQuality?.pcap_extraction.total ?? 0) -
+        (pageQuality?.pcap_extraction.post_not_applicable ?? 0),
+    )
+  const connectionFailures = groupedConnectionFailures(
+    connections,
+    localConnectionIds,
+  )
   return (
     <Stack spacing={2} data-testid="traffic-tracer-connection-results">
+      {localEndpointCount > 0 && (
+        <Alert severity="info">
+          Local endpoint probes: {localEndpointCount} · pre-proxy evidence
+          retained · post-proxy flow not applicable
+        </Alert>
+      )}
       {summary?.quality_state && summary.quality_state !== 'passed' && (
         <Alert
           severity={summary.quality_state === 'failed' ? 'error' : 'warning'}
@@ -183,13 +228,21 @@ export function TrafficTracerConnectionResults({
           {pageQuality && (
             <Chip
               variant="outlined"
-              label={`Egress: ${pageQuality.egress_establishment.established}/${pageQuality.egress_establishment.total} established · ${pageQuality.egress_establishment.failed_before_socket} dial failed`}
+              label={
+                localEndpointCount > 0
+                  ? `Egress: ${pageQuality.egress_establishment.established}/${applicableEgress} applicable established · ${pageQuality.egress_establishment.failed_before_socket} dial failed · ${localEndpointCount} local N/A`
+                  : `Egress: ${pageQuality.egress_establishment.established}/${pageQuality.egress_establishment.total} established · ${pageQuality.egress_establishment.failed_before_socket} dial failed`
+              }
             />
           )}
           {pageQuality?.pcap_extraction.requested && (
             <Chip
               variant="outlined"
-              label={`PCAP pairs: ${pageQuality.pcap_extraction.complete_pairs}/${pageQuality.pcap_extraction.total} · pre ${pageQuality.pcap_extraction.pre_success} · post ${pageQuality.pcap_extraction.post_success}`}
+              label={
+                localEndpointCount > 0
+                  ? `PCAP pairs: ${pageQuality.pcap_extraction.complete_pairs}/${applicablePcap} applicable · pre ${pageQuality.pcap_extraction.pre_success} · post ${pageQuality.pcap_extraction.post_success} · ${pageQuality.pcap_extraction.post_not_applicable ?? localEndpointCount} local post N/A`
+                  : `PCAP pairs: ${pageQuality.pcap_extraction.complete_pairs}/${pageQuality.pcap_extraction.total} · pre ${pageQuality.pcap_extraction.pre_success} · post ${pageQuality.pcap_extraction.post_success}`
+              }
             />
           )}
         </Stack>
