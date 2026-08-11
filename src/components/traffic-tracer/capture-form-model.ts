@@ -99,6 +99,7 @@ export const defaultCaptureFormDraft: CaptureFormDraft = {
     collect_netlog: true,
     analyze_after_capture: true,
     headless: false,
+    pcap_split_mode: 'none',
   },
 }
 

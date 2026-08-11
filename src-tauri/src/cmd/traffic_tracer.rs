@@ -410,6 +410,7 @@ pub struct CaptureOptions {
     pub collect_netlog: bool,
     pub analyze_after_capture: bool,
     pub headless: bool,
+    pub pcap_split_mode: String,
 }
 
 impl Default for CaptureOptions {
@@ -420,6 +421,7 @@ impl Default for CaptureOptions {
             collect_netlog: true,
             analyze_after_capture: true,
             headless: false,
+            pcap_split_mode: "unique_connections".to_string(),
         }
     }
 }
@@ -742,6 +744,9 @@ pub async fn tt_batch_start(app_handle: AppHandle, request: BatchStartRequest) -
     if !request.options.analyze_after_capture {
         return Err("batch requires analysis after every capture".into());
     }
+    if !valid_pcap_split_mode(&request.options.pcap_split_mode) {
+        return Err("pcap_split_mode must be none or unique_connections".into());
+    }
     let preview = tt_target_config_load(request.config_path.clone()).await?;
     validate_batch_selection(&preview, &request)?;
     let selected_indexes = request
@@ -974,7 +979,14 @@ fn validate_capture_request(request: &CaptureStartRequest) -> CmdResult {
             return Err(format!("{label} must be an absolute path").into());
         }
     }
+    if !valid_pcap_split_mode(&request.options.pcap_split_mode) {
+        return Err("pcap_split_mode must be none or unique_connections".into());
+    }
     Ok(())
+}
+
+fn valid_pcap_split_mode(value: &str) -> bool {
+    matches!(value, "none" | "unique_connections")
 }
 
 fn valid_run_label(value: &str) -> bool {
@@ -1945,6 +1957,13 @@ mod capture_tests {
 
         request.output_root = "/tmp/traffictracer".to_owned();
         request.duration_seconds = 0;
+        assert!(validate_capture_request(&request).is_err());
+    }
+
+    #[test]
+    fn capture_spec_rejects_invalid_pcap_split_mode() {
+        let mut request = valid_request();
+        request.options.pcap_split_mode = "compressed".to_owned();
         assert!(validate_capture_request(&request).is_err());
     }
 

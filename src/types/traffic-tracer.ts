@@ -65,6 +65,7 @@ export interface CaptureOptions {
   collect_netlog: boolean
   analyze_after_capture: boolean
   headless: boolean
+  pcap_split_mode: 'none' | 'unique_connections'
 }
 
 export interface CaptureStartRequest {

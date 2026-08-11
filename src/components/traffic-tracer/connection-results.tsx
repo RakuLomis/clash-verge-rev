@@ -138,6 +138,10 @@ export function TrafficTracerConnectionResults({
       (pageQuality?.pcap_extraction.total ?? 0) -
         (pageQuality?.pcap_extraction.post_not_applicable ?? 0),
     )
+  const unavailablePcap = Math.max(
+    0,
+    applicablePcap - (pageQuality?.pcap_extraction.complete_pairs ?? 0),
+  )
   const connectionFailures = groupedConnectionFailures(
     connections,
     localConnectionIds,
@@ -240,8 +244,8 @@ export function TrafficTracerConnectionResults({
               variant="outlined"
               label={
                 localEndpointCount > 0
-                  ? `PCAP pairs: ${pageQuality.pcap_extraction.complete_pairs}/${applicablePcap} applicable · pre ${pageQuality.pcap_extraction.pre_success} · post ${pageQuality.pcap_extraction.post_success} · ${pageQuality.pcap_extraction.post_not_applicable ?? localEndpointCount} local post N/A`
-                  : `PCAP pairs: ${pageQuality.pcap_extraction.complete_pairs}/${pageQuality.pcap_extraction.total} · pre ${pageQuality.pcap_extraction.pre_success} · post ${pageQuality.pcap_extraction.post_success}`
+                  ? `PCAP pairs: ${pageQuality.pcap_extraction.complete_pairs}/${applicablePcap} applicable complete · pre ${pageQuality.pcap_extraction.pre_success} · post ${pageQuality.pcap_extraction.post_success} · ${unavailablePcap} unavailable · ${pageQuality.pcap_extraction.post_not_applicable ?? localEndpointCount} local post N/A`
+                  : `PCAP pairs: ${pageQuality.pcap_extraction.complete_pairs}/${applicablePcap} applicable complete · pre ${pageQuality.pcap_extraction.pre_success} · post ${pageQuality.pcap_extraction.post_success} · ${unavailablePcap} unavailable`
               }
             />
           )}
