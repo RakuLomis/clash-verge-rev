@@ -58,6 +58,8 @@ Sessions 列表只扫描选定 Capture group 的合法 `<domain>/<page>/manifest
 
 当前完整安装包以 Linux x86-64 为验证目标。Complete 页面是 tracing 的唯一 UI 入口，设置侧栏不再有第二个 tracing 开关；TUN 未显式设置 device 时使用 Mihomo 的 `Meta` 默认名。详见 [TrafficTracer Complete UI QuickStart](./docs/TRAFFIC_TRACER_QUICKSTART.md)，其中包含服务授权、`IPC path not ready`、自定义 Session root、批次恢复、采集权限与结果语义。
 
+新捕获默认使用 `Browser cache policy = Cold`：隔离 Chrome profile、禁用 HTTP cache 并绕过 Service Worker，确保目标文档实际经过网络；研究缓存行为时才选择 `Warm`。`Analysis storage = Standard` 只是不生成派生连接 PCAP，双侧原始 PCAP 仍保留；Session 详情会明确显示“Packet verification not requested”，可点击 `Verify packet evidence (Full)` 按需生成。
+
 ## Preview
 
 | Dark                             | Light                             |

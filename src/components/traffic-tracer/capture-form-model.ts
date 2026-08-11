@@ -100,6 +100,7 @@ export const defaultCaptureFormDraft: CaptureFormDraft = {
     analyze_after_capture: true,
     headless: false,
     pcap_split_mode: 'none',
+    cache_mode: 'cold',
   },
 }
 

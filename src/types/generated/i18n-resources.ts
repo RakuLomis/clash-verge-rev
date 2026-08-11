@@ -1225,6 +1225,8 @@ export interface TranslationResources {
         capture: {
           description: string
           fields: {
+            analysisStorage: string
+            cachePolicy: string
             chrome: string
             configFile: string
             configTarget: string
@@ -1238,6 +1240,10 @@ export interface TranslationResources {
             url: string
           }
           hints: {
+            analysisFull: string
+            analysisStandard: string
+            cacheCold: string
+            cacheWarm: string
             chrome: string
             configFile: string
             domain: string
@@ -1260,6 +1266,12 @@ export interface TranslationResources {
             manual: string
           }
           title: string
+          values: {
+            analysisFull: string
+            analysisStandard: string
+            cacheCold: string
+            cacheWarm: string
+          }
         }
         common: {
           actions: {
@@ -1537,10 +1549,12 @@ export interface TranslationResources {
           empty: string
           emptyFolder: string
           noFolderSelected: string
+          packetVerificationNotRequested: string
           schema: string
           startingAnalysis: string
           title: string
           unknownSize: string
+          verifyPacketEvidence: string
           waitingForCaptureFolder: string
           warnings_one: string
           warnings_other: string

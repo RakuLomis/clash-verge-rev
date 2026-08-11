@@ -119,6 +119,10 @@ sites:
 
 随后填写 TUN 接口、物理接口、Chrome 绝对路径和会话输出绝对目录。可选择数据包、CDP、NetLog、自动分析和无头模式。
 
+“Browser cache policy”默认选择 `Cold`：每个 Session 使用隔离 profile，导航前禁用 HTTP cache 并绕过 Service Worker，Chrome 完全退出后自动清理；仅在需要测量缓存命中时选择 `Warm`。旧任务未记录该字段时按 `Warm` 解释。
+
+“Analysis storage”默认选择 `Standard`。结果中的 `Packet verification not requested (Standard) · raw captures retained` 表示本次没有生成每连接派生 PCAP，不表示原始包不可用；在 Session 详情点击 `Verify packet evidence (Full)` 可用保留的双侧原始 PCAP 按需验证。若目标主文档全部来自缓存或 Service Worker，分析会报告 `TARGET_DOCUMENT_NON_NETWORK` 并将页面标记为 degraded。
+
 `ip route show default` 可确认物理出口，`ip -brief link` 可查看 TUN 接口。
 
 点击“检测环境”。诊断覆盖核心能力、控制器、TUN 服务、接口、捕获权限、浏览器、输出目录和磁盘。“已阻断”必须修复；“需要处理”表示可能降级。修改字段后需重新检测。

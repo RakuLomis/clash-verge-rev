@@ -66,6 +66,7 @@ export interface CaptureOptions {
   analyze_after_capture: boolean
   headless: boolean
   pcap_split_mode: 'none' | 'unique_connections'
+  cache_mode: 'cold' | 'warm'
 }
 
 export interface CaptureStartRequest {
@@ -463,6 +464,7 @@ export interface AnalysisQuality extends AnalysisPageQuality {
       with_post_flow: number
       missing_post_flow: number
       errors: number
+      not_applicable_local_endpoint?: number
     }
   }
 }

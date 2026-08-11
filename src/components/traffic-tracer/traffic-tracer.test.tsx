@@ -165,6 +165,9 @@ describe('TrafficTracer Complete workspace', () => {
   it('defaults new captures to standard analysis storage', async () => {
     render(<TrafficTracerCaptureForm onDiagnose={vi.fn()} onSubmit={vi.fn()} />)
 
+    expect(
+      await screen.findByLabelText('Browser cache policy'),
+    ).toHaveTextContent('Cold (recommended)')
     expect(await screen.findByLabelText('Analysis storage')).toHaveTextContent(
       'Standard (recommended)',
     )
@@ -197,6 +200,7 @@ describe('TrafficTracer Complete workspace', () => {
           analyze_after_capture: true,
           headless: false,
           pcap_split_mode: 'none',
+          cache_mode: 'cold',
         },
       }),
     )
@@ -264,6 +268,7 @@ describe('TrafficTracer Complete workspace', () => {
           analyze_after_capture: true,
           headless: false,
           pcap_split_mode: 'none',
+          cache_mode: 'cold',
         },
       }),
     ).toEqual({
@@ -690,6 +695,15 @@ describe('TrafficTracer Complete workspace', () => {
           complete_pairs: 0,
           post_not_applicable: 1,
         },
+        capture_global: {
+          logical_flows: {
+            total: 3,
+            with_post_flow: 1,
+            missing_post_flow: 2,
+            errors: 1,
+            not_applicable_local_endpoint: 1,
+          },
+        },
       },
       coverage: {
         browser_requests: {
@@ -766,7 +780,9 @@ describe('TrafficTracer Complete workspace', () => {
       screen.getByText(/Page flows: 0\/1 with post flow/),
     ).toBeInTheDocument()
     expect(
-      screen.getByText(/Capture-global core flows: 1\/3 with post flow/),
+      screen.getByText(
+        /Capture-global core flows: 1\/2 applicable with post flow.*1 local N\/A/,
+      ),
     ).toBeInTheDocument()
     expect(
       screen.getByText('cdn.example · ipv4_timeout: 1'),

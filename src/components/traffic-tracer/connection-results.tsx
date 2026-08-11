@@ -13,6 +13,7 @@ import {
   TableRow,
   Typography,
 } from '@mui/material'
+import { useTranslation } from 'react-i18next'
 
 import type {
   ConnectionIndexRecord,
@@ -92,6 +93,7 @@ export function TrafficTracerConnectionResults({
   isLoading = false,
   unavailable = false,
 }: TrafficTracerConnectionResultsProps) {
+  const { t } = useTranslation()
   if (isLoading) {
     return (
       <Stack sx={{ alignItems: 'center', py: 3 }}>
@@ -127,6 +129,8 @@ export function TrafficTracerConnectionResults({
   const localEndpointCount =
     pageQuality?.egress_establishment.not_applicable_local_endpoint ??
     localConnectionIds.size
+  const globalLocalEndpointCount =
+    quality?.capture_global?.logical_flows.not_applicable_local_endpoint ?? 0
   const applicableEgress = Math.max(
     0,
     (pageQuality?.egress_establishment.total ?? 0) - localEndpointCount,
@@ -226,7 +230,11 @@ export function TrafficTracerConnectionResults({
           {globalCoverage && (
             <Chip
               variant="outlined"
-              label={`Capture-global core flows: ${globalCoverage.core_logical_flows.with_post_flow}/${globalCoverage.core_logical_flows.total} with post flow · ${globalCoverage.core_logical_flows.missing_post_flow} missing`}
+              label={
+                globalLocalEndpointCount > 0
+                  ? `Capture-global core flows: ${globalCoverage.core_logical_flows.with_post_flow}/${globalCoverage.core_logical_flows.total - globalLocalEndpointCount} applicable with post flow · ${globalLocalEndpointCount} local N/A`
+                  : `Capture-global core flows: ${globalCoverage.core_logical_flows.with_post_flow}/${globalCoverage.core_logical_flows.total} with post flow · ${globalCoverage.core_logical_flows.missing_post_flow} missing`
+              }
             />
           )}
           {pageQuality && (
@@ -237,6 +245,15 @@ export function TrafficTracerConnectionResults({
                   ? `Egress: ${pageQuality.egress_establishment.established}/${applicableEgress} applicable established · ${pageQuality.egress_establishment.failed_before_socket} dial failed · ${localEndpointCount} local N/A`
                   : `Egress: ${pageQuality.egress_establishment.established}/${pageQuality.egress_establishment.total} established · ${pageQuality.egress_establishment.failed_before_socket} dial failed`
               }
+            />
+          )}
+          {pageQuality?.pcap_extraction.requested === false && (
+            <Chip
+              variant="outlined"
+              color="info"
+              label={t(
+                'settings.trafficTracer.sessions.packetVerificationNotRequested',
+              )}
             />
           )}
           {pageQuality?.pcap_extraction.requested && (

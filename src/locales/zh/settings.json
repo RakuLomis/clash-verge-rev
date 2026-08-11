@@ -828,18 +828,30 @@
         "tunInterface": "TUN 接口",
         "physicalInterface": "物理接口",
         "chrome": "Chrome / Chromium",
-        "output": "会话输出目录"
+        "output": "会话输出目录",
+        "cachePolicy": "浏览器缓存策略",
+        "analysisStorage": "分析存储"
       },
       "hints": {
         "configFile": "只读取 sites 列表；代理与环境设置仍由 Clash Verge 管理。",
         "url": "Chrome 将打开的 HTTP(S) URL。",
         "domain": "根据目标 URL 自动推导。",
         "output": "切换工作区不会移动或删除旧会话；任务运行时禁止切换。",
-        "chrome": "必须是可执行文件的绝对路径。"
+        "chrome": "必须是可执行文件的绝对路径。",
+        "cacheCold": "冷缓存使用隔离配置目录、禁用 HTTP 缓存并绕过 Service Worker。",
+        "cacheWarm": "热缓存复用页面配置目录并允许浏览器缓存。",
+        "analysisStandard": "标准模式保留原始捕获和索引；之后可通过重新分析生成连接 PCAP。",
+        "analysisFull": "完整模式会在分析时额外生成每连接的代理前/后 PCAP。"
       },
       "targetSources": {
         "manual": "手动 URL",
         "config": "YAML 配置"
+      },
+      "values": {
+        "cacheCold": "冷缓存（推荐）",
+        "cacheWarm": "热缓存",
+        "analysisStandard": "标准（推荐）",
+        "analysisFull": "完整"
       },
       "options": {
         "packets": "捕获数据包",
@@ -881,6 +893,8 @@
       "artifactsTitle": "产物",
       "unknownSize": "大小未知",
       "startingAnalysis": "正在启动分析…",
+      "verifyPacketEvidence": "验证数据包证据（完整）",
+      "packetVerificationNotRequested": "未请求数据包验证（标准）· 已保留原始捕获",
       "chooseFolder": "选择文件夹",
       "clearFolder": "清除选择",
       "currentCapture": "当前捕获",

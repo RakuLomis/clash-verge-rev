@@ -176,7 +176,10 @@ export function TrafficTracerSessionDetail({
         >
           {analysisMutation.isPending
             ? t('settings.trafficTracer.sessions.startingAnalysis')
-            : t('settings.trafficTracer.common.actions.analyzeAgain')}
+            : analysis.summary?.quality?.page_attributed?.pcap_extraction
+                  .requested === false
+              ? t('settings.trafficTracer.sessions.verifyPacketEvidence')
+              : t('settings.trafficTracer.common.actions.analyzeAgain')}
         </Button>
       </DialogActions>
     </Dialog>

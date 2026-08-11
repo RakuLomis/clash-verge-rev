@@ -828,18 +828,30 @@
         "tunInterface": "TUN interface",
         "physicalInterface": "Physical interface",
         "chrome": "Chrome / Chromium",
-        "output": "Session output directory"
+        "output": "Session output directory",
+        "cachePolicy": "瀏覽器快取策略",
+        "analysisStorage": "分析儲存"
       },
       "hints": {
         "configFile": "Loads only the sites list; proxy and environment settings remain controlled by Clash Verge.",
         "url": "HTTP(S) URL opened by Chrome.",
         "domain": "Derived from the target URL.",
         "output": "One subdirectory is created per Session.",
-        "chrome": "An absolute executable path."
+        "chrome": "An absolute executable path.",
+        "cacheCold": "冷快取使用隔離設定目錄、停用 HTTP 快取並略過 Service Worker。",
+        "cacheWarm": "熱快取重複使用頁面設定目錄並允許瀏覽器快取。",
+        "analysisStandard": "標準模式保留原始擷取與索引；之後可透過重新分析產生連線 PCAP。",
+        "analysisFull": "完整模式會在分析時額外產生每連線的代理前/後 PCAP。"
       },
       "targetSources": {
         "manual": "Manual URL",
         "config": "YAML configuration"
+      },
+      "values": {
+        "cacheCold": "冷快取（建議）",
+        "cacheWarm": "熱快取",
+        "analysisStandard": "標準（建議）",
+        "analysisFull": "完整"
       },
       "options": {
         "packets": "Packet capture",
@@ -881,6 +893,8 @@
       "artifactsTitle": "Artifacts",
       "unknownSize": "Unknown size",
       "startingAnalysis": "Starting analysis…",
+      "verifyPacketEvidence": "驗證封包證據（完整）",
+      "packetVerificationNotRequested": "未要求封包驗證（標準）· 已保留原始擷取",
       "chooseFolder": "Choose folder",
       "clearFolder": "Clear selection",
       "currentCapture": "Current capture",
