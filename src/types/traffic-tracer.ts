@@ -322,6 +322,8 @@ export interface LogicalFlowCoverage {
   with_post_flow: number
   shared: number
   missing_post_flow: number
+  not_applicable_local_endpoint?: number
+  not_applicable_outcome?: number
 }
 
 export interface LayeredCoverage {
@@ -417,6 +419,8 @@ export interface ConnectionIndexRecord {
     confidence: number
     evidence: string[]
     unmatched_reason?: string
+    candidate_count?: number
+    candidates_truncated?: boolean
     candidates: Array<{
       connection_id: string
       score: number
@@ -475,8 +479,36 @@ export interface AnalysisQuality extends AnalysisPageQuality {
       missing_post_flow: number
       errors: number
       not_applicable_local_endpoint?: number
+      not_applicable_outcome?: number
     }
   }
+}
+
+export interface TraceSnapshotEntry {
+  source: 'mihomo_barrier' | 'legacy_unbounded'
+  cutoff_event_seq: number | null
+  barrier_ts: string
+  barrier_session_id: string
+  late_event_count: number
+  max_observed_event_seq: number
+  barrier_verified?: boolean
+}
+
+export interface TraceSnapshotSummary {
+  source: 'mihomo_barrier' | 'legacy_unbounded' | 'mixed'
+  trace_count: number
+  late_event_count: number
+  traces: TraceSnapshotEntry[]
+}
+
+export interface AnalysisStorageSummary {
+  capture_bytes: number
+  raw_packet_capture_bytes: number
+  netlog_bytes: number
+  mihomo_trace_bytes: number
+  capture_metadata_bytes: number
+  analysis_result_bytes_before_summary: number
+  compression: 'none'
 }
 
 export interface CoverageSummary {
@@ -488,6 +520,8 @@ export interface CoverageSummary {
   capture_global_quality_state?: 'passed' | 'degraded' | 'failed'
   quality?: AnalysisQuality
   warnings?: AnalysisWarning[]
+  trace_snapshot?: TraceSnapshotSummary
+  storage?: AnalysisStorageSummary
 }
 
 export interface FlowQueryRequest {

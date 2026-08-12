@@ -37,6 +37,13 @@ function partitionLabel(name: string, value: CoveragePartition) {
   return `${name}: ${value.matched}/${value.total} matched · ${value.ambiguous} ambiguous · ${value.unmatched} unmatched${nonNetwork}`
 }
 
+function byteSize(value: number) {
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(2)} GiB`
+  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MiB`
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} KiB`
+  return `${value} B`
+}
+
 function endpoint(flow: ConnectionIndexRecord['pre_flow'] | null) {
   if (!flow) return '—'
   const src = flow.src_ip.includes(':') ? `[${flow.src_ip}]` : flow.src_ip
@@ -156,7 +163,21 @@ export function TrafficTracerConnectionResults({
     pageQuality?.egress_establishment.not_applicable_outcome ??
     connections.filter(noSocketEgress).length
   const globalLocalEndpointCount =
-    quality?.capture_global?.logical_flows.not_applicable_local_endpoint ?? 0
+    globalCoverage?.core_logical_flows.not_applicable_local_endpoint ??
+    quality?.capture_global?.logical_flows.not_applicable_local_endpoint ??
+    0
+  const globalNoSocketOutcomeCount =
+    globalCoverage?.core_logical_flows.not_applicable_outcome ??
+    quality?.capture_global?.logical_flows.not_applicable_outcome ??
+    0
+  const globalUnexpectedMissingCount = Math.max(
+    0,
+    (globalCoverage?.core_logical_flows.missing_post_flow ?? 0) -
+      (globalCoverage?.core_logical_flows.not_applicable_local_endpoint ===
+      undefined
+        ? globalLocalEndpointCount
+        : 0),
+  )
   const applicableEgress = Math.max(
     0,
     (pageQuality?.egress_establishment.total ?? 0) -
@@ -250,6 +271,23 @@ export function TrafficTracerConnectionResults({
         )}
       {summary && (
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
+          {summary.trace_snapshot && (
+            <Chip
+              variant="outlined"
+              color={
+                summary.trace_snapshot.source === 'mihomo_barrier'
+                  ? 'success'
+                  : 'warning'
+              }
+              label={`Trace snapshot: ${summary.trace_snapshot.source === 'mihomo_barrier' ? 'barrier' : summary.trace_snapshot.source} · ${summary.trace_snapshot.trace_count} trace${summary.trace_snapshot.trace_count === 1 ? '' : 's'} · ${summary.trace_snapshot.late_event_count} late events excluded`}
+            />
+          )}
+          {summary.storage && (
+            <Chip
+              variant="outlined"
+              label={`Storage: ${byteSize(summary.storage.capture_bytes)} capture · ${byteSize(summary.storage.raw_packet_capture_bytes)} raw PCAP · compression ${summary.storage.compression}`}
+            />
+          )}
           <Chip label={partitionLabel('Browser requests', browserCoverage!)} />
           <Chip
             label={partitionLabel('Transport connections', transportCoverage!)}
@@ -257,18 +295,14 @@ export function TrafficTracerConnectionResults({
           <Chip
             label={
               pageCoverage
-                ? `Page flows: ${pageCoverage.logical_flows.with_post_flow}/${pageCoverage.logical_flows.total} with post flow · ${pageCoverage.logical_flows.shared} shared`
-                : `Core flows: ${summary.coverage.core_logical_flows.with_post_flow}/${summary.coverage.core_logical_flows.total} with post flow · ${summary.coverage.core_logical_flows.shared} shared`
+                ? `Page flows: ${pageCoverage.logical_flows.with_post_flow} socket established · ${pageCoverage.logical_flows.not_applicable_outcome ?? 0} explicit no-socket · ${pageCoverage.logical_flows.missing_post_flow} unexpected missing · ${pageCoverage.logical_flows.shared} shared`
+                : `Core flows: ${summary.coverage.core_logical_flows.with_post_flow} socket established · ${summary.coverage.core_logical_flows.not_applicable_outcome ?? 0} explicit no-socket · ${summary.coverage.core_logical_flows.missing_post_flow} unexpected missing · ${summary.coverage.core_logical_flows.shared} shared`
             }
           />
           {globalCoverage && (
             <Chip
               variant="outlined"
-              label={
-                globalLocalEndpointCount > 0
-                  ? `Capture-global core flows: ${globalCoverage.core_logical_flows.with_post_flow}/${globalCoverage.core_logical_flows.total - globalLocalEndpointCount} applicable with post flow · ${globalLocalEndpointCount} local N/A`
-                  : `Capture-global core flows: ${globalCoverage.core_logical_flows.with_post_flow}/${globalCoverage.core_logical_flows.total} with post flow · ${globalCoverage.core_logical_flows.missing_post_flow} missing`
-              }
+              label={`Capture-global flows: ${globalCoverage.core_logical_flows.with_post_flow} socket established · ${globalNoSocketOutcomeCount} explicit no-socket · ${globalLocalEndpointCount} local N/A · ${globalUnexpectedMissingCount} unexpected missing`}
             />
           )}
           {pageQuality && (
@@ -510,7 +544,9 @@ export function TrafficTracerConnectionResults({
                     />
                     {connection.match.status === 'ambiguous' && (
                       <Typography variant="caption" sx={{ display: 'block' }}>
-                        {connection.match.candidates.length} candidates
+                        {connection.match.candidates_truncated
+                          ? `${connection.match.candidates.length} shown · ${connection.match.candidate_count ?? connection.match.candidates.length} total candidates`
+                          : `${connection.match.candidates.length} candidates`}
                       </Typography>
                     )}
                   </TableCell>

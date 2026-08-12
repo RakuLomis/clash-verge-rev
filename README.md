@@ -60,6 +60,8 @@ Sessions 列表只扫描选定 Capture group 的合法 `<domain>/<page>/manifest
 
 新捕获默认使用 `Browser cache policy = Cold`：隔离 Chrome profile、禁用 HTTP cache 并绕过 Service Worker，确保目标文档实际经过网络；研究缓存行为时才选择 `Warm`。`Analysis storage = Standard` 只是不生成派生连接 PCAP，双侧原始 PCAP 仍保留；Session 详情会明确显示“Packet verification not requested”，可点击 `Verify packet evidence (Full)` 按需生成。
 
+新版结果卡片同时显示 trace snapshot 和空间分解：`barrier` 表示分析严格截止到捕获结束时已落盘的 `event_seq`，`late events excluded` 是截止后仍写入原始 trace、但不会改变本次分析的事件数；历史 Session 显示 `legacy_unbounded`。显式 REJECT、REJECT-DROP、internal DNS 或 PASS 显示为 `explicit no-socket`，不再计入 unexpected missing。候选被截断时 UI 显示“shown / total candidates”，匹配胜者和总数均保留。存储 chip 显示捕获总量、raw PCAP 占用和当前压缩状态。
+
 ## Preview
 
 | Dark                             | Light                             |

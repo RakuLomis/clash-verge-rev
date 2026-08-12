@@ -287,6 +287,30 @@ describe('TrafficTracer Complete workspace', () => {
       schema_version: 1 as const,
       config_path: '/tmp/sites.yaml',
       sha256: 'a'.repeat(64),
+      trace_snapshot: {
+        source: 'mihomo_barrier',
+        trace_count: 1,
+        late_event_count: 3,
+        traces: [
+          {
+            source: 'mihomo_barrier',
+            cutoff_event_seq: 42,
+            barrier_ts: '2026-08-12T00:00:00Z',
+            barrier_session_id: 'session-one',
+            late_event_count: 3,
+            max_observed_event_seq: 45,
+          },
+        ],
+      },
+      storage: {
+        capture_bytes: 1073741824,
+        raw_packet_capture_bytes: 536870912,
+        netlog_bytes: 400000000,
+        mihomo_trace_bytes: 100000000,
+        capture_metadata_bytes: 36870912,
+        analysis_result_bytes_before_summary: 1000,
+        compression: 'none',
+      },
       warnings: [],
       suggested_output_root: null,
       targets: [
@@ -648,6 +672,30 @@ describe('TrafficTracer Complete workspace', () => {
       match_method_counts: { endpoint_time: 1 },
       quality_state: 'degraded',
       capture_global_quality_state: 'degraded',
+      trace_snapshot: {
+        source: 'mihomo_barrier',
+        trace_count: 1,
+        late_event_count: 3,
+        traces: [
+          {
+            source: 'mihomo_barrier',
+            cutoff_event_seq: 42,
+            barrier_ts: '2026-08-12T00:00:00Z',
+            barrier_session_id: 'session-one',
+            late_event_count: 3,
+            max_observed_event_seq: 45,
+          },
+        ],
+      },
+      storage: {
+        capture_bytes: 1073741824,
+        raw_packet_capture_bytes: 536870912,
+        netlog_bytes: 400000000,
+        mihomo_trace_bytes: 100000000,
+        capture_metadata_bytes: 36870912,
+        analysis_result_bytes_before_summary: 1000,
+        compression: 'none',
+      },
       warnings: [
         {
           code: 'EGRESS_DIAL_FAILED',
@@ -777,11 +825,23 @@ describe('TrafficTracer Complete workspace', () => {
     expect(screen.getByText('request multiplexing')).toBeInTheDocument()
     expect(screen.getByText(/1 non-network/)).toBeInTheDocument()
     expect(
-      screen.getByText(/Page flows: 0\/1 with post flow/),
+      screen.getByText(
+        /Page flows: 0 socket established.*0 explicit no-socket.*1 unexpected missing/,
+      ),
     ).toBeInTheDocument()
     expect(
       screen.getByText(
-        /Capture-global core flows: 1\/2 applicable with post flow.*1 local N\/A/,
+        /Capture-global flows: 1 socket established.*1 local N\/A.*1 unexpected missing/,
+      ),
+    )
+    expect(
+      screen.getByText(
+        'Trace snapshot: barrier · 1 trace · 3 late events excluded',
+      ),
+    )
+    expect(
+      screen.getByText(
+        'Storage: 1.00 GiB capture · 512.0 MiB raw PCAP · compression none',
       ),
     ).toBeInTheDocument()
     expect(
