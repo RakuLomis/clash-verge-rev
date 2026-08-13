@@ -56,9 +56,34 @@ function egressOutcome(connection: ConnectionIndexRecord) {
 }
 
 function noSocketEgress(connection: ConnectionIndexRecord) {
-  return ['rejected', 'rejected_drop', 'internal_dns', 'pass'].includes(
+  if (connection.post_flow_disposition) {
+    return connection.post_flow_disposition === 'explicit_no_socket'
+  }
+  return ['rejected', 'rejected_drop', 'internal_dns'].includes(
     egressOutcome(connection),
   )
+}
+
+function postFlowAbsenceLabel(connection: ConnectionIndexRecord) {
+  switch (connection.post_flow_disposition) {
+    case 'explicit_no_socket':
+      return 'Not applicable · ' + egressOutcome(connection)
+    case 'failed_before_socket':
+      return (
+        'Failed before socket · ' +
+        (connection.terminal?.error_class ||
+          connection.terminal?.status ||
+          'unknown failure')
+      )
+    case 'local_not_applicable':
+      return 'Local endpoint · post-flow not applicable'
+    case 'unexpected_missing':
+      return 'Unexpected post-flow absence'
+    default:
+      return noSocketEgress(connection)
+        ? 'Not applicable · ' + egressOutcome(connection)
+        : '—'
+  }
 }
 
 function egressColor(connection: ConnectionIndexRecord) {
@@ -98,7 +123,12 @@ function groupedConnectionFailures(
   const groups = new Map<string, number>()
   connections.forEach((connection) => {
     if (localConnectionIds.has(connection.connection_id)) return
-    if (!connection.terminal?.status.endsWith('error')) return
+    if (
+      connection.post_flow_disposition
+        ? connection.post_flow_disposition !== 'failed_before_socket'
+        : !connection.terminal?.status.endsWith('error')
+    )
+      return
     let host = 'unknown host'
     if (connection.primary_url) {
       try {
@@ -107,7 +137,7 @@ function groupedConnectionFailures(
         // Retain the value-safe fallback for malformed legacy URLs.
       }
     }
-    const errorClass = connection.terminal.error_class || 'transport_error'
+    const errorClass = connection.terminal?.error_class || 'transport_error'
     const key = `${host} · ${errorClass}`
     groups.set(key, (groups.get(key) || 0) + 1)
   })
@@ -147,6 +177,13 @@ export function TrafficTracerConnectionResults({
     pageCoverage?.transport_connections ??
     summary?.coverage.transport_connections
   const quality = summary?.quality
+  const pageIntegrityState =
+    summary?.analysis_integrity?.page_attributed.state ?? summary?.quality_state
+  const globalIntegrityState =
+    summary?.analysis_integrity?.capture_global.state ??
+    summary?.capture_global_quality_state
+  const pageNetworkOutcome = summary?.network_outcome?.page_attributed
+  const globalNetworkOutcome = summary?.network_outcome?.capture_global
   const pageQuality = quality?.page_attributed ?? quality
   const qualityWarnings = summary?.warnings ?? []
   const pageWarnings = qualityWarnings.filter(
@@ -163,20 +200,21 @@ export function TrafficTracerConnectionResults({
     pageQuality?.egress_establishment.not_applicable_outcome ??
     connections.filter(noSocketEgress).length
   const globalLocalEndpointCount =
+    globalCoverage?.core_logical_flows.local_not_applicable ??
     globalCoverage?.core_logical_flows.not_applicable_local_endpoint ??
     quality?.capture_global?.logical_flows.not_applicable_local_endpoint ??
     0
   const globalNoSocketOutcomeCount =
+    globalCoverage?.core_logical_flows.explicit_no_socket ??
     globalCoverage?.core_logical_flows.not_applicable_outcome ??
     quality?.capture_global?.logical_flows.not_applicable_outcome ??
     0
   const globalUnexpectedMissingCount = Math.max(
     0,
-    (globalCoverage?.core_logical_flows.missing_post_flow ?? 0) -
-      (globalCoverage?.core_logical_flows.not_applicable_local_endpoint ===
-      undefined
-        ? globalLocalEndpointCount
-        : 0),
+    globalCoverage?.core_logical_flows.unexpected_missing ??
+      (globalCoverage?.core_logical_flows.missing_post_flow ?? 0) -
+        globalLocalEndpointCount -
+        globalNoSocketOutcomeCount,
   )
   const applicableEgress = Math.max(
     0,
@@ -209,16 +247,14 @@ export function TrafficTracerConnectionResults({
       )}
       {noSocketOutcomeCount > 0 && (
         <Alert severity="info">
-          Explicit no-socket egress outcomes: {noSocketOutcomeCount} · rejected,
-          internal DNS, or pass flows retain pre-proxy evidence
+          Explicit no-socket egress outcomes: {noSocketOutcomeCount} · rejected
+          or internal DNS flows retain pre-proxy evidence
         </Alert>
       )}
-      {summary?.quality_state && summary.quality_state !== 'passed' && (
-        <Alert
-          severity={summary.quality_state === 'failed' ? 'error' : 'warning'}
-        >
+      {pageIntegrityState && pageIntegrityState !== 'passed' && (
+        <Alert severity={pageIntegrityState === 'failed' ? 'error' : 'warning'}>
           <Typography variant="subtitle2">
-            Page analysis quality: {summary.quality_state}
+            Page analysis integrity: {pageIntegrityState}
           </Typography>
           {pageWarnings.length > 0 && (
             <Stack
@@ -238,35 +274,50 @@ export function TrafficTracerConnectionResults({
           )}
         </Alert>
       )}
-      {summary?.capture_global_quality_state &&
-        summary.capture_global_quality_state !== 'passed' && (
+      {globalIntegrityState && globalIntegrityState !== 'passed' && (
+        <Alert severity={globalIntegrityState === 'failed' ? 'error' : 'info'}>
+          <Typography variant="subtitle2">
+            Capture-global analysis integrity: {globalIntegrityState}
+          </Typography>
+          {globalWarnings.length > 0 && (
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{ mt: 0.5, flexWrap: 'wrap' }}
+            >
+              {globalWarnings.map((warning) => (
+                <Chip
+                  key={`${warning.scope}:${warning.code}`}
+                  size="small"
+                  variant="outlined"
+                  label={`${warning.code}: ${warning.count}`}
+                  title={warning.message}
+                />
+              ))}
+            </Stack>
+          )}
+        </Alert>
+      )}
+      {pageNetworkOutcome &&
+        pageNetworkOutcome.state !== 'healthy' &&
+        pageNetworkOutcome.state !== 'not_applicable' && (
           <Alert
             severity={
-              summary.capture_global_quality_state === 'failed'
-                ? 'error'
-                : 'info'
+              pageNetworkOutcome.state === 'failed' ? 'error' : 'warning'
             }
           >
-            <Typography variant="subtitle2">
-              Capture-global diagnostics: {summary.capture_global_quality_state}
-            </Typography>
-            {globalWarnings.length > 0 && (
-              <Stack
-                direction="row"
-                spacing={1}
-                sx={{ mt: 0.5, flexWrap: 'wrap' }}
-              >
-                {globalWarnings.map((warning) => (
-                  <Chip
-                    key={`${warning.scope}:${warning.code}`}
-                    size="small"
-                    variant="outlined"
-                    label={`${warning.code}: ${warning.count}`}
-                    title={warning.message}
-                  />
-                ))}
-              </Stack>
-            )}
+            Page network outcome: {pageNetworkOutcome.state} ·{' '}
+            {pageNetworkOutcome.established}
+            established · {pageNetworkOutcome.failed_before_socket} failed
+            before socket
+          </Alert>
+        )}
+      {globalNetworkOutcome &&
+        globalNetworkOutcome.failed_before_socket > 0 && (
+          <Alert severity="info">
+            Capture background network failures:{' '}
+            {globalNetworkOutcome.failed_before_socket} · analysis evidence
+            remains complete
           </Alert>
         )}
       {summary && (
@@ -295,8 +346,8 @@ export function TrafficTracerConnectionResults({
           <Chip
             label={
               pageCoverage
-                ? `Page flows: ${pageCoverage.logical_flows.with_post_flow} socket established · ${pageCoverage.logical_flows.not_applicable_outcome ?? 0} explicit no-socket · ${pageCoverage.logical_flows.missing_post_flow} unexpected missing · ${pageCoverage.logical_flows.shared} shared`
-                : `Core flows: ${summary.coverage.core_logical_flows.with_post_flow} socket established · ${summary.coverage.core_logical_flows.not_applicable_outcome ?? 0} explicit no-socket · ${summary.coverage.core_logical_flows.missing_post_flow} unexpected missing · ${summary.coverage.core_logical_flows.shared} shared`
+                ? `Page flows: ${pageCoverage.logical_flows.with_post_flow} socket established · ${pageCoverage.logical_flows.explicit_no_socket ?? pageCoverage.logical_flows.not_applicable_outcome ?? 0} explicit no-socket · ${pageCoverage.logical_flows.unexpected_missing ?? pageCoverage.logical_flows.missing_post_flow} unexpected missing · ${pageCoverage.logical_flows.shared} shared`
+                : `Core flows: ${summary.coverage.core_logical_flows.with_post_flow} socket established · ${summary.coverage.core_logical_flows.explicit_no_socket ?? summary.coverage.core_logical_flows.not_applicable_outcome ?? 0} explicit no-socket · ${summary.coverage.core_logical_flows.unexpected_missing ?? summary.coverage.core_logical_flows.missing_post_flow} unexpected missing · ${summary.coverage.core_logical_flows.shared} shared`
             }
           />
           {globalCoverage && (
@@ -445,6 +496,12 @@ export function TrafficTracerConnectionResults({
                       {connection.request_ids.length} request(s) ·{' '}
                       {connection.urls.length} URL(s)
                     </Typography>
+                    {connection.attribution_scope && (
+                      <Typography variant="caption" sx={{ display: 'block' }}>
+                        Scope: {connection.attribution_scope} · evidence:{' '}
+                        {connection.attribution_evidence?.join(', ') || '—'}
+                      </Typography>
+                    )}
                   </TableCell>
                   <TableCell>
                     {endpoint(connection.pre_flow)}
@@ -458,9 +515,7 @@ export function TrafficTracerConnectionResults({
                   <TableCell>
                     {connection.post_flow
                       ? endpoint(connection.post_flow)
-                      : noSocketEgress(connection)
-                        ? `Not applicable · ${egressOutcome(connection)}`
-                        : '—'}
+                      : postFlowAbsenceLabel(connection)}
                   </TableCell>
                   <TableCell>
                     {connection.egress ? (
@@ -525,6 +580,15 @@ export function TrafficTracerConnectionResults({
                             {connection.terminal.error}
                           </Typography>
                         )}
+                        {connection.terminal.error_class && (
+                          <Typography
+                            variant="caption"
+                            sx={{ display: 'block' }}
+                          >
+                            {connection.terminal.error_class} ·{' '}
+                            {connection.terminal.error_class_source || 'legacy'}
+                          </Typography>
+                        )}
                       </>
                     ) : (
                       '—'
@@ -542,6 +606,12 @@ export function TrafficTracerConnectionResults({
                       }
                       label={`${connection.match.status} · ${connection.match.method}`}
                     />
+                    {connection.match.time_evidence?.available && (
+                      <Typography variant="caption" sx={{ display: 'block' }}>
+                        time Δ {connection.match.time_evidence.delta_ms} ms ·{' '}
+                        {connection.match.time_evidence.source}
+                      </Typography>
+                    )}
                     {connection.match.status === 'ambiguous' && (
                       <Typography variant="caption" sx={{ display: 'block' }}>
                         {connection.match.candidates_truncated

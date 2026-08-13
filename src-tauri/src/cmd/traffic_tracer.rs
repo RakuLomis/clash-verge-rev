@@ -16,7 +16,7 @@ use crate::{
         traffic_tracer::{
             lock::{CaptureLock, CaptureLockSnapshot},
             manager::{WorkerManager, WorkerManagerState, WorkerRecoveryReport, WorkerRecoveryStatus},
-            protocol::{JOB_SCHEMA_VERSION, RequestMethod},
+            protocol::{RequestMethod, JOB_SCHEMA_VERSION},
         },
     },
     feat,
@@ -1092,6 +1092,10 @@ pub struct SessionSummary {
     pub quality_state: Option<String>,
     #[serde(default)]
     pub capture_global_quality_state: Option<String>,
+    #[serde(default)]
+    pub analysis_integrity_state: Option<String>,
+    #[serde(default)]
+    pub network_outcome_state: Option<String>,
     #[serde(default)]
     pub coverage: Option<Value>,
     #[serde(default)]

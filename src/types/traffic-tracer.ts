@@ -237,6 +237,8 @@ export interface SessionSummary {
   warning_count: number
   quality_state: string | null
   capture_global_quality_state: string | null
+  analysis_integrity_state?: string | null
+  network_outcome_state?: string | null
   coverage: Record<string, unknown> | null
   error?: SessionError | null
 }
@@ -324,6 +326,10 @@ export interface LogicalFlowCoverage {
   missing_post_flow: number
   not_applicable_local_endpoint?: number
   not_applicable_outcome?: number
+  explicit_no_socket?: number
+  failed_before_socket?: number
+  local_not_applicable?: number
+  unexpected_missing?: number
 }
 
 export interface LayeredCoverage {
@@ -339,6 +345,7 @@ export interface LayeredCoverage {
   capture_global?: {
     core_logical_flows: LogicalFlowCoverage
     unmatched_reasons: Record<string, number>
+    attribution_scopes?: Record<string, number>
   }
   unmatched_reasons: Record<string, number>
 }
@@ -375,6 +382,7 @@ export interface FlowTerminal {
   bytes_down: number
   duration_ms: number
   error_class?: string
+  error_class_source?: 'core_explicit' | 'legacy_inferred' | 'unavailable'
 }
 
 export interface ConnectionIndexRecord {
@@ -382,6 +390,12 @@ export interface ConnectionIndexRecord {
   protocol: FlowNetwork
   application_protocol?: 'unknown' | 'h2' | 'h3'
   attempted_protocols?: string[]
+  timing?: {
+    first_observed: number | null
+    last_observed: number | null
+    first_observed_utc?: number | null
+    last_observed_utc?: number | null
+  }
   pre_flow: NormalizedFlowTuple
   terminal?: FlowTerminal
   netlog_source_id?: number
@@ -413,6 +427,18 @@ export interface ConnectionIndexRecord {
   request_ids: string[]
   primary_url: string | null
   urls: string[]
+  attribution_scope?:
+    | 'page_attributed'
+    | 'browser_background'
+    | 'capture_unattributed'
+    | 'local_internal'
+  attribution_evidence?: string[]
+  post_flow_disposition?:
+    | 'with_post_flow'
+    | 'explicit_no_socket'
+    | 'failed_before_socket'
+    | 'local_not_applicable'
+    | 'unexpected_missing'
   match: {
     status: 'matched' | 'ambiguous' | 'unmatched'
     method: string
@@ -421,10 +447,17 @@ export interface ConnectionIndexRecord {
     unmatched_reason?: string
     candidate_count?: number
     candidates_truncated?: boolean
+    time_evidence?: {
+      available: boolean
+      delta_ms: number | null
+      source: 'netlog_tick_offset_to_utc' | 'same_clock' | 'unavailable'
+    }
     candidates: Array<{
       connection_id: string
       score: number
       evidence: string[]
+      time_delta_ms?: number | null
+      time_source?: 'netlog_tick_offset_to_utc' | 'same_clock' | 'unavailable'
     }>
   }
 }
@@ -473,13 +506,11 @@ export interface AnalysisPageQuality {
 export interface AnalysisQuality extends AnalysisPageQuality {
   page_attributed?: AnalysisPageQuality
   capture_global?: {
-    logical_flows: {
+    logical_flows: Partial<LogicalFlowCoverage> & {
       total: number
       with_post_flow: number
       missing_post_flow: number
       errors: number
-      not_applicable_local_endpoint?: number
-      not_applicable_outcome?: number
     }
   }
 }
@@ -491,6 +522,8 @@ export interface TraceSnapshotEntry {
   barrier_session_id: string
   late_event_count: number
   max_observed_event_seq: number
+  late_event_types?: Record<string, number>
+  max_late_delay_ms?: number
   barrier_verified?: boolean
 }
 
@@ -498,6 +531,8 @@ export interface TraceSnapshotSummary {
   source: 'mihomo_barrier' | 'legacy_unbounded' | 'mixed'
   trace_count: number
   late_event_count: number
+  late_event_types?: Record<string, number>
+  max_late_delay_ms?: number
   traces: TraceSnapshotEntry[]
 }
 
@@ -511,6 +546,22 @@ export interface AnalysisStorageSummary {
   compression: 'none'
 }
 
+export interface AnalysisNetworkOutcome {
+  state:
+    | 'healthy'
+    | 'partial_failure'
+    | 'failed'
+    | 'not_applicable'
+    | 'indeterminate'
+  applicable: number
+  established: number
+  failed_before_socket: number
+  explicit_no_socket: number
+  local_not_applicable: number
+  unexpected_missing: number
+  failed_requests?: number
+}
+
 export interface CoverageSummary {
   analysis_generation_id?: string
   coverage: LayeredCoverage
@@ -519,6 +570,14 @@ export interface CoverageSummary {
   quality_state?: 'passed' | 'degraded' | 'failed'
   capture_global_quality_state?: 'passed' | 'degraded' | 'failed'
   quality?: AnalysisQuality
+  analysis_integrity?: {
+    page_attributed: { state: 'passed' | 'degraded' | 'failed' }
+    capture_global: { state: 'passed' | 'degraded' | 'failed' }
+  }
+  network_outcome?: {
+    page_attributed: AnalysisNetworkOutcome
+    capture_global: AnalysisNetworkOutcome
+  }
   warnings?: AnalysisWarning[]
   trace_snapshot?: TraceSnapshotSummary
   storage?: AnalysisStorageSummary

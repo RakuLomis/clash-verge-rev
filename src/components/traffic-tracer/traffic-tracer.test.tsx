@@ -851,10 +851,10 @@ describe('TrafficTracer Complete workspace', () => {
       screen.queryByText(/localhost\.weixin\.qq\.com · connection_refused/),
     ).not.toBeInTheDocument()
     expect(
-      screen.getByText('Page analysis quality: degraded'),
+      screen.getByText('Page analysis integrity: degraded'),
     ).toBeInTheDocument()
     expect(
-      screen.getByText('Capture-global diagnostics: degraded'),
+      screen.getByText('Capture-global analysis integrity: degraded'),
     ).toBeInTheDocument()
     expect(screen.getByText('POST_FLOW_UNAVAILABLE: 2')).toBeInTheDocument()
     expect(screen.getByText('EGRESS_DIAL_FAILED: 1')).toBeInTheDocument()
