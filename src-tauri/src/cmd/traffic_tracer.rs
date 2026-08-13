@@ -16,7 +16,7 @@ use crate::{
         traffic_tracer::{
             lock::{CaptureLock, CaptureLockSnapshot},
             manager::{WorkerManager, WorkerManagerState, WorkerRecoveryReport, WorkerRecoveryStatus},
-            protocol::{RequestMethod, JOB_SCHEMA_VERSION},
+            protocol::{JOB_SCHEMA_VERSION, RequestMethod},
         },
     },
     feat,
