@@ -405,7 +405,7 @@ pub struct TargetConfigEntry {
     pub run_label: String,
     pub wait_load_timeout: u32,
     pub page_type: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub playback: Option<PlaybackPolicy>,
 }
 
@@ -2205,6 +2205,50 @@ mod capture_tests {
             options: CaptureOptions::default(),
             fail_fast: true,
         }
+    }
+
+    #[test]
+    fn batch_job_serialization_omits_absent_playback() {
+        let plain = batch_target(0, "example.com");
+        let mut youtube = batch_target(1, "youtube.com");
+        youtube.playback = Some(PlaybackPolicy {
+            provider: "youtube".to_owned(),
+            ad_policy: "click_visible_skip".to_owned(),
+            desired_primary_seconds: 25,
+        });
+
+        let value = serde_json::to_value(BatchJobSpec {
+            schema_version: JOB_SCHEMA_VERSION,
+            kind: "batch",
+            job_id: "123e4567-e89b-42d3-a456-426614174000".to_owned(),
+            config_path: "/tmp/targets.yaml".to_owned(),
+            config_sha256: "a".repeat(64),
+            targets: vec![plain, youtube],
+            interfaces: CaptureInterfaces {
+                tun: "Meta".to_owned(),
+                physical: "eth0".to_owned(),
+            },
+            output_root: "/tmp/sessions".to_owned(),
+            chrome_binary: "/usr/bin/chromium".to_owned(),
+            controller: CaptureController {
+                endpoint: "unix:///tmp/mihomo.sock".to_owned(),
+                secret: String::new(),
+            },
+            options: CaptureOptions::default(),
+            fail_fast: true,
+        })
+        .unwrap();
+
+        assert_eq!(value["kind"], "batch");
+        assert!(value["targets"][0].get("playback").is_none());
+        assert_eq!(
+            value["targets"][1]["playback"],
+            serde_json::json!({
+                "provider": "youtube",
+                "ad_policy": "click_visible_skip",
+                "desired_primary_seconds": 25,
+            })
+        );
     }
 
     #[test]
