@@ -1134,6 +1134,8 @@ pub struct SessionSummary {
     #[serde(default)]
     pub coverage: Option<Value>,
     #[serde(default)]
+    pub packet_split: Value,
+    #[serde(default)]
     pub error: Option<SessionError>,
 }
 
@@ -1174,6 +1176,37 @@ struct SessionScopeIdParams {
     scope_id: String,
     offset: usize,
     limit: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PacketSplitPreview {
+    pub scope: SessionScope,
+    pub total: usize,
+    pub counts: Value,
+    pub missing_only: usize,
+    pub repair_incomplete: usize,
+    pub sessions: Vec<Value>,
+    pub corrupt: Vec<CorruptSession>,
+}
+
+#[derive(Serialize)]
+struct PacketSplitScopeParams {
+    scope_id: String,
+}
+
+#[derive(Serialize)]
+struct PacketSplitJobParams {
+    job: PacketSplitJobSpec,
+}
+
+#[derive(Serialize)]
+struct PacketSplitJobSpec {
+    schema_version: u32,
+    kind: &'static str,
+    job_id: String,
+    scope_id: String,
+    output_root: String,
+    policy: String,
 }
 
 #[derive(Serialize)]
@@ -1319,6 +1352,59 @@ pub async fn tt_session_scope_list(
         )
         .await
         .stringify_err()
+}
+
+#[tauri::command]
+pub async fn tt_packet_split_preview(scope_id: String) -> CmdResult<PacketSplitPreview> {
+    if scope_id.trim().is_empty() {
+        return Err("scope_id must not be empty".into());
+    }
+    WorkerManager::global()
+        .client()
+        .stringify_err()?
+        .request(
+            RequestMethod::SessionScopePacketSplitPreview,
+            PacketSplitScopeParams { scope_id },
+        )
+        .await
+        .stringify_err()
+}
+
+#[tauri::command]
+pub async fn tt_packet_split_start(scope_id: String, policy: String) -> CmdResult<JobSnapshot> {
+    if scope_id.trim().is_empty() {
+        return Err("scope_id must not be empty".into());
+    }
+    if !matches!(policy.as_str(), "missing_only" | "repair_incomplete") {
+        return Err("unsupported packet split policy".into());
+    }
+    let manager = WorkerManager::global();
+    let root = manager.session_root().stringify_err()?;
+    let job_id = new_job_id()?;
+    let client = manager.client().stringify_err()?;
+    manager.mark_busy(&job_id).stringify_err()?;
+    let result = client
+        .request::<_, JobSnapshot>(
+            RequestMethod::PacketSplitStart,
+            PacketSplitJobParams {
+                job: PacketSplitJobSpec {
+                    schema_version: JOB_SCHEMA_VERSION,
+                    kind: "packet_split_group",
+                    job_id: job_id.clone(),
+                    scope_id,
+                    output_root: root.to_string_lossy().into_owned(),
+                    policy,
+                },
+            },
+        )
+        .await;
+    match result {
+        Ok(snapshot) => Ok(snapshot),
+        Err(error) => {
+            let _ = manager.mark_ready(&job_id);
+            Err(error.to_string().into())
+        }
+    }
 }
 
 fn validate_session_page(limit: usize) -> CmdResult {

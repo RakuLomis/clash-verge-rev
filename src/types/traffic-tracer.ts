@@ -207,6 +207,33 @@ export interface SessionListResult {
   has_more: boolean
 }
 
+export type PacketSplitStatus =
+  | 'unsplit'
+  | 'complete'
+  | 'complete_empty'
+  | 'partial'
+  | 'stale'
+  | 'raw_missing'
+  | 'ineligible'
+
+export interface PacketSplitInspection {
+  status: PacketSplitStatus
+  reason: string
+  connection_count: number
+  runnable_missing: boolean
+  runnable_repair: boolean
+}
+
+export interface PacketSplitPreview {
+  scope: SessionScope
+  total: number
+  counts: Partial<Record<PacketSplitStatus, number>>
+  missing_only: number
+  repair_incomplete: number
+  sessions: Array<PacketSplitInspection & { session_id: string; url: string }>
+  corrupt: CorruptSession[]
+}
+
 export interface SessionScope {
   scope_id: string
   display_name: string
@@ -248,6 +275,7 @@ export interface SessionSummary {
   analysis_integrity_state?: string | null
   network_outcome_state?: string | null
   coverage: Record<string, unknown> | null
+  packet_split?: PacketSplitInspection
   error?: SessionError | null
 }
 

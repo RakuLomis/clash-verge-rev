@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   resolveScope: vi.fn(),
   listScoped: vi.fn(),
   openFolder: vi.fn(),
+  previewSplit: vi.fn(),
+  startSplit: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/event', () => ({
@@ -17,6 +19,10 @@ vi.mock('@/services/cmds', () => ({
   listTrafficTracerScopedSessions: mocks.listScoped,
   openTrafficTracerSessionDirectory: vi.fn(),
   startTrafficTracerAnalysis: vi.fn(),
+  previewTrafficTracerPacketSplit: mocks.previewSplit,
+  startTrafficTracerPacketSplit: mocks.startSplit,
+  getTrafficTracerJob: vi.fn(),
+  cancelTrafficTracerJob: vi.fn(),
 }))
 vi.mock('@/services/notice-service', () => ({
   showNotice: { success: vi.fn(), error: vi.fn() },
@@ -71,10 +77,21 @@ function renderView(props: { activeJobId?: string | null } = {}) {
 
 afterEach(() => {
   cleanup()
+  localStorage.clear()
   vi.clearAllMocks()
 })
 
 describe('TrafficTracer scoped Sessions', () => {
+  const splitPreview = {
+    scope,
+    total: 1,
+    counts: { unsplit: 1 },
+    missing_only: 1,
+    repair_incomplete: 0,
+    sessions: [],
+    corrupt: [],
+  }
+
   it('does not list root Sessions while idle and no folder is selected', () => {
     renderView()
 
@@ -97,6 +114,7 @@ describe('TrafficTracer scoped Sessions', () => {
       total: 1,
       has_more: false,
     })
+    mocks.previewSplit.mockResolvedValue(splitPreview)
 
     renderView()
     await screen.getByRole('button', { name: 'Choose folder' }).click()
@@ -106,6 +124,9 @@ describe('TrafficTracer scoped Sessions', () => {
     })
     expect(await screen.findByText('example.com')).toBeInTheDocument()
     expect(screen.queryByText('Current capture')).not.toBeInTheDocument()
+    expect(
+      await screen.findByRole('button', { name: 'Split missing (1)' }),
+    ).toBeEnabled()
   })
 
   it('automatically selects and lists only the active capture folder', async () => {

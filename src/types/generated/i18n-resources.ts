@@ -1550,7 +1550,21 @@ export interface TranslationResources {
           emptyFolder: string
           noFolderSelected: string
           packetVerificationNotRequested: string
+          repairSplit: string
           schema: string
+          splitChecking: string
+          splitJob: string
+          splitMissing: string
+          splitStatus: {
+            complete: string
+            complete_empty: string
+            ineligible: string
+            partial: string
+            raw_missing: string
+            stale: string
+            unsplit: string
+          }
+          splitSummary: string
           startingAnalysis: string
           title: string
           unknownSize: string

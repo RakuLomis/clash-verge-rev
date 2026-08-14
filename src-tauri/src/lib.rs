@@ -192,6 +192,8 @@ mod app_init {
             cmd::tt_session_list,
             cmd::tt_session_scope_resolve,
             cmd::tt_session_scope_list,
+            cmd::tt_packet_split_preview,
+            cmd::tt_packet_split_start,
             cmd::tt_session_get,
             cmd::tt_session_open_directory,
             cmd::tt_session_open_artifact,

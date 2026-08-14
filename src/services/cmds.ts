@@ -675,6 +675,22 @@ export function listTrafficTracerScopedSessions(
   )
 }
 
+export function previewTrafficTracerPacketSplit(scopeId: string) {
+  return invoke<TrafficTracer.PacketSplitPreview>('tt_packet_split_preview', {
+    scopeId,
+  })
+}
+
+export function startTrafficTracerPacketSplit(
+  scopeId: string,
+  policy: 'missing_only' | 'repair_incomplete',
+) {
+  return invoke<TrafficTracer.JobSnapshot>('tt_packet_split_start', {
+    scopeId,
+    policy,
+  })
+}
+
 export function getTrafficTracerSession(sessionId: string) {
   return invoke<TrafficTracer.SessionManifest>('tt_session_get', { sessionId })
 }

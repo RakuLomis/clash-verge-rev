@@ -900,7 +900,21 @@
       "currentCapture": "Current capture",
       "noFolderSelected": "No capture folder is selected. Choose a timestamp folder to view its Sessions.",
       "waitingForCaptureFolder": "Waiting for the current capture folder…",
-      "emptyFolder": "This capture folder has no Sessions yet."
+      "emptyFolder": "This capture folder has no Sessions yet.",
+      "splitChecking": "Checking packet split status…",
+      "splitSummary": "Flow PCAPs: {{complete}} complete · {{missing}} missing · {{repair}} need repair",
+      "splitMissing": "Split missing ({{count}})",
+      "repairSplit": "Repair incomplete ({{count}})",
+      "splitJob": "Capture-group packet split",
+      "splitStatus": {
+        "unsplit": "Not split",
+        "complete": "Flow PCAPs complete",
+        "complete_empty": "Split complete (no eligible flows)",
+        "partial": "Split partial",
+        "stale": "Split stale",
+        "raw_missing": "Raw PCAP missing",
+        "ineligible": "Not eligible"
+      }
     },
     "flows": {
       "title": "Normalized Flows",

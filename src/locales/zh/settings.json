@@ -900,7 +900,21 @@
       "currentCapture": "当前捕获",
       "noFolderSelected": "当前没有活动捕获。请选择一个时间戳捕获文件夹查看历史结果。",
       "waitingForCaptureFolder": "正在等待当前捕获目录…",
-      "emptyFolder": "此捕获目录尚无会话。"
+      "emptyFolder": "此捕获目录尚无会话。",
+      "splitChecking": "正在检查数据包拆分状态…",
+      "splitSummary": "Flow PCAP：{{complete}} 个完整 · {{missing}} 个待拆分 · {{repair}} 个待修复",
+      "splitMissing": "拆分未处理项（{{count}}）",
+      "repairSplit": "修复不完整项（{{count}}）",
+      "splitJob": "捕获组数据包拆分",
+      "splitStatus": {
+        "unsplit": "尚未拆分",
+        "complete": "Flow PCAP 完整",
+        "complete_empty": "拆分完成（无适用流）",
+        "partial": "部分拆分失败",
+        "stale": "拆分结果失效",
+        "raw_missing": "原始 PCAP 缺失",
+        "ineligible": "不适用"
+      }
     },
     "flows": {
       "title": "规范化流",

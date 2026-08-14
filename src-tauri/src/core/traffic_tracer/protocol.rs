@@ -36,12 +36,18 @@ pub enum RequestMethod {
     JobStatus,
     #[serde(rename = "analysis.start")]
     AnalysisStart,
+    #[serde(rename = "packet_split.start")]
+    PacketSplitStart,
+    #[serde(rename = "packet_split.resume")]
+    PacketSplitResume,
     #[serde(rename = "session.list")]
     SessionList,
     #[serde(rename = "session.scope.resolve")]
     SessionScopeResolve,
     #[serde(rename = "session.scope.list")]
     SessionScopeList,
+    #[serde(rename = "session.scope.packet_split.preview")]
+    SessionScopePacketSplitPreview,
     #[serde(rename = "session.get")]
     SessionGet,
     #[serde(rename = "session.delete")]

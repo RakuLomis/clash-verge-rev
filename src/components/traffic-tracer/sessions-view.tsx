@@ -1,4 +1,5 @@
 import {
+  CallSplitRounded,
   ClearRounded,
   FolderOpenRounded,
   RefreshRounded,
@@ -8,6 +9,7 @@ import {
   Box,
   Button,
   CircularProgress,
+  LinearProgress,
   Chip,
   Pagination,
   Paper,
@@ -16,7 +18,7 @@ import {
 } from '@mui/material'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { open } from '@tauri-apps/plugin-dialog'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { trafficTracerJobKey } from '@/hooks/use-capture-job'
@@ -25,9 +27,13 @@ import {
   useTrafficTracerScopedSessions,
 } from '@/hooks/use-traffic-tracer-sessions'
 import {
+  cancelTrafficTracerJob,
+  getTrafficTracerJob,
   openTrafficTracerSessionDirectory,
+  previewTrafficTracerPacketSplit,
   resolveTrafficTracerSessionScope,
   startTrafficTracerAnalysis,
+  startTrafficTracerPacketSplit,
 } from '@/services/cmds'
 import { showNotice } from '@/services/notice-service'
 import type { SessionScope, SessionScopeSelector } from '@/types/traffic-tracer'
@@ -77,6 +83,9 @@ export function TrafficTracerSessionsView({
     sessionId: string
   } | null>(null)
   const [openingSessionId, setOpeningSessionId] = useState<string | null>(null)
+  const [splitJobId, setSplitJobId] = useState<string | null>(() =>
+    localStorage.getItem('traffictracer.packetSplitJobId'),
+  )
 
   const activeSelector = useMemo<SessionScopeSelector | null>(() => {
     if (activeBatchId) return { batch_id: activeBatchId }
@@ -116,6 +125,74 @@ export function TrafficTracerSessionsView({
       enabled,
       workspaceRoot,
     )
+
+  const splitPreviewQuery = useQuery({
+    queryKey: ['trafficTracer', 'packetSplitPreview', workspaceRoot, scopeId],
+    queryFn: () => previewTrafficTracerPacketSplit(scopeId!),
+    enabled:
+      enabled && scopeId !== null && selection?.scope.kind === 'capture_group',
+  })
+  const splitJobQuery = useQuery({
+    queryKey: splitJobId
+      ? trafficTracerJobKey(splitJobId)
+      : ['trafficTracer', 'job', 'packetSplitNone'],
+    queryFn: () => getTrafficTracerJob(splitJobId!),
+    enabled: splitJobId !== null,
+    refetchInterval: ({ state }) =>
+      state.data &&
+      ['completed', 'failed', 'cancelled', 'interrupted'].includes(
+        state.data.state,
+      )
+        ? false
+        : 1000,
+  })
+  const splitMutation = useMutation({
+    mutationFn: (policy: 'missing_only' | 'repair_incomplete') => {
+      if (!scopeId) throw new Error('No timestamp capture folder is selected')
+      return startTrafficTracerPacketSplit(scopeId, policy)
+    },
+    onSuccess: (snapshot) => {
+      localStorage.setItem('traffictracer.packetSplitJobId', snapshot.job_id)
+      setSplitJobId(snapshot.job_id)
+      queryClient.setQueryData(trafficTracerJobKey(snapshot.job_id), snapshot)
+    },
+    onError: (error) => showNotice.error(error),
+  })
+  const splitCancelMutation = useMutation({
+    mutationFn: () => {
+      if (!splitJobId) throw new Error('No packet split Job is active')
+      return cancelTrafficTracerJob(
+        splitJobId,
+        'Cancelled from Sessions packet split.',
+      )
+    },
+    onSuccess: (snapshot) =>
+      queryClient.setQueryData(trafficTracerJobKey(snapshot.job_id), snapshot),
+    onError: (error) => showNotice.error(error),
+  })
+
+  const splitJob = splitJobQuery.data
+  const splitJobActive = Boolean(
+    splitJob &&
+      !['completed', 'failed', 'cancelled', 'interrupted'].includes(
+        splitJob.state,
+      ),
+  )
+
+  useEffect(() => {
+    if (
+      !splitJob ||
+      !['completed', 'failed', 'cancelled', 'interrupted'].includes(
+        splitJob.state,
+      )
+    )
+      return
+    localStorage.removeItem('traffictracer.packetSplitJobId')
+    void queryClient.invalidateQueries({ queryKey: trafficTracerSessionsKey })
+    void queryClient.invalidateQueries({
+      queryKey: ['trafficTracer', 'packetSplitPreview', workspaceRoot, scopeId],
+    })
+  }, [queryClient, scopeId, splitJob, workspaceRoot])
 
   const analysisMutation = useMutation({
     mutationFn: (sessionId: string) =>
@@ -243,6 +320,82 @@ export function TrafficTracerSessionsView({
               >
                 {selection.scope.directory}
               </Typography>
+            </Stack>
+            {selection.scope.kind === 'capture_group' && (
+              <Stack
+                direction={{ xs: 'column', sm: 'row' }}
+                spacing={1}
+                sx={{ mt: 1, alignItems: { sm: 'center' } }}
+              >
+                <Typography variant="caption" color="text.secondary">
+                  {splitPreviewQuery.isLoading
+                    ? t('settings.trafficTracer.sessions.splitChecking')
+                    : t('settings.trafficTracer.sessions.splitSummary', {
+                        missing: splitPreviewQuery.data?.missing_only ?? 0,
+                        repair: splitPreviewQuery.data?.repair_incomplete ?? 0,
+                        complete:
+                          (splitPreviewQuery.data?.counts.complete ?? 0) +
+                          (splitPreviewQuery.data?.counts.complete_empty ?? 0),
+                      })}
+                </Typography>
+                <Button
+                  size="small"
+                  variant="contained"
+                  startIcon={<CallSplitRounded />}
+                  disabled={
+                    splitJobActive ||
+                    splitMutation.isPending ||
+                    !splitPreviewQuery.data?.missing_only
+                  }
+                  onClick={() => splitMutation.mutate('missing_only')}
+                >
+                  {t('settings.trafficTracer.sessions.splitMissing', {
+                    count: splitPreviewQuery.data?.missing_only ?? 0,
+                  })}
+                </Button>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  disabled={
+                    splitJobActive ||
+                    splitMutation.isPending ||
+                    !splitPreviewQuery.data?.repair_incomplete
+                  }
+                  onClick={() => splitMutation.mutate('repair_incomplete')}
+                >
+                  {t('settings.trafficTracer.sessions.repairSplit', {
+                    count: splitPreviewQuery.data?.repair_incomplete ?? 0,
+                  })}
+                </Button>
+              </Stack>
+            )}
+          </Paper>
+        )}
+
+        {splitJob && (
+          <Paper variant="outlined" sx={{ p: 1.5 }}>
+            <Stack spacing={1}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                <Typography variant="body2" sx={{ flex: 1, fontWeight: 600 }}>
+                  {t('settings.trafficTracer.sessions.splitJob')}:{' '}
+                  {splitJob.message}
+                </Typography>
+                <Chip size="small" label={splitJob.state} />
+                {splitJobActive && (
+                  <Button
+                    size="small"
+                    color="warning"
+                    disabled={splitCancelMutation.isPending}
+                    onClick={() => splitCancelMutation.mutate()}
+                  >
+                    {t('settings.trafficTracer.common.actions.cancel')}
+                  </Button>
+                )}
+              </Stack>
+              <LinearProgress
+                variant="determinate"
+                value={Math.max(0, Math.min(100, splitJob.progress * 100))}
+              />
             </Stack>
           </Paper>
         )}

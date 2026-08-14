@@ -114,6 +114,22 @@ export function TrafficTracerSessionCard({
               },
             )}
           />
+          {session.packet_split?.status && (
+            <Chip
+              size="small"
+              variant="outlined"
+              color={
+                session.packet_split.status.startsWith('complete')
+                  ? 'success'
+                  : ['partial', 'stale'].includes(session.packet_split.status)
+                    ? 'warning'
+                    : 'default'
+              }
+              label={t(
+                `settings.trafficTracer.sessions.splitStatus.${session.packet_split.status}`,
+              )}
+            />
+          )}
           {session.warning_count > 0 && (
             <Chip
               size="small"
