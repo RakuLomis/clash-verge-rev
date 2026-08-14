@@ -69,6 +69,12 @@ export interface CaptureOptions {
   cache_mode: 'cold' | 'warm'
 }
 
+export interface PlaybackPolicy {
+  provider: 'youtube'
+  ad_policy: 'click_visible_skip'
+  desired_primary_seconds: number
+}
+
 export interface CaptureStartRequest {
   url: string
   domain: string
@@ -83,6 +89,7 @@ export interface CaptureStartRequest {
   page_type: string
   target_source: TargetSource
   options?: Partial<CaptureOptions>
+  playback?: PlaybackPolicy
 }
 
 export interface TargetConfigEntry {
@@ -94,6 +101,7 @@ export interface TargetConfigEntry {
   run_label: string
   wait_load_timeout: number
   page_type: string
+  playback?: PlaybackPolicy
 }
 
 export interface TargetConfigPreview {
@@ -581,6 +589,19 @@ export interface CoverageSummary {
   warnings?: AnalysisWarning[]
   trace_snapshot?: TraceSnapshotSummary
   storage?: AnalysisStorageSummary
+  playback?: {
+    provider: 'youtube'
+    ad_policy?: 'click_visible_skip'
+    observation_window_seconds: number
+    observed_total_seconds?: number
+    desired_primary_seconds: number
+    primary_content_seconds: number
+    primary_goal_met: boolean
+    quality: 'good' | 'degraded' | 'unavailable' | 'unknown'
+    reason?: string | null
+    skip_attempts?: number
+    phase_seconds?: Record<string, number>
+  }
 }
 
 export interface FlowQueryRequest {

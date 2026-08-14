@@ -378,12 +378,15 @@ export function TrafficTracerCaptureForm({
               select
               label={t('settings.trafficTracer.capture.fields.targetSource')}
               value={draft.target_mode}
-              onChange={(event) =>
-                update(
-                  'target_mode',
-                  event.target.value as CaptureFormDraft['target_mode'],
-                )
-              }
+              onChange={(event) => {
+                const targetMode = event.target
+                  .value as CaptureFormDraft['target_mode']
+                setDraft((current) => ({
+                  ...current,
+                  target_mode: targetMode,
+                  playback: targetMode === 'manual' ? null : current.playback,
+                }))
+              }}
             >
               <MenuItem value="manual">
                 {t('settings.trafficTracer.capture.targetSources.manual')}
@@ -442,9 +445,19 @@ export function TrafficTracerCaptureForm({
                 {targetConfig.targets.map((target) => (
                   <MenuItem key={target.index} value={target.index}>
                     {target.domain} — {target.url}
+                    {target.playback
+                      ? ` — playback ${target.playback.desired_primary_seconds}s/${target.duration_seconds}s`
+                      : ''}
                   </MenuItem>
                 ))}
               </TextField>
+            )}
+            {draft.playback && (
+              <Alert severity="info" sx={{ gridColumn: '1 / -1' }}>
+                YouTube playback: fixed {draft.duration_seconds}s capture;
+                target {draft.playback.desired_primary_seconds}s of primary
+                video; visible Skip controls are clicked and ad traffic is kept.
+              </Alert>
             )}
             {draft.target_mode === 'config' && targetConfig && (
               <Paper variant="outlined" sx={{ p: 1.5, gridColumn: '1 / -1' }}>
@@ -505,7 +518,7 @@ export function TrafficTracerCaptureForm({
                             whiteSpace: 'nowrap',
                           },
                         }}
-                        title={`${target.page_type} — ${target.domain} — ${target.url}`}
+                        title={`${target.page_type} — ${target.domain} — ${target.url}${target.playback ? ` — playback ${target.playback.desired_primary_seconds}s/${target.duration_seconds}s` : ''}`}
                         control={
                           <Checkbox
                             size="small"
@@ -520,7 +533,7 @@ export function TrafficTracerCaptureForm({
                             }
                           />
                         }
-                        label={`${position + 1}. ${target.page_type} — ${target.domain} — ${target.url}`}
+                        label={`${position + 1}. ${target.page_type} — ${target.domain} — ${target.url}${target.playback ? ` — playback ${target.playback.desired_primary_seconds}s/${target.duration_seconds}s` : ''}`}
                       />
                     ))}
                   </Box>

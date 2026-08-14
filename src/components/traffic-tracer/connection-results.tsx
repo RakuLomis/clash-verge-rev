@@ -322,6 +322,13 @@ export function TrafficTracerConnectionResults({
         )}
       {summary && (
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
+          {summary.playback && (
+            <Chip
+              variant="outlined"
+              color={summary.playback.primary_goal_met ? 'success' : 'warning'}
+              label={`Playback: ${summary.playback.primary_content_seconds.toFixed(1)}/${summary.playback.desired_primary_seconds}s primary · fixed ${summary.playback.observation_window_seconds}s · ${summary.playback.quality}${summary.playback.skip_attempts ? ` · ${summary.playback.skip_attempts} skip click` : ''}`}
+            />
+          )}
           {summary.trace_snapshot && (
             <Chip
               variant="outlined"

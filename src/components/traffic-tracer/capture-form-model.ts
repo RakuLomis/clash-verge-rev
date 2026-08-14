@@ -27,6 +27,7 @@ export interface CaptureFormDraft {
   run_label: string
   options: CaptureOptions
   page_type: string
+  playback: TargetConfigEntry['playback'] | null
 }
 
 export function selectedTargetsInConfigOrder(
@@ -93,6 +94,7 @@ export const defaultCaptureFormDraft: CaptureFormDraft = {
   wait_load_timeout: 30,
   run_label: 'all',
   page_type: 'capture',
+  playback: null,
   options: {
     capture_packets: true,
     collect_cdp: true,
@@ -150,6 +152,13 @@ export function validateCaptureForm(
       !/^[a-f0-9]{64}$/.test(draft.config_sha256) ||
       draft.selected_target_index === null ||
       draft.selected_target_index < 0)
+  ) {
+    errors.config_path = 'configFile'
+  }
+  if (
+    draft.playback &&
+    (!draft.options.collect_cdp ||
+      draft.playback.desired_primary_seconds > draft.duration_seconds)
   ) {
     errors.config_path = 'configFile'
   }
@@ -225,6 +234,7 @@ export function captureRequestFromDraft(
           }
         : { mode: 'manual' },
     options: { ...draft.options },
+    playback: draft.playback ?? undefined,
   }
 }
 
@@ -246,6 +256,7 @@ export function applyTargetConfigEntry(
     wait_load_timeout: target.wait_load_timeout,
     run_label: target.run_label,
     page_type: target.page_type,
+    playback: target.playback ?? null,
   }
 }
 

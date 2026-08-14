@@ -261,6 +261,7 @@ describe('TrafficTracer Complete workspace', () => {
         wait_load_timeout: 30,
         run_label: 'all',
         page_type: 'capture',
+        playback: null,
         options: {
           capture_packets: true,
           collect_cdp: true,
@@ -323,6 +324,11 @@ describe('TrafficTracer Complete workspace', () => {
           run_label: 'browser',
           wait_load_timeout: 45,
           page_type: 'browser',
+          playback: {
+            provider: 'youtube' as const,
+            ad_policy: 'click_visible_skip' as const,
+            desired_primary_seconds: 10,
+          },
         },
       ],
     }
@@ -352,6 +358,11 @@ describe('TrafficTracer Complete workspace', () => {
         config_path: '/tmp/sites.yaml',
         config_sha256: 'a'.repeat(64),
         target_index: 3,
+      },
+      playback: {
+        provider: 'youtube',
+        ad_policy: 'click_visible_skip',
+        desired_primary_seconds: 10,
       },
     })
   })

@@ -6,7 +6,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::AppHandle;
+use tauri::{AppHandle, Url};
 
 use super::{CmdResult, StringifyErr as _};
 use crate::{
@@ -338,6 +338,8 @@ pub struct CaptureStartRequest {
     pub target_source: TargetSource,
     #[serde(default)]
     pub options: CaptureOptions,
+    #[serde(default)]
+    pub playback: Option<PlaybackPolicy>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -346,6 +348,14 @@ pub enum CaptureNetwork {
     Tcp,
     Udp,
     All,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlaybackPolicy {
+    pub provider: String,
+    pub ad_policy: String,
+    pub desired_primary_seconds: u32,
 }
 
 fn default_wait_load_timeout() -> u32 {
@@ -395,6 +405,8 @@ pub struct TargetConfigEntry {
     pub run_label: String,
     pub wait_load_timeout: u32,
     pub page_type: String,
+    #[serde(default)]
+    pub playback: Option<PlaybackPolicy>,
 }
 
 #[derive(Serialize)]
@@ -490,6 +502,8 @@ struct CaptureJobSpec {
     run_label: String,
     page_type: String,
     target_source: TargetSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    playback: Option<PlaybackPolicy>,
 }
 
 #[derive(Serialize)]
@@ -580,6 +594,7 @@ pub async fn tt_capture_start(app_handle: AppHandle, request: CaptureStartReques
                     run_label: request.run_label,
                     page_type: request.page_type,
                     target_source: request.target_source,
+                    playback: request.playback,
                 },
             },
         )
@@ -641,6 +656,7 @@ async fn validate_config_target_is_current(request: &CaptureStartRequest) -> Cmd
         || target.network != request.network
         || target.run_label != request.run_label
         || target.wait_load_timeout != request.wait_load_timeout
+        || target.playback != request.playback
     {
         return Err("selected target no longer matches the configuration; reload it before capture".into());
     }
@@ -953,6 +969,25 @@ fn validate_capture_request(request: &CaptureStartRequest) -> CmdResult {
     }
     if !(1..=86_400).contains(&request.duration_seconds) {
         return Err("duration_seconds must be between 1 and 86400".into());
+    }
+    if let Some(playback) = &request.playback {
+        if playback.provider != "youtube" {
+            return Err("playback provider must be youtube".into());
+        }
+        if playback.ad_policy != "click_visible_skip" {
+            return Err("playback ad_policy must be click_visible_skip".into());
+        }
+        if playback.desired_primary_seconds == 0 || playback.desired_primary_seconds > request.duration_seconds {
+            return Err("playback desired_primary_seconds must fit within duration_seconds".into());
+        }
+        if !request.options.collect_cdp {
+            return Err("playback observation requires CDP collection".into());
+        }
+        let url = Url::parse(&request.url).map_err(|_| smartstring::alias::String::from("playback URL is invalid"))?;
+        let host = url.host_str().unwrap_or_default();
+        if host != "youtube.com" && !host.ends_with(".youtube.com") && host != "youtu.be" {
+            return Err("youtube playback requires a youtube.com or youtu.be URL".into());
+        }
     }
     if !(1..=3_600).contains(&request.wait_load_timeout) {
         return Err("wait_load_timeout must be between 1 and 3600".into());
@@ -1962,6 +1997,7 @@ mod capture_tests {
             page_type: "capture".to_owned(),
             target_source: TargetSource::Manual,
             options: CaptureOptions::default(),
+            playback: None,
         }
     }
 
@@ -1987,6 +2023,31 @@ mod capture_tests {
     fn capture_spec_rejects_invalid_cache_mode() {
         let mut request = valid_request();
         request.options.cache_mode = "stale".to_owned();
+        assert!(validate_capture_request(&request).is_err());
+    }
+
+    #[test]
+    fn capture_spec_validates_bounded_youtube_playback() {
+        let mut request = valid_request();
+        request.url = "https://www.youtube.com/watch?v=test".to_owned();
+        request.domain = "youtube.com".to_owned();
+        request.duration_seconds = 35;
+        request.playback = Some(PlaybackPolicy {
+            provider: "youtube".to_owned(),
+            ad_policy: "click_visible_skip".to_owned(),
+            desired_primary_seconds: 25,
+        });
+        validate_capture_request(&request).unwrap();
+
+        request.playback.as_mut().unwrap().desired_primary_seconds = 36;
+        assert!(validate_capture_request(&request).is_err());
+        request.playback.as_mut().unwrap().desired_primary_seconds = 25;
+
+        request.options.collect_cdp = false;
+        assert!(validate_capture_request(&request).is_err());
+        request.options.collect_cdp = true;
+
+        request.url = "https://example.com/watch?v=test".to_owned();
         assert!(validate_capture_request(&request).is_err());
     }
 
@@ -2042,6 +2103,7 @@ mod capture_tests {
             run_label: "video".to_owned(),
             wait_load_timeout: 30,
             page_type: "video".to_owned(),
+            playback: None,
         }
     }
 
