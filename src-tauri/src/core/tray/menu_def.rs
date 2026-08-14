@@ -45,6 +45,7 @@ define_menu! {
     core_log => CORE_LOG, "tray_core_log", "tray.coreLog",
     restart_clash => RESTART_CLASH, "tray_restart_clash", "tray.restartClash",
     restart_app => RESTART_APP, "tray_restart_app", "tray.restartApp",
+    reload_ui => RELOAD_UI, "tray_reload_ui", "tray.reloadUi",
     verge_version => VERGE_VERSION, "tray_verge_version", "tray.vergeVersion",
     more => MORE, "tray_more", "tray.more",
     exit => EXIT, "tray_exit", "tray.exit",

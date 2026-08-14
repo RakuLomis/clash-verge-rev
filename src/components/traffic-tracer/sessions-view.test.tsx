@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   openFolder: vi.fn(),
   previewSplit: vi.fn(),
   startSplit: vi.fn(),
+  getJob: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/api/event', () => ({
@@ -21,7 +22,7 @@ vi.mock('@/services/cmds', () => ({
   startTrafficTracerAnalysis: vi.fn(),
   previewTrafficTracerPacketSplit: mocks.previewSplit,
   startTrafficTracerPacketSplit: mocks.startSplit,
-  getTrafficTracerJob: vi.fn(),
+  getTrafficTracerJob: mocks.getJob,
   cancelTrafficTracerJob: vi.fn(),
 }))
 vi.mock('@/services/notice-service', () => ({
@@ -60,7 +61,9 @@ const session: SessionSummary = {
   coverage: null,
 }
 
-function renderView(props: { activeJobId?: string | null } = {}) {
+function renderView(
+  props: { activeJobId?: string | null; activeBatchId?: string | null } = {},
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
@@ -127,6 +130,36 @@ describe('TrafficTracer scoped Sessions', () => {
     expect(
       await screen.findByRole('button', { name: 'Split missing (1)' }),
     ).toBeEnabled()
+  })
+
+  it('clears a stale packet split Job instead of polling forever', async () => {
+    localStorage.setItem('traffictracer.packetSplitJobId', 'stale-job')
+    mocks.getJob.mockRejectedValue(new Error('Job not found'))
+
+    renderView()
+
+    await waitFor(() => {
+      expect(mocks.getJob).toHaveBeenCalledWith('stale-job')
+      expect(localStorage.getItem('traffictracer.packetSplitJobId')).toBeNull()
+    })
+  })
+
+  it('does not preview packet splits while a capture batch is active', async () => {
+    mocks.resolveScope.mockResolvedValue(scope)
+    mocks.listScoped.mockResolvedValue({
+      scope,
+      sessions: [session],
+      corrupt: [],
+      offset: 0,
+      limit: 8,
+      total: 1,
+      has_more: false,
+    })
+
+    renderView({ activeBatchId: 'active-batch' })
+
+    await screen.findByText('Current capture')
+    expect(mocks.previewSplit).not.toHaveBeenCalled()
   })
 
   it('automatically selects and lists only the active capture folder', async () => {

@@ -130,7 +130,11 @@ export function TrafficTracerSessionsView({
     queryKey: ['trafficTracer', 'packetSplitPreview', workspaceRoot, scopeId],
     queryFn: () => previewTrafficTracerPacketSplit(scopeId!),
     enabled:
-      enabled && scopeId !== null && selection?.scope.kind === 'capture_group',
+      enabled &&
+      activeBatchId === null &&
+      scopeId !== null &&
+      selection?.scope.kind === 'capture_group',
+    retry: 1,
   })
   const splitJobQuery = useQuery({
     queryKey: splitJobId
@@ -138,13 +142,14 @@ export function TrafficTracerSessionsView({
       : ['trafficTracer', 'job', 'packetSplitNone'],
     queryFn: () => getTrafficTracerJob(splitJobId!),
     enabled: splitJobId !== null,
+    retry: false,
     refetchInterval: ({ state }) =>
       state.data &&
-      ['completed', 'failed', 'cancelled', 'interrupted'].includes(
+      !['completed', 'failed', 'cancelled', 'interrupted'].includes(
         state.data.state,
       )
-        ? false
-        : 1000,
+        ? 1000
+        : false,
   })
   const splitMutation = useMutation({
     mutationFn: (policy: 'missing_only' | 'repair_incomplete') => {
@@ -170,6 +175,11 @@ export function TrafficTracerSessionsView({
       queryClient.setQueryData(trafficTracerJobKey(snapshot.job_id), snapshot),
     onError: (error) => showNotice.error(error),
   })
+
+  useEffect(() => {
+    if (!splitJobQuery.isError) return
+    localStorage.removeItem('traffictracer.packetSplitJobId')
+  }, [splitJobQuery.isError])
 
   const splitJob = splitJobQuery.data
   const splitJobActive = Boolean(

@@ -58,6 +58,7 @@ tray:
   coreLog: Log Core
   restartClash: Mulai Ulang Core Clash
   restartApp: Mulai Ulang Aplikasi
+  reloadUi: Reload User Interface
   vergeVersion: Versi Verge
   more: Lainnya
   exit: Keluar

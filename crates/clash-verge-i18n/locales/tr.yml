@@ -58,6 +58,7 @@ tray:
   coreLog: Çekirdek Günlüğü
   restartClash: Clash Çekirdeğini Yeniden Başlat
   restartApp: Uygulamayı Yeniden Başlat
+  reloadUi: Reload User Interface
   vergeVersion: Verge Sürümü
   more: Daha Fazla
   exit: Çıkış

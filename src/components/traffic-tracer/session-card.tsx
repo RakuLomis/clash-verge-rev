@@ -130,6 +130,18 @@ export function TrafficTracerSessionCard({
               )}
             />
           )}
+          {session.scenario_outcome_state &&
+            session.scenario_outcome_state !== 'passed' && (
+              <Chip
+                size="small"
+                color={
+                  session.scenario_outcome_state === 'degraded'
+                    ? 'warning'
+                    : 'default'
+                }
+                label={`Playback: ${session.scenario_outcome_state}`}
+              />
+            )}
           {session.warning_count > 0 && (
             <Chip
               size="small"

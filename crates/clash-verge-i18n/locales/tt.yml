@@ -58,6 +58,7 @@ tray:
   coreLog: Ядро журналы
   restartClash: Clash ядрәсен кабат җибәрү
   restartApp: Кушымтаны кабат җибәрү
+  reloadUi: Reload User Interface
   vergeVersion: Verge версиясе
   more: Күбрәк
   exit: Чыгу

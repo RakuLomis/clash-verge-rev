@@ -28,7 +28,8 @@ export function useTrafficTracerBatches(workspaceRoot = '', enabled = true) {
     queryKey: trafficTracerBatchListKey(workspaceRoot),
     queryFn: listTrafficTracerBatches,
     enabled,
-    refetchInterval: 3000,
+    refetchInterval: false,
+    retry: 1,
   })
 
   const recoveredBatch = batchId
@@ -57,6 +58,13 @@ export function useTrafficTracerBatches(workspaceRoot = '', enabled = true) {
     refetchInterval: ({ state }) =>
       state.data && TERMINAL.has(state.data.batch.state) ? false : 1000,
   })
+
+  useEffect(() => {
+    const state = statusQuery.data?.batch.state
+    if (state && TERMINAL.has(state)) {
+      localStorage.removeItem(ACTIVE_BATCH_KEY)
+    }
+  }, [statusQuery.data?.batch.state])
 
   const liveStatus = statusQuery.data
   const batchStatus =

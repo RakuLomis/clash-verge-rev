@@ -58,6 +58,7 @@ tray:
   coreLog: コアログ
   restartClash: Clash コアを再起動
   restartApp: アプリケーションを再起動
+  reloadUi: Reload User Interface
   vergeVersion: Verge バージョン
   more: その他
   exit: 終了

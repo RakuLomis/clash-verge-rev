@@ -178,6 +178,7 @@ mod app_init {
             cmd::get_clash_info,
             cmd::patch_clash_config,
             cmd::list_available_cores,
+            cmd::tt_ui_heartbeat,
             cmd::tt_get_environment,
             cmd::tt_target_config_load,
             cmd::tt_capture_start,

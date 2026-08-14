@@ -58,6 +58,7 @@ tray:
   coreLog: Журнал ядра
   restartClash: Перезапустить ядро Clash
   restartApp: Перезапустить приложение
+  reloadUi: Reload User Interface
   vergeVersion: Версия Verge
   more: Еще
   exit: Выход

@@ -58,6 +58,7 @@ tray:
   coreLog: گزارش هسته
   restartClash: راه‌اندازی مجدد هسته Clash
   restartApp: راه‌اندازی مجدد برنامه
+  reloadUi: Reload User Interface
   vergeVersion: نسخه Verge
   more: بیشتر
   exit: خروج

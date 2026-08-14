@@ -2,8 +2,14 @@ use std::{
     fs,
     net::IpAddr,
     path::{Component, Path, PathBuf},
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use clash_verge_logging::{Type, logging};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Url};
@@ -25,6 +31,76 @@ use crate::{
 const TRAFFIC_TRACER_CORE: &str = "verge-mihomo-tt";
 const DEFAULT_CHROME_BINARY: &str = "google-chrome";
 const CAPTURE_LOCK_REASON: &str = "TrafficTracer capture is active";
+
+const UI_HEARTBEAT_WARN_AFTER_MS: u64 = 12_000;
+
+struct UiHeartbeatState {
+    active: AtomicBool,
+    last_seen_ms: AtomicU64,
+    warned: AtomicBool,
+    monitor_started: AtomicBool,
+}
+
+static UI_HEARTBEAT: OnceLock<UiHeartbeatState> = OnceLock::new();
+
+fn ui_heartbeat_state() -> &'static UiHeartbeatState {
+    UI_HEARTBEAT.get_or_init(|| UiHeartbeatState {
+        active: AtomicBool::new(false),
+        last_seen_ms: AtomicU64::new(0),
+        warned: AtomicBool::new(false),
+        monitor_started: AtomicBool::new(false),
+    })
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn start_ui_heartbeat_monitor(state: &'static UiHeartbeatState) {
+    if state.monitor_started.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            if !state.active.load(Ordering::Acquire) {
+                state.warned.store(false, Ordering::Release);
+                continue;
+            }
+            let age = unix_time_ms().saturating_sub(state.last_seen_ms.load(Ordering::Acquire));
+            if age >= UI_HEARTBEAT_WARN_AFTER_MS {
+                if !state.warned.swap(true, Ordering::AcqRel) {
+                    logging!(
+                        warn,
+                        Type::System,
+                        "TrafficTracer UI heartbeat stalled for {} ms; capture and core were left running",
+                        age
+                    );
+                }
+            } else if state.warned.swap(false, Ordering::AcqRel) {
+                logging!(info, Type::System, "TrafficTracer UI heartbeat recovered after a stall");
+            }
+        }
+    });
+}
+
+#[tauri::command]
+pub async fn tt_ui_heartbeat(active: bool) -> CmdResult<()> {
+    let state = ui_heartbeat_state();
+    state.active.store(active, Ordering::Release);
+    if active {
+        state.last_seen_ms.store(unix_time_ms(), Ordering::Release);
+        start_ui_heartbeat_monitor(state);
+    } else {
+        state.warned.store(false, Ordering::Release);
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]

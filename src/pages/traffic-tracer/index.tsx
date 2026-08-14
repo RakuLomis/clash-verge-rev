@@ -1,5 +1,6 @@
 import { Box } from '@mui/material'
-import { useState } from 'react'
+import { invoke } from '@tauri-apps/api/core'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { BasePage } from '@/components/base'
@@ -50,6 +51,23 @@ const TrafficTracerPage = () => {
     !terminalJobStates.has(batches.batchStatus.batch.state)
       ? batches.batchStatus.batch.batch_id
       : null
+
+  useEffect(() => {
+    let mounted = true
+    const heartbeat = () => {
+      const active = mounted && document.visibilityState === 'visible'
+      void invoke('tt_ui_heartbeat', { active }).catch(() => undefined)
+    }
+    heartbeat()
+    const interval = window.setInterval(heartbeat, 2000)
+    document.addEventListener('visibilitychange', heartbeat)
+    return () => {
+      mounted = false
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', heartbeat)
+      void invoke('tt_ui_heartbeat', { active: false }).catch(() => undefined)
+    }
+  }, [])
 
   const handleStartCapture = async (request: CaptureStartRequest) => {
     try {

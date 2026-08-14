@@ -274,6 +274,7 @@ export interface SessionSummary {
   capture_global_quality_state: string | null
   analysis_integrity_state?: string | null
   network_outcome_state?: string | null
+  scenario_outcome_state?: string | null
   coverage: Record<string, unknown> | null
   packet_split?: PacketSplitInspection
   error?: SessionError | null

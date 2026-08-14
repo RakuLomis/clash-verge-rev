@@ -58,6 +58,7 @@ tray:
   coreLog: 코어 로그
   restartClash: Clash 코어 재시작
   restartApp: 애플리케이션 재시작
+  reloadUi: Reload User Interface
   vergeVersion: Verge 버전
   more: 더 보기
   exit: 종료

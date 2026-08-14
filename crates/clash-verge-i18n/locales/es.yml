@@ -58,6 +58,7 @@ tray:
   coreLog: Registro del núcleo
   restartClash: Reiniciar el núcleo de Clash
   restartApp: Reiniciar aplicación
+  reloadUi: Reload User Interface
   vergeVersion: Versión de Verge
   more: Más
   exit: Salir

@@ -793,6 +793,8 @@ async fn create_tray_menu(
 
     let restart_app = &MenuItem::with_id(app_handle, MenuIds::RESTART_APP, &texts.restart_app, true, None::<&str>)?;
 
+    let reload_ui = &MenuItem::with_id(app_handle, MenuIds::RELOAD_UI, &texts.reload_ui, true, None::<&str>)?;
+
     let app_version = &MenuItem::with_id(
         app_handle,
         MenuIds::VERGE_VERSION,
@@ -810,6 +812,7 @@ async fn create_tray_menu(
             copy_env as &dyn IsMenuItem<Wry>,
             close_all_connections,
             restart_clash,
+            reload_ui,
             restart_app,
             app_version,
         ],
@@ -963,6 +966,21 @@ fn on_menu_event(_: &AppHandle, event: MenuEvent) {
                 let _ = help::open_core_latest_log();
             }
             MenuIds::RESTART_CLASH => feat::restart_clash_core().await,
+            MenuIds::RELOAD_UI => {
+                if let Some(window) = WindowManager::get_main_window() {
+                    match window.eval("window.location.reload()") {
+                        Ok(()) => {
+                            logging!(
+                                info,
+                                Type::Tray,
+                                "Reloaded the user interface without restarting Mihomo or TrafficTracer"
+                            );
+                            WindowManager::show_main_window().await;
+                        }
+                        Err(error) => logging!(error, Type::Tray, "Failed to reload the user interface: {}", error),
+                    }
+                }
+            }
             MenuIds::RESTART_APP => feat::restart_app().await,
             MenuIds::LIGHTWEIGHT_MODE => {
                 if !is_in_lightweight_mode() {

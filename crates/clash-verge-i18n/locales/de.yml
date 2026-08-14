@@ -58,6 +58,7 @@ tray:
   coreLog: Core-Log
   restartClash: Clash-Core neu starten
   restartApp: Anwendung neu starten
+  reloadUi: Reload User Interface
   vergeVersion: Verge-Version
   more: Mehr
   exit: Beenden

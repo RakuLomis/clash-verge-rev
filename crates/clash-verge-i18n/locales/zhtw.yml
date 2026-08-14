@@ -58,6 +58,7 @@ tray:
   coreLog: 核心日誌
   restartClash: 重新啟動 Clash 核心
   restartApp: 重新啟動應用程式
+  reloadUi: 重新載入使用者介面
   vergeVersion: Verge 版本
   more: 更多
   exit: 離開
