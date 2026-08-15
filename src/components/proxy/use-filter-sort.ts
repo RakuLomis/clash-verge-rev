@@ -30,7 +30,7 @@ export default function useFilterSort(
   useEffect(() => {
     let last = 0
 
-    delayManager.setGroupListener(groupName, () => {
+    const unsubscribe = delayManager.setGroupListener(groupName, () => {
       // 简单节流
       const now = Date.now()
       if (now - last > 666) {
@@ -39,9 +39,7 @@ export default function useFilterSort(
       }
     })
 
-    return () => {
-      delayManager.removeGroupListener(groupName)
-    }
+    return unsubscribe
   }, [groupName])
 
   const compute = useMemo(() => {

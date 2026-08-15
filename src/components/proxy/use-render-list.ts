@@ -153,7 +153,10 @@ export const useRenderList = (
       refreshProxy()
     }
 
-    delayManager.setGroupListener('chain-mode', groupListener)
+    const unsubscribe = delayManager.setGroupListener(
+      'chain-mode',
+      groupListener,
+    )
 
     const calculateDelays = async () => {
       try {
@@ -175,7 +178,7 @@ export const useRenderList = (
     return () => {
       clearTimeout(handle)
       // 清理组监听器
-      delayManager.removeGroupListener('chain-mode')
+      unsubscribe()
     }
   }, [isChainMode, runtimeConfig, verge?.default_latency_timeout, refreshProxy])
 

@@ -249,6 +249,15 @@ export const CurrentProxyCard = () => {
     displayProxy: null,
   })
 
+  useEffect(() => {
+    const groupName = state.selection.group
+    if (!groupName) return
+
+    return delayManager.setGroupListener(groupName, () => {
+      setDelaySortRefresh((previous) => previous + 1)
+    })
+  }, [state.selection.group])
+
   const autoCheckInProgressRef = useRef(false)
   const latestTimeoutRef = useRef<number>(
     verge?.default_latency_timeout || 10000,
@@ -589,8 +598,11 @@ export const CurrentProxyCard = () => {
       )
     } finally {
       autoCheckInProgressRef.current = false
-      refreshProxy()
-      if (sortType === 1) {
+      try {
+        await refreshProxy()
+      } catch (error) {
+        console.error('[CurrentProxyCard] 刷新代理延迟数据失败', error)
+      } finally {
         setDelaySortRefresh((prev) => prev + 1)
       }
     }
@@ -599,7 +611,6 @@ export const CurrentProxyCard = () => {
     refreshProxy,
     state.selection.group,
     state.selection.proxy,
-    sortType,
     setDelaySortRefresh,
   ])
 
@@ -729,22 +740,26 @@ export const CurrentProxyCard = () => {
       const url = delayManager.getUrl(groupName)
       debugLog(`[CurrentProxyCard] 测试URL: ${url}, 超时: ${timeout}ms`)
 
-      try {
-        await Promise.race([
-          delayManager.checkListDelay(proxyNames, groupName, timeout),
-          delayGroup(groupName, url, timeout),
-        ])
-        debugLog(`[CurrentProxyCard] 延迟测试完成，组: ${groupName}`)
-      } catch (error) {
-        console.error(
-          `[CurrentProxyCard] 延迟测试出错，组: ${groupName}`,
-          error,
-        )
-      }
+      const results = await Promise.allSettled([
+        delayManager.checkListDelay(proxyNames, groupName, timeout),
+        delayGroup(groupName, url, timeout),
+      ])
+      results.forEach((result) => {
+        if (result.status === 'rejected') {
+          console.error(
+            `[CurrentProxyCard] 延迟测试子任务出错，组: ${groupName}`,
+            result.reason,
+          )
+        }
+      })
+      debugLog(`[CurrentProxyCard] 延迟测试完成，组: ${groupName}`)
     }
 
-    refreshProxy()
-    if (sortType === 1) {
+    try {
+      await refreshProxy()
+    } catch (error) {
+      console.error('[CurrentProxyCard] 刷新代理延迟数据失败', error)
+    } finally {
       setDelaySortRefresh((prev) => prev + 1)
     }
   })
