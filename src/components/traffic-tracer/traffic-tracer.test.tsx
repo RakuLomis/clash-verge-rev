@@ -953,6 +953,106 @@ describe('TrafficTracer Complete workspace', () => {
     ).toBeInTheDocument()
   })
 
+  it('reports observed primary playback without treating no ad as failure', () => {
+    const summary: CoverageSummary = {
+      coverage: {
+        browser_requests: { total: 0, matched: 0, ambiguous: 0, unmatched: 0 },
+        transport_connections: {
+          total: 0,
+          matched: 0,
+          ambiguous: 0,
+          unmatched: 0,
+        },
+        core_logical_flows: {
+          total: 0,
+          with_post_flow: 0,
+          shared: 0,
+          missing_post_flow: 0,
+        },
+        unmatched_reasons: {},
+      },
+      match_method_counts: {},
+      coverage_source: 'v2_indexes',
+      playback: {
+        provider: 'youtube',
+        observation_window_seconds: 35,
+        desired_primary_seconds: 25,
+        primary_content_seconds: 12,
+        primary_content_observed: true,
+        primary_goal_met: false,
+        quality: 'degraded',
+        ad_observed: false,
+        skippable_ad_observed: false,
+        skip_attempts: 0,
+        skip_confirmed: false,
+      },
+    }
+
+    render(
+      <TrafficTracerConnectionResults
+        summary={summary}
+        requests={[]}
+        connections={[]}
+      />,
+    )
+
+    expect(
+      screen.getByText(
+        'Playback: 12.0/25s primary · fixed 35s · degraded · no ad observed',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('makes missing primary content explicit in playback results', () => {
+    const summary: CoverageSummary = {
+      coverage: {
+        browser_requests: { total: 0, matched: 0, ambiguous: 0, unmatched: 0 },
+        transport_connections: {
+          total: 0,
+          matched: 0,
+          ambiguous: 0,
+          unmatched: 0,
+        },
+        core_logical_flows: {
+          total: 0,
+          with_post_flow: 0,
+          shared: 0,
+          missing_post_flow: 0,
+        },
+        unmatched_reasons: {},
+      },
+      match_method_counts: {},
+      coverage_source: 'v2_indexes',
+      playback: {
+        provider: 'youtube',
+        observation_window_seconds: 35,
+        desired_primary_seconds: 25,
+        primary_content_seconds: 0,
+        primary_content_observed: false,
+        primary_goal_met: false,
+        quality: 'unavailable',
+        ad_observed: true,
+        skippable_ad_observed: false,
+        skip_attempts: 0,
+        skip_confirmed: false,
+      },
+    }
+
+    render(
+      <TrafficTracerConnectionResults
+        summary={summary}
+        requests={[]}
+        connections={[]}
+      />,
+    )
+
+    expect(
+      screen.getByText(
+        'Playback: primary not observed · fixed 35s · unavailable · ad observed · no Skip control',
+      ),
+    ).toBeInTheDocument()
+  })
+
   it('formats a localized capture lock with its Job identifier', () => {
     expect(
       formatTrafficTracerCaptureLock(

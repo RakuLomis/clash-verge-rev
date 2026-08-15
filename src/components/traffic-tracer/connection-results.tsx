@@ -44,6 +44,24 @@ function byteSize(value: number) {
   return `${value} B`
 }
 
+function playbackPrimaryObserved(
+  playback: NonNullable<CoverageSummary['playback']>,
+) {
+  return (
+    playback.primary_content_observed ?? playback.primary_content_seconds > 0
+  )
+}
+
+function playbackAdLabel(playback: NonNullable<CoverageSummary['playback']>) {
+  if (playback.ad_observed === false) return 'no ad observed'
+  if (playback.skip_confirmed) return 'skip confirmed'
+  if (playback.skippable_ad_observed) {
+    return `${playback.skip_attempts ?? 0} skip attempt${playback.skip_attempts === 1 ? '' : 's'}`
+  }
+  if (playback.ad_observed) return 'ad observed · no Skip control'
+  return 'ad evidence unavailable'
+}
+
 function endpoint(flow: ConnectionIndexRecord['pre_flow'] | null) {
   if (!flow) return '—'
   const src = flow.src_ip.includes(':') ? `[${flow.src_ip}]` : flow.src_ip
@@ -325,8 +343,14 @@ export function TrafficTracerConnectionResults({
           {summary.playback && (
             <Chip
               variant="outlined"
-              color={summary.playback.primary_goal_met ? 'success' : 'warning'}
-              label={`Playback: ${summary.playback.primary_content_seconds.toFixed(1)}/${summary.playback.desired_primary_seconds}s primary · fixed ${summary.playback.observation_window_seconds}s · ${summary.playback.quality}${summary.playback.skip_attempts ? ` · ${summary.playback.skip_attempts} skip click` : ''}`}
+              color={
+                summary.playback.primary_goal_met
+                  ? 'success'
+                  : playbackPrimaryObserved(summary.playback)
+                    ? 'warning'
+                    : 'error'
+              }
+              label={`Playback: ${playbackPrimaryObserved(summary.playback) ? `${summary.playback.primary_content_seconds.toFixed(1)}/${summary.playback.desired_primary_seconds}s primary` : 'primary not observed'} · fixed ${summary.playback.observation_window_seconds}s · ${summary.playback.quality} · ${playbackAdLabel(summary.playback)}`}
             />
           )}
           {summary.trace_snapshot && (

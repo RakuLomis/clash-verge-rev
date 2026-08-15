@@ -137,7 +137,9 @@ export function TrafficTracerSessionCard({
                 color={
                   session.scenario_outcome_state === 'degraded'
                     ? 'warning'
-                    : 'default'
+                    : session.scenario_outcome_state === 'failed'
+                      ? 'error'
+                      : 'default'
                 }
                 label={`Playback: ${session.scenario_outcome_state}`}
               />

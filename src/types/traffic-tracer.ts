@@ -625,10 +625,16 @@ export interface CoverageSummary {
     observed_total_seconds?: number
     desired_primary_seconds: number
     primary_content_seconds: number
+    primary_content_observed?: boolean
     primary_goal_met: boolean
     quality: 'good' | 'degraded' | 'unavailable' | 'unknown'
     reason?: string | null
+    ad_observed?: boolean
+    skippable_ad_observed?: boolean
     skip_attempts?: number
+    skip_confirmed?: boolean
+    play_attempts?: number
+    interaction_errors?: number
     phase_seconds?: Record<string, number>
   }
 }
