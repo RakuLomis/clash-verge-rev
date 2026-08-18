@@ -53,7 +53,7 @@ export function batchRequestFromDraft(
     output_root: draft.output_root.trim(),
     chrome_binary: draft.chrome_binary.trim(),
     options: { ...draft.options, analyze_after_capture: true },
-    fail_fast: true,
+    fail_fast: false,
   }
 }
 

@@ -432,7 +432,7 @@ describe('TrafficTracer Complete workspace', () => {
       config_sha256: 'b'.repeat(64),
       targets: [{ index: 4 }, { index: 12 }],
       options: { analyze_after_capture: true },
-      fail_fast: true,
+      fail_fast: false,
     })
   })
 
