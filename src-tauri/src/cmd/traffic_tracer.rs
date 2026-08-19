@@ -972,15 +972,33 @@ pub async fn tt_batch_status(batch_id: String) -> CmdResult<Value> {
         )
         .await
         .stringify_err()?;
-    let terminal = value
-        .pointer("/batch/state")
-        .and_then(Value::as_str)
-        .is_some_and(|state| matches!(state, "completed" | "failed" | "cancelled" | "interrupted"));
-    if terminal {
+    if batch_status_can_release_capture(&value) {
         let _ = CaptureLock::global().release(&batch_id);
         let _ = manager.mark_ready(&batch_id);
     }
     Ok(value)
+}
+
+fn batch_status_can_release_capture(value: &Value) -> bool {
+    let batch_terminal = value
+        .pointer("/batch/state")
+        .and_then(Value::as_str)
+        .is_some_and(terminal_batch_state);
+    if !batch_terminal {
+        return false;
+    }
+
+    match value.get("job") {
+        None | Some(Value::Null) => true,
+        Some(job) => job
+            .get("state")
+            .and_then(Value::as_str)
+            .is_some_and(terminal_batch_state),
+    }
+}
+
+fn terminal_batch_state(state: &str) -> bool {
+    matches!(state, "completed" | "failed" | "cancelled" | "interrupted")
 }
 
 #[tauri::command]
@@ -2253,6 +2271,40 @@ mod capture_tests {
         assert!(JobState::Cancelled.terminal());
         assert!(JobState::Interrupted.terminal());
         assert!(!JobState::Capturing.terminal());
+    }
+
+    #[test]
+    fn resumed_batch_does_not_release_capture_for_an_active_job() {
+        for state in ["created", "preparing", "capturing", "analyzing"] {
+            let value = serde_json::json!({
+                "batch": {"state": "failed"},
+                "job": {"state": state},
+            });
+            assert!(!batch_status_can_release_capture(&value), "job state {state}");
+        }
+    }
+
+    #[test]
+    fn terminal_batch_releases_capture_only_when_job_is_terminal_or_absent() {
+        for state in ["completed", "failed", "cancelled", "interrupted"] {
+            let terminal_job = serde_json::json!({
+                "batch": {"state": "completed"},
+                "job": {"state": state},
+            });
+            assert!(batch_status_can_release_capture(&terminal_job));
+        }
+        assert!(batch_status_can_release_capture(&serde_json::json!({
+            "batch": {"state": "failed"},
+            "job": null,
+        })));
+        assert!(!batch_status_can_release_capture(&serde_json::json!({
+            "batch": {"state": "running"},
+            "job": {"state": "completed"},
+        })));
+        assert!(!batch_status_can_release_capture(&serde_json::json!({
+            "batch": {"state": "failed"},
+            "job": {},
+        })));
     }
 
     fn batch_target(index: usize, domain: &str) -> TargetConfigEntry {

@@ -115,7 +115,7 @@ const TrafficTracerPage = () => {
               status={batches.batchStatus}
               workspaceRoot={diagnosticRequest?.output_root ?? ''}
               cancelling={batches.cancelMutation.isPending}
-              resuming={batches.resumeMutation.isPending}
+              resuming={batches.resuming}
               onCancel={() =>
                 void batches.cancelBatch(
                   'Cancelled from the TrafficTracer workspace.',

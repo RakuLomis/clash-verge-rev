@@ -14,6 +14,11 @@ import type { BatchStartRequest } from '@/types/traffic-tracer'
 const ACTIVE_BATCH_KEY = 'traffictracer.activeBatchId'
 const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'interrupted'])
 
+interface ResumeTransition {
+  batchId: string
+  baselineAttempt: number
+}
+
 export const trafficTracerBatchListKey = (workspaceRoot: string) =>
   ['trafficTracer', 'batches', workspaceRoot] as const
 export const trafficTracerBatchKey = (batchId: string) =>
@@ -24,6 +29,8 @@ export function useTrafficTracerBatches(workspaceRoot = '', enabled = true) {
   const [batchId, setBatchId] = useState<string | null>(() =>
     localStorage.getItem(ACTIVE_BATCH_KEY),
   )
+  const [resumeTransition, setResumeTransition] =
+    useState<ResumeTransition | null>(null)
   const listQuery = useQuery({
     queryKey: trafficTracerBatchListKey(workspaceRoot),
     queryFn: listTrafficTracerBatches,
@@ -55,16 +62,31 @@ export function useTrafficTracerBatches(workspaceRoot = '', enabled = true) {
       : ['trafficTracer', 'batch', 'none'],
     queryFn: () => getTrafficTracerBatch(activeBatchId!),
     enabled: enabled && Boolean(activeBatchId),
-    refetchInterval: ({ state }) =>
-      state.data && TERMINAL.has(state.data.batch.state) ? false : 1000,
+    refetchInterval: ({ state }) => {
+      const transitionPending =
+        resumeTransition?.batchId === activeBatchId &&
+        (!state.data ||
+          (state.data.batch.state !== 'running' &&
+            state.data.batch.resume.attempt <=
+              resumeTransition.baselineAttempt))
+      if (transitionPending) return 1000
+      return state.data && TERMINAL.has(state.data.batch.state) ? false : 1000
+    },
   })
+
+  const resumeTransitionActive =
+    resumeTransition?.batchId === activeBatchId &&
+    (!statusQuery.data ||
+      (statusQuery.data.batch.state !== 'running' &&
+        statusQuery.data.batch.resume.attempt <=
+          resumeTransition.baselineAttempt))
 
   useEffect(() => {
     const state = statusQuery.data?.batch.state
-    if (state && TERMINAL.has(state)) {
+    if (state && TERMINAL.has(state) && !resumeTransitionActive) {
       localStorage.removeItem(ACTIVE_BATCH_KEY)
     }
-  }, [statusQuery.data?.batch.state])
+  }, [resumeTransitionActive, statusQuery.data?.batch.state])
 
   const liveStatus = statusQuery.data
   const batchStatus =
@@ -113,6 +135,14 @@ export function useTrafficTracerBatches(workspaceRoot = '', enabled = true) {
       if (!activeBatchId) throw new Error('No TrafficTracer batch is selected')
       return resumeTrafficTracerBatch(activeBatchId)
     },
+    onMutate: () => {
+      if (!activeBatchId) return
+      remember(activeBatchId)
+      setResumeTransition({
+        batchId: activeBatchId,
+        baselineAttempt: batchStatus?.batch.resume.attempt ?? 0,
+      })
+    },
     onSuccess: (job) => {
       remember(job.job_id)
       void queryClient.invalidateQueries({
@@ -120,6 +150,7 @@ export function useTrafficTracerBatches(workspaceRoot = '', enabled = true) {
       })
       invalidate()
     },
+    onError: () => setResumeTransition(null),
   })
 
   return {
@@ -135,6 +166,7 @@ export function useTrafficTracerBatches(workspaceRoot = '', enabled = true) {
     cancelMutation,
     resumeBatch: resumeMutation.mutateAsync,
     resumeMutation,
+    resuming: resumeMutation.isPending || resumeTransitionActive,
     selectBatch: remember,
   }
 }
