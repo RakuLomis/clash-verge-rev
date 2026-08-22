@@ -75,7 +75,7 @@ impl FakeTrafficTracerWorker {
                     "flow_schema_version": FLOW_SCHEMA_VERSION,
                     "methods": [
                         "hello", "environment.diagnose", "job.start",
-                        "job.cancel", "job.status", "worker.shutdown"
+                        "job.cancel", "job.status", "batch.interrupt", "worker.shutdown"
                     ],
                 }),
             ),

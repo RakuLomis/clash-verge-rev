@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/services/cmds', () => ({
   cancelTrafficTracerBatch: vi.fn(),
+  interruptTrafficTracerBatch: vi.fn(),
   getTrafficTracerBatch: mocks.get,
   listTrafficTracerBatches: mocks.list,
   resumeTrafficTracerBatch: mocks.resume,
@@ -68,7 +69,10 @@ afterEach(() => {
 
 describe('useTrafficTracerBatches Resume transition', () => {
   it('keeps polling through a stale terminal response until resumed state appears', async () => {
-    localStorage.setItem('traffictracer.activeBatchId', 'batch-one')
+    localStorage.setItem(
+      'traffictracer.activeBatchId:%2Ftmp%2Fcaptures',
+      'batch-one',
+    )
     mocks.list.mockResolvedValue({
       batches: [manifest('failed', 0)],
       corrupt: [],
@@ -102,17 +106,71 @@ describe('useTrafficTracerBatches Resume transition', () => {
 
     await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(2))
     expect(result.current.resuming).toBe(true)
-    expect(localStorage.getItem('traffictracer.activeBatchId')).toBe(
-      'batch-one',
-    )
+    expect(
+      localStorage.getItem('traffictracer.activeBatchId:%2Ftmp%2Fcaptures'),
+    ).toBe('batch-one')
 
     await waitFor(
       () => expect(result.current.batchStatus?.batch.state).toBe('running'),
       { timeout: 2500 },
     )
     expect(mocks.get.mock.calls.length).toBeGreaterThanOrEqual(3)
-    expect(localStorage.getItem('traffictracer.activeBatchId')).toBe(
-      'batch-one',
+    expect(
+      localStorage.getItem('traffictracer.activeBatchId:%2Ftmp%2Fcaptures'),
+    ).toBe('batch-one')
+  })
+
+  it('does not auto-select an old failed or interrupted batch', async () => {
+    mocks.list.mockResolvedValue({
+      batches: [manifest('failed', 0), manifest('interrupted', 0)],
+      corrupt: [],
+    })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const wrapper = ({ children }: PropsWithChildren) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
     )
+    const { result } = renderHook(
+      () => useTrafficTracerBatches('/tmp/captures'),
+      { wrapper },
+    )
+
+    await waitFor(() => expect(result.current.listQuery.isSuccess).toBe(true))
+    expect(result.current.batchStatus).toBeUndefined()
+    expect(result.current.activeBatchId).toBeNull()
+    expect(mocks.get).not.toHaveBeenCalled()
+  })
+  it('loads a history batch only after explicit selection', async () => {
+    mocks.list.mockResolvedValue({
+      batches: [manifest('completed', 0)],
+      corrupt: [],
+    })
+    mocks.get.mockResolvedValue(status('completed', 0))
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const wrapper = ({ children }: PropsWithChildren) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    const { result } = renderHook(
+      () => useTrafficTracerBatches('/tmp/captures'),
+      { wrapper },
+    )
+
+    await waitFor(() => expect(result.current.listQuery.isSuccess).toBe(true))
+    expect(result.current.batchStatus).toBeUndefined()
+
+    act(() => result.current.selectBatch('batch-one'))
+
+    await waitFor(() =>
+      expect(result.current.batchStatus?.batch.state).toBe('completed'),
+    )
+    expect(result.current.activeBatchId).toBeNull()
+    expect(result.current.viewedBatchId).toBe('batch-one')
+    expect(
+      localStorage.getItem('traffictracer.viewedBatchId:%2Ftmp%2Fcaptures'),
+    ).toBe('batch-one')
+    expect(mocks.get).toHaveBeenCalledWith('batch-one')
   })
 })

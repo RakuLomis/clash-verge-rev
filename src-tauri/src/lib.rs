@@ -185,6 +185,7 @@ mod app_init {
             cmd::tt_batch_start,
             cmd::tt_batch_status,
             cmd::tt_batch_list,
+            cmd::tt_batch_interrupt,
             cmd::tt_batch_cancel,
             cmd::tt_batch_resume,
             cmd::tt_capture_get,

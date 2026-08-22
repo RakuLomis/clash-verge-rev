@@ -121,7 +121,9 @@ export interface JobSnapshot {
   progress: number
   message: string
   cancel_requested: boolean
+  interrupt_requested?: boolean
   cancel_requested_now?: boolean | null
+  interrupt_requested_now?: boolean | null
   result?: unknown
   error?: unknown
 }

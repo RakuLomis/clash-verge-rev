@@ -4,6 +4,11 @@ import {
   Button,
   Chip,
   Collapse,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   LinearProgress,
   Paper,
   Stack,
@@ -18,19 +23,24 @@ import { TrafficTracerSessionDetail } from './session-detail'
 export function TrafficTracerBatchProgress({
   status,
   workspaceRoot,
-  cancelling = false,
+  interrupting = false,
+  canInterrupt = false,
+  viewingHistory = false,
   resuming = false,
-  onCancel,
+  onInterrupt,
   onResume,
 }: {
   status: BatchStatusResult
   workspaceRoot: string
-  cancelling?: boolean
+  interrupting?: boolean
+  canInterrupt?: boolean
+  viewingHistory?: boolean
   resuming?: boolean
-  onCancel: () => void
+  onInterrupt: () => void
   onResume: () => void
 }) {
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [confirmOpen, setConfirmOpen] = useState(false)
   const { batch } = status
   const terminal = ['completed', 'failed', 'cancelled', 'interrupted'].includes(
     batch.state,
@@ -91,10 +101,11 @@ export function TrafficTracerBatchProgress({
           />
         </Stack>
         <LinearProgress variant="determinate" value={progress} />
-        {batch.cancel_requested && (
+        {(batch.cancel_requested || status.job?.interrupt_requested) && (
           <Alert severity="info">
-            Cancellation requested. The current Chrome cleanup must finish
-            before the capture group stops.
+            {status.job?.interrupt_requested
+              ? 'Interruption requested. Safely closing the current Chrome and capture processes before the group stops.'
+              : 'Cancellation requested. The current Chrome cleanup must finish before the capture group stops.'}
           </Alert>
         )}
         <Stack
@@ -192,18 +203,28 @@ export function TrafficTracerBatchProgress({
           </Box>
         </Collapse>
         <Stack direction="row" spacing={1} sx={{ justifyContent: 'flex-end' }}>
-          {batch.state === 'running' && (
+          {batch.state === 'running' && canInterrupt && !viewingHistory && (
             <Button
               color="warning"
-              disabled={cancelling || batch.cancel_requested}
-              onClick={onCancel}
+              disabled={
+                interrupting ||
+                batch.cancel_requested ||
+                status.job?.interrupt_requested
+              }
+              onClick={() => setConfirmOpen(true)}
             >
-              {cancelling ? 'Cancelling…' : 'Cancel capture group'}
+              {interrupting || status.job?.interrupt_requested
+                ? 'Interrupting…'
+                : 'Interrupt current capture'}
             </Button>
           )}
           {canResume && (
             <Button variant="contained" disabled={resuming} onClick={onResume}>
-              {resuming ? 'Resuming…' : 'Resume from failed target'}
+              {resuming
+                ? 'Resuming…'
+                : batch.state === 'interrupted'
+                  ? 'Resume from interrupted target'
+                  : 'Resume from failed target'}
             </Button>
           )}
         </Stack>
@@ -213,6 +234,29 @@ export function TrafficTracerBatchProgress({
         workspaceRoot={workspaceRoot}
         onClose={() => setSessionId(null)}
       />
+      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
+        <DialogTitle>Interrupt current capture?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Completed targets will be preserved. The current target will stop
+            after Chrome and capture cleanup, later targets will not start, and
+            Resume will retry the interrupted target in this capture group.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmOpen(false)}>Keep running</Button>
+          <Button
+            color="warning"
+            variant="contained"
+            onClick={() => {
+              setConfirmOpen(false)
+              onInterrupt()
+            }}
+          >
+            Interrupt capture
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Paper>
   )
 }

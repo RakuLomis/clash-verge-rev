@@ -636,6 +636,13 @@ export function listTrafficTracerBatches() {
   return invoke<TrafficTracer.BatchListResult>('tt_batch_list')
 }
 
+export function interruptTrafficTracerBatch(batchId: string, reason?: string) {
+  return invoke<TrafficTracer.BatchStatusResult>('tt_batch_interrupt', {
+    batchId,
+    reason,
+  })
+}
+
 export function cancelTrafficTracerBatch(batchId: string, reason?: string) {
   return invoke<TrafficTracer.BatchStatusResult>('tt_batch_cancel', {
     batchId,

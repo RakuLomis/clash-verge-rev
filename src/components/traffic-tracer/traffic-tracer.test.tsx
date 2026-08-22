@@ -490,12 +490,13 @@ describe('TrafficTracer Complete workspace', () => {
       },
       job: null,
     }
-    const onCancel = vi.fn()
+    const onInterrupt = vi.fn()
     render(
       <TrafficTracerBatchProgress
         status={status}
         workspaceRoot="/tmp/sessions"
-        onCancel={onCancel}
+        canInterrupt
+        onInterrupt={onInterrupt}
         onResume={vi.fn()}
       />,
     )
@@ -506,9 +507,13 @@ describe('TrafficTracer Complete workspace', () => {
       screen.getByText('Opened analysis for session-one'),
     ).toBeInTheDocument()
     await userEvent.click(
-      screen.getByRole('button', { name: 'Cancel capture group' }),
+      screen.getByRole('button', { name: 'Interrupt current capture' }),
     )
-    expect(onCancel).toHaveBeenCalledOnce()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Interrupt capture' }),
+    )
+    expect(onInterrupt).toHaveBeenCalledOnce()
   })
 
   it('requires confirmation before cancelling an active Job', async () => {

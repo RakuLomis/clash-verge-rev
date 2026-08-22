@@ -58,6 +58,8 @@ pub enum RequestMethod {
     BatchStart,
     #[serde(rename = "batch.status")]
     BatchStatus,
+    #[serde(rename = "batch.interrupt")]
+    BatchInterrupt,
     #[serde(rename = "batch.cancel")]
     BatchCancel,
     #[serde(rename = "batch.list")]
@@ -219,6 +221,12 @@ mod tests {
         let request = Request::new(RequestId::Integer(7), RequestMethod::Hello, EmptyParams::default());
         assert_eq!(request.api_version, WORKER_API_VERSION);
         assert_eq!(request.kind, MessageType::Request);
+    }
+
+    #[test]
+    fn batch_interrupt_method_uses_worker_wire_name() {
+        let value = serde_json::to_value(RequestMethod::BatchInterrupt).unwrap();
+        assert_eq!(value, serde_json::json!("batch.interrupt"));
     }
 
     #[test]

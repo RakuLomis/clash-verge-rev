@@ -1,4 +1,4 @@
-import { Box } from '@mui/material'
+import { Box, MenuItem, TextField } from '@mui/material'
 import { invoke } from '@tauri-apps/api/core'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -109,16 +109,52 @@ const TrafficTracerPage = () => {
             />
           </Box>
         )}
+        {batches.batches.length > 0 && (
+          <Box sx={{ mb: 2, maxWidth: 520 }}>
+            <TextField
+              select
+              fullWidth
+              size="small"
+              label="Capture Group history"
+              disabled={
+                batches.batchStatus?.batch.state === 'running' &&
+                !batches.viewedBatchId
+              }
+              value={batches.viewedBatchId ?? ''}
+              onChange={(event) =>
+                batches.selectBatch(event.target.value || null)
+              }
+            >
+              <MenuItem value="">Current capture</MenuItem>
+              {batches.batches.map((batch) => (
+                <MenuItem key={batch.batch_id} value={batch.batch_id}>
+                  {new Date(batch.created_at).toLocaleString()} · {batch.state}{' '}
+                  ·{' '}
+                  {
+                    batch.children.filter(
+                      (child) => child.state === 'completed',
+                    ).length
+                  }
+                  /{batch.targets.length}
+                </MenuItem>
+              ))}
+            </TextField>
+          </Box>
+        )}
         {batches.batchStatus && (
           <Box sx={{ mb: 2 }}>
             <TrafficTracerBatchProgress
               status={batches.batchStatus}
               workspaceRoot={diagnosticRequest?.output_root ?? ''}
-              cancelling={batches.cancelMutation.isPending}
+              interrupting={batches.interruptMutation.isPending}
               resuming={batches.resuming}
-              onCancel={() =>
-                void batches.cancelBatch(
-                  'Cancelled from the TrafficTracer workspace.',
+              canInterrupt={
+                batches.batchStatus.batch.batch_id === batches.activeBatchId
+              }
+              viewingHistory={Boolean(batches.viewedBatchId)}
+              onInterrupt={() =>
+                void batches.interruptBatch(
+                  'Interrupted from the TrafficTracer workspace.',
                 )
               }
               onResume={() => void batches.resumeBatch()}

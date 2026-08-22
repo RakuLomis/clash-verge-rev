@@ -548,7 +548,11 @@ pub struct JobSnapshot {
     pub message: String,
     pub cancel_requested: bool,
     #[serde(default)]
+    pub interrupt_requested: bool,
+    #[serde(default)]
     pub cancel_requested_now: Option<bool>,
+    #[serde(default)]
+    pub interrupt_requested_now: Option<bool>,
     #[serde(default)]
     pub result: Option<Value>,
     #[serde(default)]
@@ -825,7 +829,7 @@ struct BatchIdParams {
 }
 
 #[derive(Serialize)]
-struct BatchCancelParams {
+struct BatchStopParams {
     batch_id: String,
     reason: String,
 }
@@ -1012,6 +1016,23 @@ pub async fn tt_batch_list() -> CmdResult<Value> {
 }
 
 #[tauri::command]
+pub async fn tt_batch_interrupt(batch_id: String, reason: Option<String>) -> CmdResult<Value> {
+    validate_job_id(&batch_id)?;
+    WorkerManager::global()
+        .client()
+        .stringify_err()?
+        .request(
+            RequestMethod::BatchInterrupt,
+            BatchStopParams {
+                batch_id,
+                reason: reason.unwrap_or_else(|| "Interrupted by user.".to_owned()),
+            },
+        )
+        .await
+        .stringify_err()
+}
+
+#[tauri::command]
 pub async fn tt_batch_cancel(batch_id: String, reason: Option<String>) -> CmdResult<Value> {
     validate_job_id(&batch_id)?;
     WorkerManager::global()
@@ -1019,7 +1040,7 @@ pub async fn tt_batch_cancel(batch_id: String, reason: Option<String>) -> CmdRes
         .stringify_err()?
         .request(
             RequestMethod::BatchCancel,
-            BatchCancelParams {
+            BatchStopParams {
                 batch_id,
                 reason: reason.unwrap_or_else(|| "Cancelled by user.".to_owned()),
             },
