@@ -127,9 +127,11 @@ sites:
 
 点击“检测环境”。诊断覆盖核心能力、控制器、TUN 服务、接口、捕获权限、浏览器、输出目录和磁盘。“已阻断”必须修复；“需要处理”表示可能降级。修改字段后需重新检测。
 
-通过后点击“开始捕获”。运行期间核心、配置、tracing、TUN、系统代理和服务操作会锁定。关闭页面不会取消任务；停止时使用“取消任务”。启用“自动分析”后 Worker 会直接分析，无需 Python 终端。
+通过后点击“开始捕获”。运行期间核心、配置、tracing、TUN、系统代理和服务操作会锁定。关闭页面不会中断任务。若需停止当前串行 Capture Group，点击“Interrupt current capture”并确认：Worker 会先安全关闭其管理的 Chrome 和捕获进程，保留已完成目标，将当前目标和批次标记为 `interrupted`，且不会启动后续目标。之后可点击“Resume from interrupted target”，在同一时间戳 Capture Group 中以新 Session 重试被中断的 URL。启用“自动分析”后 Worker 会直接分析，无需 Python 终端。
 
 ## 5. 会话与产物
+
+“Capture Group history”按当前 Session Output Directory 隔离显示任务历史。UI 只会自动恢复并选中仍为 `running` 的批次，不会因为最近一次历史任务为 `failed` 或 `interrupted` 而覆盖当前视图。选择具体历史项可只读查看其目标与 Session；选择“Current capture”返回本次活动任务。
 
 “会话”按一个明确的时间戳目录显示状态、组件版本、警告和产物。捕获运行时自动选中本次 Capture group；任务结束且没有手动选择时默认不显示历史内容。点击“选择文件夹”可打开当前会话输出根目录下的历史时间戳目录，点击“清除选择”恢复空闲状态。可打开详情/目录，查看 trace、CDP、NetLog、pcap 和关联结果，或“重新分析”。结果中的 `Trace snapshot: barrier` 表示只分析捕获结束 barrier 以内的事件；`late events excluded` 只统计截止后保留在原始 trace 的事件。旧 Session 显示 `legacy_unbounded`。Storage chip 显示捕获总量、raw PCAP 占用与压缩状态；候选截断时显示已展示数和完整总数。
 
