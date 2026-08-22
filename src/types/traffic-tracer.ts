@@ -533,10 +533,12 @@ export interface AnalysisPageQuality {
     requested: boolean
     total: number
     applicable?: number
+    post_applicable?: number
     pre_success: number
     post_success: number
     complete_pairs: number
     post_not_applicable?: number
+    post_not_requested?: number
   }
 }
 
@@ -615,6 +617,17 @@ export interface CoverageSummary {
     page_attributed: AnalysisNetworkOutcome
     capture_global: AnalysisNetworkOutcome
   }
+  browser_request_failures?: {
+    total_requests: number
+    failed_occurrences: number
+    canceled_occurrences: number
+    recovered_occurrences: number
+    unrecovered_occurrences: number
+    by_reason: Record<string, number>
+    by_relation: Record<string, number>
+    recovered_by_reason: Record<string, number>
+    recovery_evidence: 'later_successful_occurrence_same_url'
+  }
   warnings?: AnalysisWarning[]
   trace_snapshot?: TraceSnapshotSummary
   storage?: AnalysisStorageSummary
@@ -634,8 +647,19 @@ export interface CoverageSummary {
     skip_attempts?: number
     skip_confirmed?: boolean
     play_attempts?: number
+    recovery_attempts?: number
+    reload_command_sent?: boolean
     interaction_errors?: number
+    recovery_errors?: number
     phase_seconds?: Record<string, number>
+    diagnostics?: {
+      counts?: Record<string, number>
+      last_observation?: Record<string, unknown>
+      first_seen_at_seconds?: {
+        player?: number | null
+        video?: number | null
+      }
+    }
   }
 }
 

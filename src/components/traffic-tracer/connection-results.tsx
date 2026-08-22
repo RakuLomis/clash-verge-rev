@@ -62,6 +62,23 @@ function playbackAdLabel(playback: NonNullable<CoverageSummary['playback']>) {
   return 'ad evidence unavailable'
 }
 
+function playbackLabel(playback: NonNullable<CoverageSummary['playback']>) {
+  const primary = playbackPrimaryObserved(playback)
+    ? `${playback.primary_content_seconds.toFixed(1)}/${playback.desired_primary_seconds}s primary`
+    : 'primary not observed'
+  const details = [
+    `Playback: ${primary}`,
+    `fixed ${playback.observation_window_seconds}s`,
+    playback.quality,
+    playbackAdLabel(playback),
+  ]
+  if (playback.reason) details.push(`reason ${playback.reason}`)
+  if ((playback.recovery_attempts ?? 0) > 0) {
+    details.push(playback.reload_command_sent ? 'reload sent' : 'reload failed')
+  }
+  return details.join(' · ')
+}
+
 function endpoint(flow: ConnectionIndexRecord['pre_flow'] | null) {
   if (!flow) return '—'
   const src = flow.src_ip.includes(':') ? `[${flow.src_ip}]` : flow.src_ip
@@ -202,6 +219,7 @@ export function TrafficTracerConnectionResults({
     summary?.capture_global_quality_state
   const pageNetworkOutcome = summary?.network_outcome?.page_attributed
   const globalNetworkOutcome = summary?.network_outcome?.capture_global
+  const browserFailures = summary?.browser_request_failures
   const pageQuality = quality?.page_attributed ?? quality
   const qualityWarnings = summary?.warnings ?? []
   const pageWarnings = qualityWarnings.filter(
@@ -240,16 +258,26 @@ export function TrafficTracerConnectionResults({
       localEndpointCount -
       noSocketOutcomeCount,
   )
+  const postNotApplicable =
+    pageQuality?.pcap_extraction.post_not_applicable ?? 0
+  const postNotRequested = pageQuality?.pcap_extraction.post_not_requested ?? 0
   const applicablePcap =
+    pageQuality?.pcap_extraction.post_applicable ??
     pageQuality?.pcap_extraction.applicable ??
     Math.max(
       0,
       (pageQuality?.pcap_extraction.total ?? 0) -
-        (pageQuality?.pcap_extraction.post_not_applicable ?? 0),
+        postNotApplicable -
+        postNotRequested,
     )
-  const unavailablePcap = Math.max(
+  const unavailablePostPcap = Math.max(
     0,
-    applicablePcap - (pageQuality?.pcap_extraction.complete_pairs ?? 0),
+    applicablePcap - (pageQuality?.pcap_extraction.post_success ?? 0),
+  )
+  const unavailablePrePcap = Math.max(
+    0,
+    (pageQuality?.pcap_extraction.total ?? 0) -
+      (pageQuality?.pcap_extraction.pre_success ?? 0),
   )
   const connectionFailures = groupedConnectionFailures(
     connections,
@@ -338,6 +366,27 @@ export function TrafficTracerConnectionResults({
             remains complete
           </Alert>
         )}
+      {browserFailures && browserFailures.failed_occurrences > 0 && (
+        <Alert
+          severity={
+            browserFailures.unrecovered_occurrences > 0 ? 'warning' : 'info'
+          }
+        >
+          <Typography variant="subtitle2">
+            Browser request failures: {browserFailures.failed_occurrences} ·{' '}
+            {browserFailures.recovered_occurrences} recovered by a later
+            same-URL success · {browserFailures.unrecovered_occurrences}{' '}
+            unrecovered
+          </Typography>
+          <Stack direction="row" spacing={1} sx={{ mt: 0.5, flexWrap: 'wrap' }}>
+            {Object.entries(browserFailures.by_reason).map(
+              ([reason, count]) => (
+                <Chip key={reason} size="small" label={`${reason}: ${count}`} />
+              ),
+            )}
+          </Stack>
+        </Alert>
+      )}
       {summary && (
         <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
           {summary.playback && (
@@ -350,7 +399,7 @@ export function TrafficTracerConnectionResults({
                     ? 'warning'
                     : 'error'
               }
-              label={`Playback: ${playbackPrimaryObserved(summary.playback) ? `${summary.playback.primary_content_seconds.toFixed(1)}/${summary.playback.desired_primary_seconds}s primary` : 'primary not observed'} · fixed ${summary.playback.observation_window_seconds}s · ${summary.playback.quality} · ${playbackAdLabel(summary.playback)}`}
+              label={playbackLabel(summary.playback)}
             />
           )}
           {summary.trace_snapshot && (
@@ -411,11 +460,7 @@ export function TrafficTracerConnectionResults({
           {pageQuality?.pcap_extraction.requested && (
             <Chip
               variant="outlined"
-              label={
-                localEndpointCount > 0
-                  ? `PCAP pairs: ${pageQuality.pcap_extraction.complete_pairs}/${applicablePcap} applicable complete · pre ${pageQuality.pcap_extraction.pre_success} · post ${pageQuality.pcap_extraction.post_success} · ${unavailablePcap} unavailable · ${pageQuality.pcap_extraction.post_not_applicable ?? localEndpointCount} local post N/A`
-                  : `PCAP pairs: ${pageQuality.pcap_extraction.complete_pairs}/${applicablePcap} applicable complete · pre ${pageQuality.pcap_extraction.pre_success} · post ${pageQuality.pcap_extraction.post_success} · ${unavailablePcap} unavailable`
-              }
+              label={`PCAP pairs: ${pageQuality.pcap_extraction.complete_pairs}/${applicablePcap} applicable complete · pre ${pageQuality.pcap_extraction.pre_success}/${pageQuality.pcap_extraction.total} (${unavailablePrePcap} unavailable) · post ${pageQuality.pcap_extraction.post_success}/${applicablePcap} (${unavailablePostPcap} unavailable) · ${postNotApplicable} post N/A · ${postNotRequested} post not requested`}
             />
           )}
         </Stack>

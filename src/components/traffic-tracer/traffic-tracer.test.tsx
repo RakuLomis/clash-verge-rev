@@ -707,6 +707,20 @@ describe('TrafficTracer Complete workspace', () => {
         analysis_result_bytes_before_summary: 1000,
         compression: 'none',
       },
+      browser_request_failures: {
+        total_requests: 3,
+        failed_occurrences: 2,
+        canceled_occurrences: 0,
+        recovered_occurrences: 1,
+        unrecovered_occurrences: 1,
+        by_reason: {
+          'net::ERR_CERT_VERIFIER_CHANGED': 1,
+          'net::ERR_TIMED_OUT': 1,
+        },
+        by_relation: { same_site: 1, third_party: 1 },
+        recovered_by_reason: { 'net::ERR_CERT_VERIFIER_CHANGED': 1 },
+        recovery_evidence: 'later_successful_occurrence_same_url',
+      },
       warnings: [
         {
           code: 'EGRESS_DIAL_FAILED',
@@ -748,11 +762,12 @@ describe('TrafficTracer Complete workspace', () => {
         pcap_extraction: {
           requested: true,
           total: 2,
-          applicable: 1,
+          post_applicable: 0,
           pre_success: 1,
           post_success: 0,
           complete_pairs: 0,
           post_not_applicable: 1,
+          post_not_requested: 1,
         },
         capture_global: {
           logical_flows: {
@@ -859,6 +874,14 @@ describe('TrafficTracer Complete workspace', () => {
       screen.getByText('cdn.example · ipv4_timeout: 1'),
     ).toBeInTheDocument()
     expect(
+      screen.getByText(
+        /Browser request failures: 2.*1 recovered.*1 unrecovered/,
+      ),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText('net::ERR_CERT_VERIFIER_CHANGED: 1'),
+    ).toBeInTheDocument()
+    expect(
       screen.queryByText(/localhost\.weixin\.qq\.com · connection_refused/),
     ).not.toBeInTheDocument()
     expect(
@@ -876,7 +899,7 @@ describe('TrafficTracer Complete workspace', () => {
     ).toBeInTheDocument()
     expect(
       screen.getByText(
-        /PCAP pairs: 0\/1 applicable complete.*1 unavailable.*1 local post N\/A/,
+        /PCAP pairs: 0\/0 applicable complete.*pre 1\/2 \(1 unavailable\).*post 0\/0 \(0 unavailable\).*1 post N\/A.*1 post not requested/,
       ),
     ).toBeInTheDocument()
     expect(
@@ -1031,6 +1054,9 @@ describe('TrafficTracer Complete workspace', () => {
         primary_content_observed: false,
         primary_goal_met: false,
         quality: 'unavailable',
+        reason: 'PLAYER_NOT_CREATED',
+        recovery_attempts: 1,
+        reload_command_sent: true,
         ad_observed: true,
         skippable_ad_observed: false,
         skip_attempts: 0,
@@ -1048,7 +1074,7 @@ describe('TrafficTracer Complete workspace', () => {
 
     expect(
       screen.getByText(
-        'Playback: primary not observed · fixed 35s · unavailable · ad observed · no Skip control',
+        'Playback: primary not observed · fixed 35s · unavailable · ad observed · no Skip control · reason PLAYER_NOT_CREATED · reload sent',
       ),
     ).toBeInTheDocument()
   })
