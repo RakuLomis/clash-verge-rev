@@ -144,6 +144,17 @@ export function TrafficTracerFlowDetail({
                   size="small"
                 />
               )}
+              {flow.carrier_state && (
+                <Chip
+                  color={
+                    flow.carrier_state === 'observation_missing'
+                      ? 'warning'
+                      : 'info'
+                  }
+                  label={`Carrier: ${flow.carrier_state}`}
+                  size="small"
+                />
+              )}
             </Stack>
 
             {flow.shared && (
@@ -168,6 +179,17 @@ export function TrafficTracerFlowDetail({
                 </Alert>
               )}
             </Stack>
+
+            {flow.carrier_binding && (
+              <Alert severity="info">
+                {flow.carrier_binding.mode} carrier{' '}
+                {flow.carrier_binding.carrier_id} · protocol{' '}
+                {flow.carrier_binding.protocol} · relation{' '}
+                {flow.carrier_binding.relation} · generation{' '}
+                {flow.carrier_binding.generation} ·{' '}
+                {flow.carrier_binding.physical_paths.length} physical path(s)
+              </Alert>
+            )}
 
             <Box>
               <Typography variant="subtitle2" sx={{ mb: 0.75 }}>

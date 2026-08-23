@@ -500,6 +500,8 @@ pub struct CaptureOptions {
     pub headless: bool,
     pub pcap_split_mode: String,
     pub cache_mode: String,
+    pub proxy_protocol_mode: String,
+    pub expected_proxy_protocol: String,
 }
 
 impl Default for CaptureOptions {
@@ -512,6 +514,8 @@ impl Default for CaptureOptions {
             headless: false,
             pcap_split_mode: "unique_connections".to_string(),
             cache_mode: "cold".to_string(),
+            proxy_protocol_mode: "strict_single".to_string(),
+            expected_proxy_protocol: String::new(),
         }
     }
 }
@@ -848,6 +852,12 @@ pub async fn tt_batch_start(app_handle: AppHandle, request: BatchStartRequest) -
     if !valid_cache_mode(&request.options.cache_mode) {
         return Err("cache_mode must be cold or warm".into());
     }
+    if !valid_proxy_protocol_mode(&request.options.proxy_protocol_mode) {
+        return Err("proxy_protocol_mode must be strict_single or observe".into());
+    }
+    if !valid_proxy_protocol(&request.options.expected_proxy_protocol) {
+        return Err("expected_proxy_protocol must be a protocol name".into());
+    }
     let preview = tt_target_config_load(request.config_path.clone()).await?;
     validate_batch_selection(&preview, &request)?;
     let selected_indexes = request
@@ -1140,6 +1150,12 @@ fn validate_capture_request(request: &CaptureStartRequest) -> CmdResult {
     if !valid_cache_mode(&request.options.cache_mode) {
         return Err("cache_mode must be cold or warm".into());
     }
+    if !valid_proxy_protocol_mode(&request.options.proxy_protocol_mode) {
+        return Err("proxy_protocol_mode must be strict_single or observe".into());
+    }
+    if !valid_proxy_protocol(&request.options.expected_proxy_protocol) {
+        return Err("expected_proxy_protocol must be a protocol name".into());
+    }
     Ok(())
 }
 
@@ -1149,6 +1165,17 @@ fn valid_pcap_split_mode(value: &str) -> bool {
 
 fn valid_cache_mode(value: &str) -> bool {
     matches!(value, "cold" | "warm")
+}
+
+fn valid_proxy_protocol_mode(value: &str) -> bool {
+    matches!(value, "strict_single" | "observe")
+}
+
+fn valid_proxy_protocol(value: &str) -> bool {
+    value.is_empty()
+        || value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
 }
 
 fn valid_run_label(value: &str) -> bool {
@@ -2224,6 +2251,17 @@ mod capture_tests {
     fn capture_spec_rejects_invalid_cache_mode() {
         let mut request = valid_request();
         request.options.cache_mode = "stale".to_owned();
+        assert!(validate_capture_request(&request).is_err());
+    }
+
+    #[test]
+    fn capture_spec_rejects_invalid_proxy_protocol_options() {
+        let mut request = valid_request();
+        request.options.proxy_protocol_mode = "guess".to_owned();
+        assert!(validate_capture_request(&request).is_err());
+
+        request.options.proxy_protocol_mode = "strict_single".to_owned();
+        request.options.expected_proxy_protocol = "hy2 invalid".to_owned();
         assert!(validate_capture_request(&request).is_err());
     }
 

@@ -757,6 +757,55 @@ export function TrafficTracerCaptureForm({
           <TextField
             select
             size="small"
+            label="Proxy protocol invariant"
+            value={draft.options.proxy_protocol_mode}
+            helperText={
+              draft.options.proxy_protocol_mode === 'strict_single'
+                ? 'Block capture when selected proxy leaves use multiple protocols.'
+                : 'Record mixed protocols diagnostically without blocking capture.'
+            }
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                options: {
+                  ...current.options,
+                  proxy_protocol_mode: event.target.value as
+                    | 'strict_single'
+                    | 'observe',
+                },
+              }))
+            }
+          >
+            <MenuItem value="strict_single">Strict single protocol</MenuItem>
+            <MenuItem value="observe">Observe only</MenuItem>
+          </TextField>
+
+          <TextField
+            size="small"
+            label="Expected proxy protocol (optional)"
+            value={draft.options.expected_proxy_protocol}
+            placeholder="hysteria2"
+            helperText={
+              draft.options.expected_proxy_protocol
+                ? `Require ${draft.options.expected_proxy_protocol} for proxied flows; DIRECT and REJECT are exempt.`
+                : 'Leave empty to freeze the single selected leaf protocol automatically.'
+            }
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                options: {
+                  ...current.options,
+                  expected_proxy_protocol: event.target.value
+                    .trim()
+                    .toLowerCase(),
+                },
+              }))
+            }
+          />
+
+          <TextField
+            select
+            size="small"
             label={t('settings.trafficTracer.capture.fields.analysisStorage')}
             value={draft.options.pcap_split_mode}
             disabled={

@@ -419,6 +419,37 @@ export function TrafficTracerConnectionResults({
               label={`Storage: ${byteSize(summary.storage.capture_bytes)} capture · ${byteSize(summary.storage.raw_packet_capture_bytes)} raw PCAP · compression ${summary.storage.compression}`}
             />
           )}
+          {summary.proxy_protocol && (
+            <Chip
+              variant="outlined"
+              color={
+                summary.proxy_protocol.consistency === 'match'
+                  ? 'success'
+                  : 'warning'
+              }
+              label={`Proxy protocol: expected ${summary.proxy_protocol.expected_protocol || 'auto'} · observed ${summary.proxy_protocol.observed_protocols.join(', ') || 'none'} · ${summary.proxy_protocol.consistency}`}
+            />
+          )}
+          {summary.inbound && (
+            <Chip
+              variant="outlined"
+              color={
+                summary.inbound.consistency === 'match' ? 'success' : 'warning'
+              }
+              label={`Inbound: ${summary.inbound.mode || 'unknown'} ${summary.inbound.interface || ''} · ${summary.inbound.consistency || 'unavailable'}`}
+            />
+          )}
+          {summary.carrier_bindings && (
+            <Chip
+              variant="outlined"
+              color={
+                summary.carrier_bindings.missing_binding === 0
+                  ? 'success'
+                  : 'warning'
+              }
+              label={`Carriers: ${summary.carrier_bindings.bound_logical_flows}/${summary.carrier_bindings.logical_proxy_flows} flows bound · ${summary.carrier_bindings.shared_carrier_count} shared · max fan-out ${summary.carrier_bindings.shared_carrier_max_fan_out} · ${summary.carrier_bindings.missing_binding} missing`}
+            />
+          )}
           <Chip label={partitionLabel('Browser requests', browserCoverage!)} />
           <Chip
             label={partitionLabel('Transport connections', transportCoverage!)}
@@ -592,6 +623,19 @@ export function TrafficTracerConnectionResults({
                     {connection.post_flow
                       ? endpoint(connection.post_flow)
                       : postFlowAbsenceLabel(connection)}
+                    {connection.carrier_binding && (
+                      <Typography
+                        variant="caption"
+                        sx={{ display: 'block', overflowWrap: 'anywhere' }}
+                      >
+                        {connection.carrier_binding.mode} carrier{' '}
+                        {connection.carrier_binding.carrier_id} ·{' '}
+                        {connection.carrier_binding.protocol}
+                        {' · '}
+                        {connection.carrier_binding.physical_paths.length}{' '}
+                        physical path(s)
+                      </Typography>
+                    )}
                   </TableCell>
                   <TableCell>
                     {connection.egress ? (

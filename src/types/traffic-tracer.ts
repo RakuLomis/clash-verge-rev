@@ -67,6 +67,8 @@ export interface CaptureOptions {
   headless: boolean
   pcap_split_mode: 'none' | 'unique_connections'
   cache_mode: 'cold' | 'warm'
+  proxy_protocol_mode: 'strict_single' | 'observe'
+  expected_proxy_protocol: string
 }
 
 export interface PlaybackPolicy {
@@ -424,6 +426,16 @@ export interface FlowTerminal {
   error_class_source?: 'core_explicit' | 'legacy_inferred' | 'unavailable'
 }
 
+export interface CarrierBindingRecord {
+  carrier_id: string
+  status: 'shared_bound' | 'exclusive_bound'
+  mode: 'shared' | 'exclusive'
+  relation: string
+  generation: number
+  protocol: string
+  physical_paths: NormalizedFlowTuple[]
+}
+
 export interface ConnectionIndexRecord {
   connection_id: string
   protocol: FlowNetwork
@@ -440,6 +452,7 @@ export interface ConnectionIndexRecord {
   netlog_source_id?: number
   mihomo_connection_id?: string
   post_flow: NormalizedFlowTuple | null
+  carrier_binding?: CarrierBindingRecord
   shared: boolean
   sharing?: {
     request_multiplexed: boolean
@@ -608,6 +621,34 @@ export interface CoverageSummary {
   coverage: LayeredCoverage
   match_method_counts: Record<string, number>
   coverage_source: string
+  carrier_bindings?: {
+    logical_proxy_flows: number
+    bound_logical_flows: number
+    missing_binding: number
+    exclusive_socket_count: number
+    shared_bound_logical_flows: number
+    shared_carrier_count: number
+    shared_carrier_max_fan_out: number
+    shared_carrier_fan_out: Record<string, number>
+    physical_carriers_observed: number
+  }
+  proxy_protocol?: {
+    mode?: string
+    expected_protocol: string
+    selected_protocols?: string[]
+    observed_protocols: string[]
+    consistency: string
+    proxy_dial_events?: number
+  }
+  inbound?: {
+    mode?: string
+    interface?: string
+    expected_core_name?: string
+    observed_names?: Record<string, number>
+    mismatched_flows?: number
+    loopback_flows?: number
+    consistency?: string
+  }
   quality_state?: 'passed' | 'degraded' | 'failed'
   capture_global_quality_state?: 'passed' | 'degraded' | 'failed'
   quality?: AnalysisQuality
@@ -696,6 +737,14 @@ export interface FlowRecord {
   request_ids: string[]
   conn_id?: string | null
   outer_conn_id?: string | null
+  carrier_binding?: CarrierBindingRecord
+  carrier_state?:
+    | 'exclusive_bound'
+    | 'shared_bound'
+    | 'not_applicable'
+    | 'failed_before_carrier'
+    | 'observation_missing'
+  inbound_name?: string
   url?: string | null
   resource_type?: string | null
   relation?: string | null

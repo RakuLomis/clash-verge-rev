@@ -270,6 +270,8 @@ describe('TrafficTracer Complete workspace', () => {
           headless: false,
           pcap_split_mode: 'none',
           cache_mode: 'cold',
+          proxy_protocol_mode: 'strict_single',
+          expected_proxy_protocol: '',
         },
       }),
     ).toEqual({

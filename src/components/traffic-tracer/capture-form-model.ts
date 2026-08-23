@@ -103,6 +103,8 @@ export const defaultCaptureFormDraft: CaptureFormDraft = {
     headless: false,
     pcap_split_mode: 'none',
     cache_mode: 'cold',
+    proxy_protocol_mode: 'strict_single',
+    expected_proxy_protocol: '',
   },
 }
 
@@ -180,6 +182,12 @@ export function validateCaptureForm(
     draft.wait_load_timeout < 1 ||
     draft.wait_load_timeout > 3_600 ||
     !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(draft.run_label)
+  ) {
+    errors.config_path = 'configFile'
+  }
+  if (
+    draft.options.expected_proxy_protocol &&
+    !/^[A-Za-z0-9_-]+$/.test(draft.options.expected_proxy_protocol)
   ) {
     errors.config_path = 'configFile'
   }
