@@ -17,9 +17,11 @@ vi.mock('@/services/cmds', () => ({
   getVergeConfig: vi.fn(async () => ({
     traffic_tracer_output_root: '/tmp/persisted sessions',
   })),
+  loadTrafficTracerTargetConfig: vi.fn(),
 }))
 
 import { formatTrafficTracerCaptureLock } from '@/hooks/use-traffic-tracer-worker'
+import { loadTrafficTracerTargetConfig } from '@/services/cmds'
 import type {
   BatchStatusResult,
   CompleteEnvironmentReport,
@@ -51,6 +53,7 @@ import { TrafficTracerSessionCard } from './session-card'
 afterEach(() => {
   cleanup()
   localStorage.clear()
+  vi.clearAllMocks()
 })
 
 const blockingEnvironment: CompleteEnvironmentReport = {
@@ -139,6 +142,60 @@ describe('TrafficTracer Complete workspace', () => {
       ) as Record<string, unknown>
       expect(stored).not.toHaveProperty('output_root')
     })
+  })
+
+  it('reloads a persisted YAML config and restores its selected targets', async () => {
+    const configPath = '/tmp/sites.yaml'
+    const configSha256 = 'd'.repeat(64)
+    const targets = [0, 1, 2].map((index) => ({
+      index,
+      domain: `site${index}.example`,
+      url: `https://site${index}.example/`,
+      duration_seconds: 10,
+      network: 'all' as const,
+      run_label: 'all',
+      wait_load_timeout: 30,
+      page_type: `page-${index}`,
+    }))
+    vi.mocked(loadTrafficTracerTargetConfig).mockResolvedValue({
+      schema_version: 1,
+      config_path: configPath,
+      sha256: configSha256,
+      targets,
+      warnings: [],
+      suggested_output_root: null,
+    })
+    localStorage.setItem(
+      'traffictracer.captureForm.v1',
+      JSON.stringify({
+        target_mode: 'config',
+        config_path: configPath,
+        config_sha256: configSha256,
+        selected_target_index: 0,
+      }),
+    )
+    localStorage.setItem(
+      'traffictracer.targetSelection.v1',
+      JSON.stringify({
+        config_path: configPath,
+        config_sha256: configSha256,
+        indexes: [0, 2],
+      }),
+    )
+
+    const first = render(
+      <TrafficTracerCaptureForm onDiagnose={vi.fn()} onSubmit={vi.fn()} />,
+    )
+    expect(
+      await screen.findByText('Capture group targets (2/3)'),
+    ).toBeInTheDocument()
+    first.unmount()
+
+    render(<TrafficTracerCaptureForm onDiagnose={vi.fn()} onSubmit={vi.fn()} />)
+    expect(
+      await screen.findByText('Capture group targets (2/3)'),
+    ).toBeInTheDocument()
+    expect(loadTrafficTracerTargetConfig).toHaveBeenCalledTimes(2)
   })
 
   it('restores the accepted workspace after a switch error', async () => {
@@ -272,6 +329,7 @@ describe('TrafficTracer Complete workspace', () => {
           cache_mode: 'cold',
           proxy_protocol_mode: 'strict_single',
           expected_proxy_protocol: '',
+          proxy_selection_group: '',
         },
       }),
     ).toEqual({

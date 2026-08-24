@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { trafficTracerCaptureLockKey } from '@/hooks/use-traffic-tracer-worker'
 import {
@@ -105,24 +105,6 @@ export function useTrafficTracerBatches(workspaceRoot = '', enabled = true) {
         statusQuery.data.batch.resume.attempt <=
           resumeTransition.baselineAttempt))
 
-  useEffect(() => {
-    const state = statusQuery.data?.batch.state
-    if (
-      selectedBatchId === activeBatchId &&
-      state &&
-      TERMINAL.has(state) &&
-      !resumeTransitionActive
-    ) {
-      localStorage.removeItem(activeStorageKey)
-    }
-  }, [
-    activeBatchId,
-    activeStorageKey,
-    resumeTransitionActive,
-    selectedBatchId,
-    statusQuery.data?.batch.state,
-  ])
-
   const liveStatus = statusQuery.data
   const batchStatus =
     listedBatch &&
@@ -147,6 +129,13 @@ export function useTrafficTracerBatches(workspaceRoot = '', enabled = true) {
     localStorage.setItem(viewedStorageKey, id)
     setViewedBatchId(id)
   }
+  const clearBatch = useCallback(() => {
+    localStorage.removeItem(activeStorageKey)
+    localStorage.removeItem(viewedStorageKey)
+    setResumeTransition(null)
+    setViewedBatchId(null)
+    setBatchId(null)
+  }, [activeStorageKey, viewedStorageKey])
   const invalidate = () => {
     void queryClient.invalidateQueries({
       queryKey: ['trafficTracer', 'batches'],
@@ -232,5 +221,6 @@ export function useTrafficTracerBatches(workspaceRoot = '', enabled = true) {
     resumeMutation,
     resuming: resumeMutation.isPending || resumeTransitionActive,
     selectBatch,
+    clearBatch,
   }
 }

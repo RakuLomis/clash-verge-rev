@@ -132,6 +132,42 @@ describe('TrafficTracer scoped Sessions', () => {
     ).toBeEnabled()
   })
 
+  it('restores a manually selected capture folder after the view remounts', async () => {
+    localStorage.setItem(
+      'traffictracer.sessionWorkspace.v1:%2Ftmp%2Fsessions',
+      JSON.stringify({
+        workspace_root: '/tmp/sessions',
+        path: scope.directory,
+        page: 1,
+        session_id: null,
+      }),
+    )
+    mocks.resolveScope.mockResolvedValue(scope)
+    mocks.listScoped.mockResolvedValue({
+      scope,
+      sessions: [session],
+      corrupt: [],
+      offset: 0,
+      limit: 8,
+      total: 1,
+      has_more: false,
+    })
+    mocks.previewSplit.mockResolvedValue(splitPreview)
+
+    const first = renderView()
+    expect(await screen.findByText('example.com')).toBeInTheDocument()
+    first.unmount()
+
+    renderView()
+    expect(await screen.findByText('example.com')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(mocks.resolveScope).toHaveBeenCalledTimes(2)
+      expect(mocks.resolveScope).toHaveBeenLastCalledWith({
+        path: scope.directory,
+      })
+    })
+  })
+
   it('clears a stale packet split Job instead of polling forever', async () => {
     localStorage.setItem('traffictracer.packetSplitJobId', 'stale-job')
     mocks.getJob.mockRejectedValue(new Error('Job not found'))

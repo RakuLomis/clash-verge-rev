@@ -18,7 +18,7 @@ import {
 } from '@mui/material'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { open } from '@tauri-apps/plugin-dialog'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { trafficTracerJobKey } from '@/hooks/use-capture-job'
@@ -42,6 +42,7 @@ import { TrafficTracerSessionCard } from './session-card'
 import { TrafficTracerSessionDetail } from './session-detail'
 
 const PAGE_SIZE = 8
+const SESSION_WORKSPACE_KEY = 'traffictracer.sessionWorkspace.v1'
 
 type ScopeSelection = {
   scope: SessionScope
@@ -61,6 +62,9 @@ export function TrafficTracerSessionsView({
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const workspaceStorageKey = `${SESSION_WORKSPACE_KEY}:${encodeURIComponent(
+    workspaceRoot,
+  )}`
   const activeKey = activeBatchId
     ? `batch:${activeBatchId}`
     : activeJobId
@@ -86,6 +90,71 @@ export function TrafficTracerSessionsView({
   const [splitJobId, setSplitJobId] = useState<string | null>(() =>
     localStorage.getItem('traffictracer.packetSplitJobId'),
   )
+
+  const persistManualWorkspace = useCallback(
+    (path: string, page: number, sessionId: string | null) => {
+      localStorage.setItem(
+        workspaceStorageKey,
+        JSON.stringify({
+          workspace_root: workspaceRoot,
+          path,
+          page,
+          session_id: sessionId,
+        }),
+      )
+    },
+    [workspaceRoot, workspaceStorageKey],
+  )
+
+  useEffect(() => {
+    if (!enabled || !workspaceRoot || activeKey) return
+    const stored = localStorage.getItem(workspaceStorageKey)
+    if (!stored) return
+    let payload: {
+      workspace_root?: unknown
+      path?: unknown
+      page?: unknown
+      session_id?: unknown
+    }
+    try {
+      payload = JSON.parse(stored)
+    } catch {
+      localStorage.removeItem(workspaceStorageKey)
+      return
+    }
+    if (
+      payload.workspace_root !== workspaceRoot ||
+      typeof payload.path !== 'string' ||
+      typeof payload.page !== 'number' ||
+      !Number.isInteger(payload.page) ||
+      payload.page < 1 ||
+      !(payload.session_id === null || typeof payload.session_id === 'string')
+    ) {
+      localStorage.removeItem(workspaceStorageKey)
+      return
+    }
+    let disposed = false
+    void resolveTrafficTracerSessionScope({ path: payload.path })
+      .then((scope) => {
+        if (disposed || !scope) return
+        setManualSelection({ scope, activeKey: null, workspaceRoot })
+        setPageState({ scopeId: scope.scope_id, page: payload.page as number })
+        setSelectedSession(
+          typeof payload.session_id === 'string'
+            ? {
+                scopeId: scope.scope_id,
+                sessionId: payload.session_id,
+              }
+            : null,
+        )
+      })
+      .catch(() => {
+        if (!disposed) localStorage.removeItem(workspaceStorageKey)
+      })
+    return () => {
+      disposed = true
+    }
+  }, [activeKey, enabled, workspaceRoot, workspaceStorageKey])
 
   const activeSelector = useMemo<SessionScopeSelector | null>(() => {
     if (activeBatchId) return { batch_id: activeBatchId }
@@ -232,12 +301,14 @@ export function TrafficTracerSessionsView({
       setManualSelection({ scope, activeKey, workspaceRoot })
       setPageState({ scopeId: scope.scope_id, page: 1 })
       setSelectedSession(null)
+      persistManualWorkspace(scope.directory, 1, null)
     } catch (error) {
       showNotice.error(error)
     }
   }
 
   const clearScope = () => {
+    localStorage.removeItem(workspaceStorageKey)
     setManualSelection(null)
     setSuppressedActiveKey(activeKey)
     setPageState({ scopeId: null, page: 1 })
@@ -486,7 +557,16 @@ export function TrafficTracerSessionsView({
                 onOpenDirectory={(sessionId) => void openDirectory(sessionId)}
                 onAnalyze={(sessionId) => analysisMutation.mutate(sessionId)}
                 onView={(sessionId) => {
-                  if (scopeId) setSelectedSession({ scopeId, sessionId })
+                  if (scopeId) {
+                    setSelectedSession({ scopeId, sessionId })
+                    if (selection?.source === 'manual') {
+                      persistManualWorkspace(
+                        selection.scope.directory,
+                        page,
+                        sessionId,
+                      )
+                    }
+                  }
                 }}
               />
             ))}
@@ -497,9 +577,16 @@ export function TrafficTracerSessionsView({
           <Pagination
             page={Math.min(page, totalPages)}
             count={totalPages}
-            onChange={(_, nextPage) =>
+            onChange={(_, nextPage) => {
               setPageState({ scopeId, page: nextPage })
-            }
+              if (selection?.source === 'manual') {
+                persistManualWorkspace(
+                  selection.scope.directory,
+                  nextPage,
+                  selectedSessionId,
+                )
+              }
+            }}
             sx={{ alignSelf: 'center' }}
           />
         )}
@@ -507,7 +594,12 @@ export function TrafficTracerSessionsView({
       <TrafficTracerSessionDetail
         sessionId={selectedSessionId}
         workspaceRoot={workspaceRoot}
-        onClose={() => setSelectedSession(null)}
+        onClose={() => {
+          setSelectedSession(null)
+          if (selection?.source === 'manual') {
+            persistManualWorkspace(selection.scope.directory, page, null)
+          }
+        }}
       />
     </Paper>
   )

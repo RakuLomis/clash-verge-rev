@@ -120,6 +120,38 @@ describe('useTrafficTracerBatches Resume transition', () => {
     ).toBe('batch-one')
   })
 
+  it('restores the most recent completed batch after the view remounts', async () => {
+    const storageKey = 'traffictracer.activeBatchId:%2Ftmp%2Fcaptures'
+    localStorage.setItem(storageKey, 'batch-one')
+    mocks.list.mockResolvedValue({
+      batches: [manifest('completed', 0)],
+      corrupt: [],
+    })
+    mocks.get.mockResolvedValue(status('completed', 0))
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const wrapper = ({ children }: PropsWithChildren) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+
+    const first = renderHook(() => useTrafficTracerBatches('/tmp/captures'), {
+      wrapper,
+    })
+    await waitFor(() =>
+      expect(first.result.current.batchStatus?.batch.state).toBe('completed'),
+    )
+    first.unmount()
+
+    const second = renderHook(() => useTrafficTracerBatches('/tmp/captures'), {
+      wrapper,
+    })
+    await waitFor(() =>
+      expect(second.result.current.batchStatus?.batch.state).toBe('completed'),
+    )
+    expect(localStorage.getItem(storageKey)).toBe('batch-one')
+  })
+
   it('does not auto-select an old failed or interrupted batch', async () => {
     mocks.list.mockResolvedValue({
       batches: [manifest('failed', 0), manifest('interrupted', 0)],

@@ -502,6 +502,7 @@ pub struct CaptureOptions {
     pub cache_mode: String,
     pub proxy_protocol_mode: String,
     pub expected_proxy_protocol: String,
+    pub proxy_selection_group: String,
 }
 
 impl Default for CaptureOptions {
@@ -514,8 +515,9 @@ impl Default for CaptureOptions {
             headless: false,
             pcap_split_mode: "unique_connections".to_string(),
             cache_mode: "cold".to_string(),
-            proxy_protocol_mode: "strict_single".to_string(),
+            proxy_protocol_mode: "observe".to_string(),
             expected_proxy_protocol: String::new(),
+            proxy_selection_group: String::new(),
         }
     }
 }
@@ -858,6 +860,9 @@ pub async fn tt_batch_start(app_handle: AppHandle, request: BatchStartRequest) -
     if !valid_proxy_protocol(&request.options.expected_proxy_protocol) {
         return Err("expected_proxy_protocol must be a protocol name".into());
     }
+    if request.options.proxy_selection_group.chars().any(char::is_control) {
+        return Err("proxy_selection_group must not contain control characters".into());
+    }
     let preview = tt_target_config_load(request.config_path.clone()).await?;
     validate_batch_selection(&preview, &request)?;
     let selected_indexes = request
@@ -1155,6 +1160,9 @@ fn validate_capture_request(request: &CaptureStartRequest) -> CmdResult {
     }
     if !valid_proxy_protocol(&request.options.expected_proxy_protocol) {
         return Err("expected_proxy_protocol must be a protocol name".into());
+    }
+    if request.options.proxy_selection_group.chars().any(char::is_control) {
+        return Err("proxy_selection_group must not contain control characters".into());
     }
     Ok(())
 }

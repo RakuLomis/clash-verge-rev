@@ -69,6 +69,7 @@ export interface CaptureOptions {
   cache_mode: 'cold' | 'warm'
   proxy_protocol_mode: 'strict_single' | 'observe'
   expected_proxy_protocol: string
+  proxy_selection_group: string
 }
 
 export interface PlaybackPolicy {
@@ -371,6 +372,7 @@ export interface LogicalFlowCoverage {
   failed_before_socket?: number
   local_not_applicable?: number
   unexpected_missing?: number
+  capture_tail_unattributed?: number
 }
 
 export interface LayeredCoverage {
@@ -636,6 +638,9 @@ export interface CoverageSummary {
     mode?: string
     expected_protocol: string
     selected_protocols?: string[]
+    selection_group?: string
+    selected_scope?: Record<string, unknown>
+    inventory_protocols?: string[]
     observed_protocols: string[]
     consistency: string
     proxy_dial_events?: number

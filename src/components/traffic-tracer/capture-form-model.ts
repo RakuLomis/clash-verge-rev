@@ -103,8 +103,9 @@ export const defaultCaptureFormDraft: CaptureFormDraft = {
     headless: false,
     pcap_split_mode: 'none',
     cache_mode: 'cold',
-    proxy_protocol_mode: 'strict_single',
+    proxy_protocol_mode: 'observe',
     expected_proxy_protocol: '',
+    proxy_selection_group: '',
   },
 }
 

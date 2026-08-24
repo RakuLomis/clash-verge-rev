@@ -423,9 +423,11 @@ export function TrafficTracerConnectionResults({
             <Chip
               variant="outlined"
               color={
-                summary.proxy_protocol.consistency === 'match'
-                  ? 'success'
-                  : 'warning'
+                ['mismatch', 'mixed'].includes(
+                  summary.proxy_protocol.consistency,
+                )
+                  ? 'warning'
+                  : 'success'
               }
               label={`Proxy protocol: expected ${summary.proxy_protocol.expected_protocol || 'auto'} · observed ${summary.proxy_protocol.observed_protocols.join(', ') || 'none'} · ${summary.proxy_protocol.consistency}`}
             />
@@ -434,7 +436,9 @@ export function TrafficTracerConnectionResults({
             <Chip
               variant="outlined"
               color={
-                summary.inbound.consistency === 'match' ? 'success' : 'warning'
+                summary.inbound.consistency === 'mismatch'
+                  ? 'warning'
+                  : 'success'
               }
               label={`Inbound: ${summary.inbound.mode || 'unknown'} ${summary.inbound.interface || ''} · ${summary.inbound.consistency || 'unavailable'}`}
             />

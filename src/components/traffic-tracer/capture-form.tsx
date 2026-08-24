@@ -18,7 +18,7 @@ import {
 } from '@mui/material'
 import { appDataDir, join } from '@tauri-apps/api/path'
 import { open } from '@tauri-apps/plugin-dialog'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 
@@ -55,6 +55,35 @@ import type { EnvironmentRemediationTarget } from './environment-model'
 
 const STORAGE_KEY = 'traffictracer.captureForm.v1'
 
+const TARGET_SELECTION_STORAGE_KEY = 'traffictracer.targetSelection.v1'
+
+function restoredTargetIndexes(preview: TargetConfigPreview): Set<number> {
+  try {
+    const stored = localStorage.getItem(TARGET_SELECTION_STORAGE_KEY)
+    if (!stored) throw new Error()
+    const selection = JSON.parse(stored) as {
+      config_path?: unknown
+      config_sha256?: unknown
+      indexes?: unknown
+    }
+    if (
+      selection.config_path !== preview.config_path ||
+      selection.config_sha256 !== preview.sha256 ||
+      !Array.isArray(selection.indexes)
+    ) {
+      throw new Error()
+    }
+    const available = new Set(preview.targets.map((target) => target.index))
+    const restored = selection.indexes.filter(
+      (index): index is number =>
+        typeof index === 'number' && available.has(index),
+    )
+    if (restored.length > 0) return new Set(restored)
+  } catch {
+    // A changed or invalid config safely falls back to selecting all targets.
+  }
+  return new Set(preview.targets.map((target) => target.index))
+}
 export interface TrafficTracerCaptureFormProps {
   environment?: CompleteEnvironmentReport
   diagnosticRequest?: EnvironmentRequest | null
@@ -112,6 +141,7 @@ export function TrafficTracerCaptureForm({
   >(() => new Set())
   const tunRef = useRef<HTMLInputElement>(null)
   const physicalRef = useRef<HTMLInputElement>(null)
+  const automaticConfigPathRef = useRef<string | null>(null)
 
   useEffect(() => {
     let disposed = false
@@ -242,30 +272,57 @@ export function TrafficTracerCaptureForm({
     if (selected) update('output_root', String(selected))
   }
 
-  const loadTargetConfig = async (
-    path: string,
-    preferredIndex?: number | null,
-  ) => {
-    setTargetConfigLoading(true)
-    setTargetConfigError('')
-    try {
-      const preview = await loadTrafficTracerTargetConfig(path)
-      const selected =
-        preview.targets.find((target) => target.index === preferredIndex) ??
-        preview.targets[0]
-      if (!selected) throw new Error('Target configuration has no sites.')
-      setTargetConfig(preview)
-      setSelectedTargetIndexes(
-        new Set(preview.targets.map((target) => target.index)),
-      )
-      setDraft((current) => applyTargetConfigEntry(current, preview, selected))
-    } catch (error) {
-      setTargetConfig(null)
-      setTargetConfigError(String(error))
-    } finally {
-      setTargetConfigLoading(false)
-    }
-  }
+  const loadTargetConfig = useCallback(
+    async (path: string, preferredIndex?: number | null) => {
+      setTargetConfigLoading(true)
+      setTargetConfigError('')
+      try {
+        const preview = await loadTrafficTracerTargetConfig(path)
+        const restoredIndexes = restoredTargetIndexes(preview)
+        const selected =
+          preview.targets.find((target) => target.index === preferredIndex) ??
+          preview.targets.find((target) => restoredIndexes.has(target.index)) ??
+          preview.targets[0]
+        if (!selected) throw new Error('Target configuration has no sites.')
+        setTargetConfig(preview)
+        setSelectedTargetIndexes(restoredIndexes)
+        setDraft((current) =>
+          applyTargetConfigEntry(current, preview, selected),
+        )
+      } catch (error) {
+        setTargetConfig(null)
+        setTargetConfigError(String(error))
+      } finally {
+        setTargetConfigLoading(false)
+      }
+    },
+    [],
+  )
+
+  useEffect(() => {
+    if (draft.target_mode !== 'config' || !draft.config_path.trim()) return
+    const path = draft.config_path.trim()
+    if (automaticConfigPathRef.current === path) return
+    automaticConfigPathRef.current = path
+    void loadTargetConfig(path, draft.selected_target_index)
+  }, [
+    draft.config_path,
+    draft.selected_target_index,
+    draft.target_mode,
+    loadTargetConfig,
+  ])
+
+  useEffect(() => {
+    if (!targetConfig) return
+    localStorage.setItem(
+      TARGET_SELECTION_STORAGE_KEY,
+      JSON.stringify({
+        config_path: targetConfig.config_path,
+        config_sha256: targetConfig.sha256,
+        indexes: [...selectedTargetIndexes].sort((left, right) => left - right),
+      }),
+    )
+  }, [selectedTargetIndexes, targetConfig])
 
   const pickTargetConfig = async () => {
     const selected = await open({
@@ -788,7 +845,9 @@ export function TrafficTracerCaptureForm({
             helperText={
               draft.options.expected_proxy_protocol
                 ? `Require ${draft.options.expected_proxy_protocol} for proxied flows; DIRECT and REJECT are exempt.`
-                : 'Leave empty to freeze the single selected leaf protocol automatically.'
+                : draft.options.proxy_selection_group
+                  ? 'Leave empty to freeze the selected group leaf protocol automatically.'
+                  : 'Leave empty to validate that the runtime trace uses at most one proxy protocol.'
             }
             onChange={(event) =>
               setDraft((current) => ({
@@ -798,6 +857,23 @@ export function TrafficTracerCaptureForm({
                   expected_proxy_protocol: event.target.value
                     .trim()
                     .toLowerCase(),
+                },
+              }))
+            }
+          />
+
+          <TextField
+            size="small"
+            label="Protocol selection group (optional)"
+            value={draft.options.proxy_selection_group}
+            placeholder="Proxy"
+            helperText="Only this selected chain is checked before capture; runtime trace remains authoritative."
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                options: {
+                  ...current.options,
+                  proxy_selection_group: event.target.value,
                 },
               }))
             }

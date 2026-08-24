@@ -95,8 +95,6 @@ export function useCaptureJob(initialJobId?: string | null) {
       if (snapshot.job_id !== jobId) return
       queryClient.setQueryData(trafficTracerJobKey(jobId), snapshot)
       if (TERMINAL_STATES.has(snapshot.state)) {
-        localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY)
-        localStorage.removeItem(JOB_STARTED_STORAGE_KEY)
         void queryClient.invalidateQueries({
           queryKey: trafficTracerCaptureLockKey,
         })
@@ -149,13 +147,6 @@ export function useCaptureJob(initialJobId?: string | null) {
       unlisteners = []
     }
   }, [jobId, queryClient])
-
-  useEffect(() => {
-    if (jobQuery.data && TERMINAL_STATES.has(jobQuery.data.state)) {
-      localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY)
-      localStorage.removeItem(JOB_STARTED_STORAGE_KEY)
-    }
-  }, [jobQuery.data])
 
   const startMutation = useMutation({
     mutationFn: (request: CaptureStartRequest) =>
