@@ -94,7 +94,7 @@ export function TrafficTracerFlowQueryForm({
   const [limit, setLimit] = useState(20)
   const [selectedFlow, setSelectedFlow] = useState<FlowRecord | null>(null)
   const { sessions, sessionsQuery } = useAllTrafficTracerSessions(
-    enabled,
+    false,
     workspaceRoot,
   )
   const errors = useMemo(() => validateFlowQuery(draft), [draft])
@@ -102,7 +102,11 @@ export function TrafficTracerFlowQueryForm({
     code ? t(`settings.trafficTracer.validation.${code}`) : undefined
 
   const queryMutation = useMutation({
-    mutationFn: () => queryAllSessions(sessions, draft),
+    mutationFn: async () => {
+      const pageResult = await sessionsQuery.refetch()
+      if (pageResult.error) throw pageResult.error
+      return queryAllSessions(pageResult.data?.sessions ?? [], draft)
+    },
     onSuccess: () => setOffset(0),
   })
 
@@ -117,7 +121,7 @@ export function TrafficTracerFlowQueryForm({
 
   const submit = () => {
     setSubmitted(true)
-    if (Object.keys(errors).length > 0 || sessions.length === 0) return
+    if (Object.keys(errors).length > 0) return
     queryMutation.mutate()
   }
 
@@ -211,19 +215,18 @@ export function TrafficTracerFlowQueryForm({
           >
             <Typography variant="body2" color="text.secondary">
               {enabled
-                ? t('settings.trafficTracer.flows.sessionsAvailable', {
-                    count: sessions.length,
-                  })
+                ? sessionsQuery.isSuccess
+                  ? t('settings.trafficTracer.flows.sessionsAvailable', {
+                      count: sessions.length,
+                    })
+                  : 'Session history is loaded only when you run this query.'
                 : t('settings.trafficTracer.sessions.checkEnvironment')}
             </Typography>
             <Button
               variant="contained"
               startIcon={<SearchRounded />}
               disabled={
-                !enabled ||
-                sessionsQuery.isFetching ||
-                queryMutation.isPending ||
-                sessions.length === 0
+                !enabled || sessionsQuery.isFetching || queryMutation.isPending
               }
               onClick={submit}
             >

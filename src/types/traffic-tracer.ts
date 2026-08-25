@@ -782,6 +782,16 @@ export interface JobProgressEvent {
   progress: number
   message: string
   timestamp: string
+  timing?: {
+    job_elapsed_ms: number
+    stage_elapsed_ms: number
+    operation: string
+    operation_elapsed_ms: number
+    completed_stage?: string
+    completed_stage_duration_ms?: number
+    completed_operation?: string
+    completed_operation_duration_ms?: number
+  }
 }
 
 export interface WorkerReadyEvent {
@@ -802,4 +812,13 @@ export interface WorkerLogEvent {
   code?: string
   message: string
   recovery?: WorkerReadyEvent['recovery']
+  timing?: {
+    operation: string
+    duration_ms: number
+    catalog?: {
+      operation?: string
+      duration_ms?: number
+      [key: string]: unknown
+    }
+  }
 }

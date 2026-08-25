@@ -88,7 +88,7 @@ const TrafficTracerPage = () => {
     )
     setDiagnosticRequest(request)
   }, [])
-  const { environment, environmentQuery, captureLock } =
+  const { environment, environmentQuery, captureLock, workerActivity } =
     useTrafficTracerWorker(diagnosticRequest)
   const {
     job,
@@ -204,6 +204,22 @@ const TrafficTracerPage = () => {
   return (
     <BasePage title={t('layout.components.navigation.tabs.trafficTracer')}>
       <Box data-testid="traffic-tracer-workspace" sx={{ pb: 2 }}>
+        {workerActivity && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            <AlertTitle>Worker preparation</AlertTitle>
+            {workerActivity.message} Recovery{' '}
+            {(workerActivity.timing.duration_ms / 1000).toFixed(2)}s
+            {workerActivity.timing.catalog?.operation && (
+              <Box component="span" sx={{ display: 'block', opacity: 0.8 }}>
+                Session catalog: {workerActivity.timing.catalog.operation} ·{' '}
+                {(
+                  Number(workerActivity.timing.catalog.duration_ms ?? 0) / 1000
+                ).toFixed(2)}
+                s
+              </Box>
+            )}
+          </Alert>
+        )}
         {startFailure && (
           <Alert severity="error" onClose={clearStartFailure} sx={{ mb: 2 }}>
             <AlertTitle>Capture did not start or terminated early</AlertTitle>

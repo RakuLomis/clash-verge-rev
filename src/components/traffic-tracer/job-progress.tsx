@@ -20,7 +20,7 @@ import {
   Stack,
   Typography,
 } from '@mui/material'
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import type {
@@ -75,6 +75,27 @@ function errorText(error: unknown) {
   return [code, message].filter(Boolean).join(': ')
 }
 
+function trafficTracerOperationLabel(operation: string) {
+  if (operation.startsWith('catalog.')) return 'Session catalog migration'
+  if (operation === 'worker.recovery') return 'Interrupted Session recovery'
+  if (operation.includes('tshark')) return 'Packet capture startup'
+  if (operation === 'capture.chrome_launch') return 'Chrome startup'
+  if (operation === 'capture.cdp_connect') return 'Chrome DevTools connection'
+  if (operation === 'capture.navigation') return 'Page navigation'
+  if (operation === 'capture.observation') return 'Page observation'
+  if (operation.startsWith('analyze.')) return 'Traffic analysis'
+  if (operation.includes('split')) return 'Packet splitting'
+  if (operation === 'capture.cleanup') return 'Capture cleanup'
+  if (operation.startsWith('core.')) return 'Mihomo preparation'
+  if (operation === 'capture.prepare_paths') return 'Session preparation'
+  return operation || 'Preparing'
+}
+
+function formatDuration(milliseconds: number) {
+  const seconds = Math.max(0, milliseconds) / 1000
+  return seconds < 10 ? `${seconds.toFixed(1)}s` : `${Math.round(seconds)}s`
+}
+
 export function TrafficTracerJobProgress({
   job,
   startedAt,
@@ -94,6 +115,26 @@ export function TrafficTracerJobProgress({
   const logEvents = events.filter(
     (event) => event.message || event.stage || event.state,
   )
+  const [now, setNow] = useState(() => Date.now())
+  const latestEvent = events.at(-1)
+  useEffect(() => {
+    if (terminal || !latestEvent?.timing) return
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [latestEvent?.timing, terminal])
+  const liveTiming = useMemo(() => {
+    if (!latestEvent?.timing) return null
+    const eventTime = new Date(latestEvent.timestamp).getTime()
+    const sinceEvent =
+      terminal || Number.isNaN(eventTime) ? 0 : Math.max(0, now - eventTime)
+    return {
+      ...latestEvent.timing,
+      job_elapsed_ms: latestEvent.timing.job_elapsed_ms + sinceEvent,
+      stage_elapsed_ms: latestEvent.timing.stage_elapsed_ms + sinceEvent,
+      operation_elapsed_ms:
+        latestEvent.timing.operation_elapsed_ms + sinceEvent,
+    }
+  }, [latestEvent, now, terminal])
 
   const confirmCancel = async () => {
     setConfirmOpen(false)
@@ -186,6 +227,14 @@ export function TrafficTracerJobProgress({
           {job.message && (
             <Typography variant="body2">{job.message}</Typography>
           )}
+          {liveTiming && (
+            <Alert severity="info" data-testid="traffic-tracer-job-timing">
+              {trafficTracerOperationLabel(liveTiming.operation)} · operation{' '}
+              {formatDuration(liveTiming.operation_elapsed_ms)} · stage{' '}
+              {formatDuration(liveTiming.stage_elapsed_ms)} · total{' '}
+              {formatDuration(liveTiming.job_elapsed_ms)}
+            </Alert>
+          )}
           {failure && (
             <Alert severity={job.state === 'failed' ? 'error' : 'warning'}>
               {failure}
@@ -235,6 +284,16 @@ export function TrafficTracerJobProgress({
                       <Typography variant="caption">
                         {event.message || event.state}
                       </Typography>
+                      {event.timing && (
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ ml: 'auto !important', flexShrink: 0 }}
+                        >
+                          {trafficTracerOperationLabel(event.timing.operation)}{' '}
+                          · {formatDuration(event.timing.operation_elapsed_ms)}
+                        </Typography>
+                      )}
                     </Stack>
                   ))}
                 </Stack>

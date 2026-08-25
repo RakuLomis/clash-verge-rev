@@ -62,13 +62,16 @@ export function useAllTrafficTracerSessions(
   enabled = true,
   workspaceRoot = '',
 ) {
+  const queryClient = useQueryClient()
   const sessionsQuery = useQuery({
     queryKey: [...trafficTracerSessionsKey, workspaceRoot, 'all'],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const sessions: SessionSummary[] = []
       let offset = 0
       while (true) {
+        if (signal.aborted) throw new DOMException('Cancelled', 'AbortError')
         const page = await listTrafficTracerSessions(offset, 100)
+        if (signal.aborted) throw new DOMException('Cancelled', 'AbortError')
         sessions.push(...page.sessions)
         if (!page.has_more) {
           return { sessions, corrupt: page.corrupt, total: page.total }
@@ -81,6 +84,15 @@ export function useAllTrafficTracerSessions(
     },
     enabled,
   })
+  useEffect(
+    () => () => {
+      void queryClient.cancelQueries({
+        queryKey: [...trafficTracerSessionsKey, workspaceRoot, 'all'],
+        exact: true,
+      })
+    },
+    [queryClient, workspaceRoot],
+  )
   return {
     sessions: sessionsQuery.data?.sessions ?? [],
     corrupt: sessionsQuery.data?.corrupt ?? [],
@@ -101,6 +113,16 @@ export function useTrafficTracerSessions(
     queryFn: () => listTrafficTracerSessions(offset, limit),
     enabled,
   })
+
+  useEffect(
+    () => () => {
+      void queryClient.cancelQueries({
+        queryKey: [...trafficTracerSessionsKey, workspaceRoot, offset, limit],
+        exact: true,
+      })
+    },
+    [limit, offset, queryClient, workspaceRoot],
+  )
 
   useEffect(() => {
     if (!enabled) return
@@ -168,6 +190,21 @@ export function useTrafficTracerScopedSessions(
     enabled: enabled && scopeId !== null,
   })
 
+  useEffect(
+    () => () => {
+      if (!scopeId) return
+      void queryClient.cancelQueries({
+        queryKey: [
+          ...trafficTracerScopedSessionsKey(workspaceRoot, scopeId),
+          offset,
+          limit,
+        ],
+        exact: true,
+      })
+    },
+    [limit, offset, queryClient, scopeId, workspaceRoot],
+  )
+
   useEffect(() => {
     if (!enabled || !scopeId) return
 
@@ -227,6 +264,17 @@ export function useTrafficTracerSession(
     queryFn: () => getTrafficTracerSession(sessionId!),
     enabled: enabled && sessionId !== null,
   })
+
+  useEffect(
+    () => () => {
+      if (!sessionId) return
+      void queryClient.cancelQueries({
+        queryKey: trafficTracerSessionKey(sessionId, workspaceRoot),
+        exact: true,
+      })
+    },
+    [queryClient, sessionId, workspaceRoot],
+  )
 
   const analysisMutation = useMutation({
     mutationFn: (options?: Partial<AnalysisOptions>) => {

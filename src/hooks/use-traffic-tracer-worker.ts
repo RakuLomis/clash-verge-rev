@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -18,6 +18,35 @@ export const trafficTracerCaptureLockKey = [
   'trafficTracer',
   'captureLock',
 ] as const
+const WORKER_ACTIVITY_STORAGE_KEY = 'traffictracer.workerActivity.v1'
+
+export interface WorkerStartupActivity {
+  at: string
+  code: string
+  message: string
+  timing: NonNullable<WorkerLogEvent['timing']>
+}
+
+function restoredWorkerActivity(): WorkerStartupActivity | null {
+  try {
+    const stored = localStorage.getItem(WORKER_ACTIVITY_STORAGE_KEY)
+    if (!stored) return null
+    const activity = JSON.parse(stored) as WorkerStartupActivity
+    if (
+      typeof activity.at !== 'string' ||
+      typeof activity.code !== 'string' ||
+      typeof activity.message !== 'string' ||
+      typeof activity.timing?.operation !== 'string' ||
+      typeof activity.timing?.duration_ms !== 'number'
+    ) {
+      throw new Error('invalid Worker activity')
+    }
+    return activity
+  } catch {
+    localStorage.removeItem(WORKER_ACTIVITY_STORAGE_KEY)
+    return null
+  }
+}
 
 export const trafficTracerEnvironmentKey = (request: EnvironmentRequest) =>
   ['trafficTracer', 'environment', request] as const
@@ -63,6 +92,8 @@ export function useTrafficTracerWorker(
   enabled = true,
 ) {
   const queryClient = useQueryClient()
+  const [workerActivity, setWorkerActivity] =
+    useState<WorkerStartupActivity | null>(restoredWorkerActivity)
   const captureLockState = useTrafficTracerCaptureLock(enabled)
   const environmentQuery = useQuery({
     queryKey: request
@@ -91,6 +122,19 @@ export function useTrafficTracerWorker(
     Promise.all([
       listen<WorkerReadyEvent>('traffictracer://worker-ready', invalidate),
       listen<WorkerLogEvent>('traffictracer://worker-log', ({ payload }) => {
+        if (payload.timing) {
+          const activity = {
+            at: new Date().toISOString(),
+            code: payload.code ?? 'WORKER_ACTIVITY',
+            message: payload.message,
+            timing: payload.timing,
+          }
+          localStorage.setItem(
+            WORKER_ACTIVITY_STORAGE_KEY,
+            JSON.stringify(activity),
+          )
+          setWorkerActivity(activity)
+        }
         if (payload.code?.startsWith('RECOVERY_')) invalidate()
       }),
     ])
@@ -122,6 +166,7 @@ export function useTrafficTracerWorker(
   return {
     environment: environmentQuery.data,
     environmentQuery,
+    workerActivity,
     ...captureLockState,
   }
 }

@@ -16,6 +16,7 @@ import type {
 
 const ACTIVE_JOB_STORAGE_KEY = 'traffictracer.activeJobId'
 const JOB_STARTED_STORAGE_KEY = 'traffictracer.activeJobStartedAt'
+const JOB_PROGRESS_STORAGE_KEY = 'traffictracer.activeJobProgress.v1'
 const TERMINAL_STATES = new Set([
   'completed',
   'failed',
@@ -29,6 +30,36 @@ const JOB_EVENTS = [
   'traffictracer://job-failed',
   'traffictracer://job-cancelled',
 ] as const
+
+function restoredProgressEvents(jobId: string | null): JobProgressEvent[] {
+  if (!jobId) return []
+  try {
+    const stored = localStorage.getItem(JOB_PROGRESS_STORAGE_KEY)
+    if (!stored) return []
+    const payload = JSON.parse(stored) as {
+      job_id?: unknown
+      events?: unknown
+    }
+    if (payload.job_id !== jobId || !Array.isArray(payload.events)) return []
+    return payload.events.filter(
+      (event): event is JobProgressEvent =>
+        typeof event === 'object' &&
+        event !== null &&
+        (event as JobProgressEvent).job_id === jobId &&
+        typeof (event as JobProgressEvent).timestamp === 'string',
+    )
+  } catch {
+    localStorage.removeItem(JOB_PROGRESS_STORAGE_KEY)
+    return []
+  }
+}
+
+function persistProgressEvents(jobId: string, events: JobProgressEvent[]) {
+  localStorage.setItem(
+    JOB_PROGRESS_STORAGE_KEY,
+    JSON.stringify({ job_id: jobId, events: events.slice(-100) }),
+  )
+}
 
 export const trafficTracerJobKey = (jobId: string) =>
   ['trafficTracer', 'job', jobId] as const
@@ -57,12 +88,15 @@ export function useCaptureJob(initialJobId?: string | null) {
   const [jobStartedAt, setJobStartedAt] = useState<string | null>(() =>
     jobId ? localStorage.getItem(JOB_STARTED_STORAGE_KEY) : null,
   )
-  const [progressEvents, setProgressEvents] = useState<JobProgressEvent[]>([])
+  const [progressEvents, setProgressEvents] = useState<JobProgressEvent[]>(() =>
+    restoredProgressEvents(jobId),
+  )
 
   const rememberJob = useCallback((nextJobId: string) => {
     const startedAt = new Date().toISOString()
     localStorage.setItem(ACTIVE_JOB_STORAGE_KEY, nextJobId)
     localStorage.setItem(JOB_STARTED_STORAGE_KEY, startedAt)
+    persistProgressEvents(nextJobId, [])
     setJobStartedAt(startedAt)
     setProgressEvents([])
     setJobId(nextJobId)
@@ -71,6 +105,7 @@ export function useCaptureJob(initialJobId?: string | null) {
   const clearJob = useCallback(() => {
     localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY)
     localStorage.removeItem(JOB_STARTED_STORAGE_KEY)
+    localStorage.removeItem(JOB_PROGRESS_STORAGE_KEY)
     setJobStartedAt(null)
     setProgressEvents([])
     setJobId(null)
@@ -111,7 +146,9 @@ export function useCaptureJob(initialJobId?: string | null) {
         ) {
           return events
         }
-        return [...events, progress].slice(-100)
+        const nextEvents = [...events, progress].slice(-100)
+        persistProgressEvents(jobId, nextEvents)
+        return nextEvents
       })
       queryClient.setQueryData<JobSnapshot>(
         trafficTracerJobKey(jobId),

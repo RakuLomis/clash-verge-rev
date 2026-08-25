@@ -598,6 +598,44 @@ describe('TrafficTracer Complete workspace', () => {
     )
   })
 
+  it('shows structured operation and elapsed timing for an active Job', () => {
+    const job: JobSnapshot = {
+      job_id: 'job-timing',
+      kind: 'capture',
+      state: 'capturing',
+      stage: 'capture.browser',
+      progress: 0.4,
+      message: 'Launching Chrome',
+      cancel_requested: false,
+    }
+    render(
+      <TrafficTracerJobProgress
+        job={job}
+        events={[
+          {
+            job_id: job.job_id,
+            state: job.state,
+            stage: job.stage,
+            progress: job.progress,
+            message: job.message,
+            timestamp: new Date().toISOString(),
+            timing: {
+              job_elapsed_ms: 5300,
+              stage_elapsed_ms: 2400,
+              operation: 'capture.chrome_launch',
+              operation_elapsed_ms: 1200,
+            },
+          },
+        ]}
+        onCancel={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByTestId('traffic-tracer-job-timing')).toHaveTextContent(
+      /Chrome startup · operation 1\.2s · stage 2\.4s · total 5\.3s/,
+    )
+  })
+
   it('disables Session analysis while capture locking is active', () => {
     render(
       <TrafficTracerSessionCard
