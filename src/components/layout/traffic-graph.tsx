@@ -1,6 +1,6 @@
 import { useTheme } from '@mui/material'
 import { useEffect, useImperativeHandle, useRef, type Ref } from 'react'
-import { Traffic } from 'tauri-plugin-mihomo-api'
+import type { Traffic } from 'tauri-plugin-mihomo-api'
 
 const maxPoint = 30
 
@@ -16,17 +16,19 @@ const sampleIntervalMs = 1000
 const frameIntervalMs = 1000 / 15
 const animationDurationMs = sampleIntervalMs
 
-const zeroTraffic: Traffic = { up: 0, down: 0 }
+type TrafficSample = Pick<Traffic, 'up' | 'down'>
+
+const zeroTraffic: TrafficSample = { up: 0, down: 0 }
 const createDefaultList = () =>
   Array.from({ length: maxPoint + 2 }, () => ({ ...zeroTraffic }))
 
-const hasTraffic = (traffic?: Traffic | null) =>
+const hasTraffic = (traffic?: TrafficSample | null) =>
   (traffic?.up ?? 0) !== 0 || (traffic?.down ?? 0) !== 0
 
-const hasRetainedTraffic = (list: Traffic[]) => list.some(hasTraffic)
+const hasRetainedTraffic = (list: TrafficSample[]) => list.some(hasTraffic)
 
 export interface TrafficRef {
-  appendData: (data: Traffic) => void
+  appendData: (data: TrafficSample) => void
   toggleStyle: () => void
 }
 
@@ -38,16 +40,16 @@ type TrafficValueKey = 'up' | 'down'
 export function TrafficGraph({ ref }: { ref?: Ref<TrafficRef> }) {
   const countRef = useRef(0)
   const styleRef = useRef(true)
-  const listRef = useRef<Traffic[]>(createDefaultList())
+  const listRef = useRef<TrafficSample[]>(createDefaultList())
   const canvasRef = useRef<HTMLCanvasElement>(null!)
 
-  const cacheRef = useRef<Traffic | null>(null)
+  const cacheRef = useRef<TrafficSample | null>(null)
   const requestDrawRef = useRef<(animate?: boolean) => void>(() => {})
 
   const { palette } = useTheme()
 
   useImperativeHandle(ref, () => ({
-    appendData: (data: Traffic) => {
+    appendData: (data: TrafficSample) => {
       cacheRef.current = data
     },
     toggleStyle: () => {
@@ -139,7 +141,7 @@ export function TrafficGraph({ ref }: { ref?: Ref<TrafficRef> }) {
         return 1
       }
 
-      const drawBezier = (list: Traffic[], valueKey: TrafficValueKey) => {
+      const drawBezier = (list: TrafficSample[], valueKey: TrafficValueKey) => {
         if (list.length === 0) return
 
         const firstX = (dx * -1 - offset + 3) | 0
@@ -159,7 +161,7 @@ export function TrafficGraph({ ref }: { ref?: Ref<TrafficRef> }) {
         }
       }
 
-      const drawLine = (list: Traffic[], valueKey: TrafficValueKey) => {
+      const drawLine = (list: TrafficSample[], valueKey: TrafficValueKey) => {
         if (list.length === 0) return
 
         context.moveTo((dx * -1 - offset) | 0, countY(list[0]?.[valueKey] ?? 0))

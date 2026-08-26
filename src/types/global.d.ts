@@ -204,7 +204,7 @@ interface ILogItem {
   payload: string
 }
 
-type LogLevel = import('tauri-plugin-mihomo-api').LogLevel
+type LogLevel = Lowercase<import('tauri-plugin-mihomo-api').LogLevel>
 type LogFilter = 'all' | 'debug' | 'info' | 'warn' | 'err'
 type LogOrder = 'asc' | 'desc'
 

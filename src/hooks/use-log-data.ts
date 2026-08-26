@@ -1,7 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query'
 import dayjs from 'dayjs'
 import { useEffect, useRef } from 'react'
-import { MihomoWebSocket, type LogLevel } from 'tauri-plugin-mihomo-api'
+import {
+  MihomoWebSocket,
+  type LogLevel as PluginLogLevel,
+} from 'tauri-plugin-mihomo-api'
 
 import { getClashLogs } from '@/services/cmds'
 
@@ -61,7 +64,8 @@ export const useLogData = () => {
     storageKey: 'mihomo_logs_date',
     buildSubscriptKey: (date) => (enableLog ? `getClashLog-${date}` : null),
     fallbackData: [],
-    connect: () => MihomoWebSocket.connect_logs(logLevel),
+    connect: () =>
+      MihomoWebSocket.connect_logs(logLevel.toUpperCase() as PluginLogLevel),
     setupHandlers: ({ next, scheduleReconnect, isMounted }) => {
       let flushTimer: ReturnType<typeof setTimeout> | null = null
       const buffer: ILogItem[] = []

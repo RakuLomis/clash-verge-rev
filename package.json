@@ -78,7 +78,7 @@
     "react-markdown": "10.1.0",
     "react-router": "^7.15.1",
     "rehype-raw": "^7.0.0",
-    "tauri-plugin-mihomo-api": "github:clash-verge-rev/tauri-plugin-mihomo",
+    "tauri-plugin-mihomo-api": "github:clash-verge-rev/tauri-plugin-mihomo#9c5ed1c523461fb3fecb1a24ec99cd1d494a24b3",
     "types-pac": "^1.0.3",
     "validator": "^13.15.35"
   },

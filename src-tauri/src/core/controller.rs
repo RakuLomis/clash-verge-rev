@@ -87,6 +87,18 @@ mod tests {
     use clash_verge_service_ipc::OwnerIdentity;
 
     #[test]
+    fn mihomo_plugin_accepts_tuic_config_without_ech_key() {
+        let raw = r#"{
+            "enable": false,
+            "listen": "",
+            "certificate": "",
+            "private-key": ""
+        }"#;
+        let config = serde_json::from_str::<tauri_plugin_mihomo::models::TuicServer>(raw);
+        assert!(config.is_ok(), "TUIC compatibility parse failed: {:?}", config.err());
+    }
+
+    #[test]
     #[cfg(unix)]
     fn service_endpoint_is_scoped_to_the_owner_uid() {
         let endpoint = clash_verge_service_ipc::mihomo_ipc_path(&OwnerIdentity::Unix { uid: 4242, gid: 4242 });
