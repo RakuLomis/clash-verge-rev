@@ -26,6 +26,7 @@ import {
   SystemContext,
   UptimeContext,
 } from './app-data-context'
+import { coreQueryRecoveryInterval } from './core-query-recovery'
 
 const TQ_MIHOMO = {
   refetchOnWindowFocus: false,
@@ -33,6 +34,9 @@ const TQ_MIHOMO = {
   staleTime: 1500,
   retry: 3,
   retryDelay: (attempt: number) => Math.min(200 * 2 ** attempt, 3000),
+  refetchInterval: (query: { state: { status: string } }) =>
+    coreQueryRecoveryInterval(query.state.status),
+  refetchIntervalInBackground: false,
 } as const
 
 const TQ_DEFAULTS = {
@@ -59,6 +63,7 @@ export const AppDataProvider = ({
   const {
     data: proxiesData,
     isPending: isProxiesPending,
+    isError: isProxiesError,
     refetch: _refetchProxy,
   } = useQuery({
     queryKey: ['getProxies'],
@@ -69,6 +74,7 @@ export const AppDataProvider = ({
   const {
     data: clashConfig,
     isPending: isClashConfigPending,
+    isError: isClashConfigError,
     refetch: _refetchClashConfig,
   } = useQuery({
     queryKey: ['getClashConfig'],
@@ -269,8 +275,16 @@ export const AppDataProvider = ({
   const uptimeValue = useMemo(() => ({ uptime: uptimeData || 0 }), [uptimeData])
 
   const coreDataStatusValue = useMemo(
-    () => ({ isCoreDataPending: isProxiesPending || isClashConfigPending }),
-    [isProxiesPending, isClashConfigPending],
+    () => ({
+      isCoreDataPending: isProxiesPending || isClashConfigPending,
+      isCoreDataError: isProxiesError || isClashConfigError,
+    }),
+    [
+      isProxiesPending,
+      isClashConfigPending,
+      isProxiesError,
+      isClashConfigError,
+    ],
   )
 
   const refreshersValue = useMemo(

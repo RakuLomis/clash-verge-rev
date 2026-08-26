@@ -17,6 +17,7 @@ export interface AppDataContextType {
   ruleProviders: Record<string, RuleProvider>
   systemProxyAddress: string
   isCoreDataPending: boolean
+  isCoreDataError: boolean
 
   refreshProxy: () => Promise<any>
   refreshClashConfig: () => Promise<any>
@@ -67,6 +68,7 @@ export interface UptimeContextType {
 
 export interface CoreDataStatusContextType {
   isCoreDataPending: boolean
+  isCoreDataError: boolean
 }
 
 export interface RefreshersContextType {
@@ -141,7 +143,7 @@ export const useAppData = (): AppDataContextType => {
   const { clashConfig } = useClashConfigData()
   const { sysproxy, runningMode, systemProxyAddress } = useSystemData()
   const { uptime } = useUptimeData()
-  const { isCoreDataPending } = useCoreDataStatus()
+  const { isCoreDataPending, isCoreDataError } = useCoreDataStatus()
   const refreshers = useAppRefreshers()
 
   return {
@@ -155,6 +157,7 @@ export const useAppData = (): AppDataContextType => {
     ruleProviders: ruleProviders as Record<string, RuleProvider>,
     systemProxyAddress,
     isCoreDataPending,
+    isCoreDataError,
     ...refreshers,
   }
 }

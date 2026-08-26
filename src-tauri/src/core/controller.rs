@@ -66,6 +66,10 @@ pub async fn activate_and_wait(path: String) -> Result<()> {
                     "Mihomo controller ready at {path} (version: {:?}, attempt: {attempt})",
                     version
                 );
+                // Queries may have cached transient errors while the controller
+                // was switching (for example, sidecar -> service). Notify the
+                // frontend only after the new controller passes a real API probe.
+                Handle::refresh_clash();
                 return Ok(());
             }
             Ok(Err(error)) => last_error = error.to_string(),

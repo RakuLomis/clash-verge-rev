@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 
 import { useListen } from '@/hooks/use-listen'
+import { CORE_REFRESH_QUERY_KEYS } from '@/providers/core-query-recovery'
 import { queryClient } from '@/services/query-client'
 
 export const useLayoutEvents = (
@@ -43,12 +44,7 @@ export const useLayoutEvents = (
 
     register(
       addListener('verge://refresh-clash-config', async () => {
-        revalidateKeys([
-          'getProxies',
-          'getVersion',
-          'getClashConfig',
-          'getProxyProviders',
-        ])
+        revalidateKeys(CORE_REFRESH_QUERY_KEYS)
       }),
     )
 

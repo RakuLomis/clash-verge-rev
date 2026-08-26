@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useLockFn } from 'ahooks'
 import { getVersion } from 'tauri-plugin-mihomo-api'
 
+import { coreQueryRecoveryInterval } from '@/providers/core-query-recovery'
 import {
   getClashInfo,
   getRuntimeConfig,
@@ -71,6 +72,8 @@ export const useClash = () => {
   const { data: versionData, refetch: mutateVersion } = useQuery({
     queryKey: ['getVersion'],
     queryFn: getVersion,
+    refetchInterval: (query) => coreQueryRecoveryInterval(query.state.status),
+    refetchIntervalInBackground: false,
   })
 
   const mutateClash = (updater?: MutateClashUpdater, revalidate?: boolean) => {

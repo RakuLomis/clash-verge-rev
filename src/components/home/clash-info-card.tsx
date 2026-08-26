@@ -1,11 +1,19 @@
 import { DeveloperBoardOutlined } from '@mui/icons-material'
-import { Divider, Stack, Typography } from '@mui/material'
+import {
+  Button,
+  CircularProgress,
+  Divider,
+  Stack,
+  Typography,
+} from '@mui/material'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { useClash } from '@/hooks/use-clash'
 import {
+  useAppRefreshers,
   useClashConfigData,
+  useCoreDataStatus,
   useRulesData,
   useSystemData,
   useUptimeData,
@@ -25,6 +33,8 @@ export const ClashInfoCard = () => {
   const { t } = useTranslation()
   const { version: clashVersion } = useClash()
   const { clashConfig } = useClashConfigData()
+  const { isCoreDataPending, isCoreDataError } = useCoreDataStatus()
+  const { refreshAll } = useAppRefreshers()
   const { rules } = useRulesData()
   const { uptime } = useUptimeData()
   const { systemProxyAddress } = useSystemData()
@@ -34,7 +44,34 @@ export const ClashInfoCard = () => {
 
   // 使用备忘录组件内容，减少重新渲染
   const cardContent = useMemo(() => {
-    if (!clashConfig) return null
+    if (!clashConfig) {
+      return (
+        <Stack
+          spacing={1.5}
+          sx={{
+            minHeight: 120,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          {isCoreDataPending ? (
+            <CircularProgress size={24} />
+          ) : (
+            <>
+              <Typography
+                variant="body2"
+                color={isCoreDataError ? 'error' : 'text.secondary'}
+              >
+                {t('home.components.clashMode.errors.communication')}
+              </Typography>
+              <Button size="small" onClick={() => void refreshAll()}>
+                {t('shared.actions.retry')}
+              </Button>
+            </>
+          )}
+        </Stack>
+      )
+    }
 
     return (
       <Stack spacing={1.5}>
@@ -88,6 +125,9 @@ export const ClashInfoCard = () => {
     clashConfig,
     clashVersion,
     t,
+    isCoreDataPending,
+    isCoreDataError,
+    refreshAll,
     formattedUptime,
     rules.length,
     systemProxyAddress,
