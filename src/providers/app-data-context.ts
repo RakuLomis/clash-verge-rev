@@ -44,6 +44,8 @@ export interface ProxiesContextType {
   proxies: any
   proxyProviders: Record<string, ProxyProvider | undefined>
   isProxiesPending: boolean
+  isProxiesError: boolean
+  proxiesError: Error | null
 }
 
 export interface RulesContextType {
@@ -101,15 +103,20 @@ const useCtx = <T>(ctx: Context<T | null>, hookName: string): T => {
 }
 
 export const useProxiesData = () => {
-  const { proxies, proxyProviders, isProxiesPending } = useCtx(
-    ProxiesContext,
-    'useProxiesData',
-  )
+  const {
+    proxies,
+    proxyProviders,
+    isProxiesPending,
+    isProxiesError,
+    proxiesError,
+  } = useCtx(ProxiesContext, 'useProxiesData')
 
   return {
     proxies,
     proxyProviders: proxyProviders as Record<string, ProxyProvider>,
     isProxiesPending,
+    isProxiesError,
+    proxiesError,
   }
 }
 

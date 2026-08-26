@@ -64,6 +64,7 @@ export const AppDataProvider = ({
     data: proxiesData,
     isPending: isProxiesPending,
     isError: isProxiesError,
+    error: proxiesError,
     refetch: _refetchProxy,
   } = useQuery({
     queryKey: ['getProxies'],
@@ -214,8 +215,16 @@ export const AppDataProvider = ({
       proxies: proxiesData,
       proxyProviders: proxyProviders || {},
       isProxiesPending,
+      isProxiesError,
+      proxiesError,
     }),
-    [proxiesData, proxyProviders, isProxiesPending],
+    [
+      proxiesData,
+      proxyProviders,
+      isProxiesPending,
+      isProxiesError,
+      proxiesError,
+    ],
   )
 
   const rulesValue = useMemo(

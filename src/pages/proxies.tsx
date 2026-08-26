@@ -1,5 +1,11 @@
 import { LanOutlined, LanRounded, WarningRounded } from '@mui/icons-material'
-import { Box, Button, ButtonGroup } from '@mui/material'
+import {
+  Alert,
+  Box,
+  Button,
+  ButtonGroup,
+  CircularProgress,
+} from '@mui/material'
 import { useLockFn } from 'ahooks'
 import { useCallback, useEffect, useReducer, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -12,6 +18,7 @@ import { useVerge } from '@/hooks/use-verge'
 import {
   useAppRefreshers,
   useClashConfigData,
+  useProxiesData,
 } from '@/providers/app-data-context'
 import {
   getRuntimeProxyChainConfig,
@@ -45,7 +52,13 @@ const ProxyPage = () => {
   )
 
   const { clashConfig } = useClashConfigData()
-  const { refreshClashConfig } = useAppRefreshers()
+  const { refreshClashConfig, refreshProxy } = useAppRefreshers()
+  const {
+    proxies: proxiesData,
+    isProxiesPending,
+    isProxiesError,
+    proxiesError,
+  } = useProxiesData()
 
   const updateChainConfigData = useCallback((value: string | null) => {
     dispatchChainConfigData(value)
@@ -188,11 +201,51 @@ const ProxyPage = () => {
         </Box>
       }
     >
-      <ProxyGroups
-        mode={curMode ?? 'rule'}
-        isChainMode={isChainMode}
-        chainConfigData={chainConfigData}
-      />
+      {!proxiesData && isProxiesPending ? (
+        <Box
+          sx={{
+            height: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <CircularProgress size={28} />
+        </Box>
+      ) : (
+        <>
+          {isProxiesError && (
+            <Alert
+              severity="error"
+              action={
+                <Button
+                  color="inherit"
+                  size="small"
+                  onClick={() => void refreshProxy()}
+                >
+                  {t('shared.actions.retry')}
+                </Button>
+              }
+              sx={{ mb: 1 }}
+            >
+              {t('home.components.clashMode.errors.communication')}
+              <Box
+                component="span"
+                sx={{ display: 'block', mt: 0.5, fontFamily: 'monospace' }}
+              >
+                getProxies: {proxiesError?.message ?? String(proxiesError)}
+              </Box>
+            </Alert>
+          )}
+          {proxiesData && (
+            <ProxyGroups
+              mode={curMode ?? 'rule'}
+              isChainMode={isChainMode}
+              chainConfigData={chainConfigData}
+            />
+          )}
+        </>
+      )}
     </BasePage>
   )
 }

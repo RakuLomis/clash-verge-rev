@@ -99,6 +99,39 @@ mod tests {
     }
 
     #[test]
+    fn mihomo_plugin_accepts_proxy_response_without_provider_name() {
+        let raw = r#"{
+            "proxies": {
+                "DIRECT": {
+                    "alive": true,
+                    "history": [],
+                    "extra": {},
+                    "name": "DIRECT",
+                    "udp": true,
+                    "uot": false,
+                    "type": "Direct",
+                    "xudp": false,
+                    "tfo": false,
+                    "mptcp": false,
+                    "smux": false,
+                    "interface": "",
+                    "dialer-proxy": "",
+                    "routing-mark": 0
+                }
+            }
+        }"#;
+        let proxies = serde_json::from_str::<tauri_plugin_mihomo::models::Proxies>(raw)
+            .expect("proxy response without provider-name should remain readable");
+        let direct = proxies
+            .proxies
+            .get("DIRECT")
+            .expect("DIRECT proxy should survive deserialization");
+        assert_eq!(direct.name, "DIRECT");
+        assert_eq!(direct.proxy_type, tauri_plugin_mihomo::models::ProxyType::Direct);
+        assert!(direct.provider_name.is_empty());
+    }
+
+    #[test]
     #[cfg(unix)]
     fn service_endpoint_is_scoped_to_the_owner_uid() {
         let endpoint = clash_verge_service_ipc::mihomo_ipc_path(&OwnerIdentity::Unix { uid: 4242, gid: 4242 });

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const revisionPattern = '[0-9a-f]{40}'
+const compatibleRevision = 'cf97ff99e390a9b437d5cf94c6f454f024fc8f69'
 
 test('Rust and JavaScript Mihomo plugins pin the same revision', async () => {
   const [packageJsonText, cargoToml, cargoLock, pnpmLock] = await Promise.all([
@@ -30,6 +31,11 @@ test('Rust and JavaScript Mihomo plugins pin the same revision', async () => {
   assert.ok(jsRevision, 'JavaScript Mihomo plugin must pin a full revision')
   assert.ok(rustRevision, 'Rust Mihomo plugin must pin a full revision')
   assert.equal(jsRevision, rustRevision)
+  assert.equal(
+    rustRevision,
+    compatibleRevision,
+    'Mihomo plugin revision must include tolerant response DTO defaults',
+  )
   assert.match(
     cargoLock,
     new RegExp(
