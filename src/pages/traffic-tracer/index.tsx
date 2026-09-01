@@ -1,4 +1,12 @@
-import { Alert, AlertTitle, Box, MenuItem, TextField } from '@mui/material'
+import {
+  Alert,
+  AlertTitle,
+  Box,
+  Button,
+  MenuItem,
+  Stack,
+  TextField,
+} from '@mui/material'
 import { invoke } from '@tauri-apps/api/core'
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -8,19 +16,36 @@ import { TrafficTracerBatchProgress } from '@/components/traffic-tracer/batch-pr
 import { TrafficTracerCaptureForm } from '@/components/traffic-tracer/capture-form'
 import { TrafficTracerFlowQueryForm } from '@/components/traffic-tracer/flow-query-form'
 import { TrafficTracerJobProgress } from '@/components/traffic-tracer/job-progress'
+import { TrafficTracerPipelineQueue } from '@/components/traffic-tracer/pipeline-queue'
+import {
+  PIPELINE_MODE_STORAGE_KEY,
+  restoredPipelineCandidates,
+} from '@/components/traffic-tracer/pipeline-queue-storage'
 import { TrafficTracerSessionsView } from '@/components/traffic-tracer/sessions-view'
 import { useCaptureJob } from '@/hooks/use-capture-job'
 import { useTrafficTracerBatches } from '@/hooks/use-traffic-tracer-batches'
 import { useTrafficTracerWorker } from '@/hooks/use-traffic-tracer-worker'
+import {
+  cancelTrafficTracerPipeline,
+  getTrafficTracerPipeline,
+  interruptTrafficTracerPipeline,
+  listTrafficTracerPipelines,
+  resumeTrafficTracerPipeline,
+  startTrafficTracerPipeline,
+} from '@/services/cmds'
 import { showNotice } from '@/services/notice-service'
 import type {
-  CaptureStartRequest,
   BatchStartRequest,
+  CaptureStartRequest,
   EnvironmentRequest,
+  PipelineCandidate,
+  PipelineListEntry,
+  PipelineManifest,
 } from '@/types/traffic-tracer'
 
 const START_FAILURE_STORAGE_KEY = 'traffictracer.lastStartFailure'
 const ENVIRONMENT_REQUEST_STORAGE_KEY = 'traffictracer.environmentRequest.v1'
+const ACTIVE_PIPELINE_STORAGE_KEY = 'traffictracer.activePipeline.v1'
 
 type StartFailure = { at: string; stage: string; message: string }
 
@@ -104,6 +129,78 @@ const TrafficTracerPage = () => {
     diagnosticRequest?.output_root ?? '',
     diagnosticRequest !== null,
   )
+  const [pipelineEnabled, setPipelineEnabled] = useState(
+    () => localStorage.getItem(PIPELINE_MODE_STORAGE_KEY) === 'true',
+  )
+  const [pipelineCandidates, setPipelineCandidates] = useState<
+    PipelineCandidate[]
+  >(restoredPipelineCandidates)
+  const [pipeline, setPipeline] = useState<PipelineManifest | null>(null)
+  const [pipelineLocator, setPipelineLocator] = useState<{
+    pipeline_id: string
+    output_root: string
+  } | null>(() => {
+    try {
+      return JSON.parse(
+        localStorage.getItem(ACTIVE_PIPELINE_STORAGE_KEY) ?? 'null',
+      )
+    } catch {
+      return null
+    }
+  })
+  const [pipelineActionPending, setPipelineActionPending] = useState(false)
+  const [pipelineHistory, setPipelineHistory] = useState<PipelineListEntry[]>(
+    [],
+  )
+  const pipelineTerminal = new Set([
+    'completed',
+    'completed_with_errors',
+    'failed',
+    'cancelled',
+    'interrupted',
+    'restore_failed',
+  ])
+
+  useEffect(() => {
+    if (!pipelineLocator) return
+    let disposed = false
+    const refresh = async () => {
+      try {
+        const current = await getTrafficTracerPipeline(
+          pipelineLocator.output_root,
+        )
+        if (!disposed) setPipeline(current)
+      } catch (error) {
+        if (!disposed) recordStartFailure(error, 'pipeline.status')
+      }
+    }
+    void refresh()
+    const interval = window.setInterval(() => void refresh(), 1000)
+    return () => {
+      disposed = true
+      window.clearInterval(interval)
+    }
+  }, [pipelineLocator, recordStartFailure])
+  useEffect(() => {
+    const outputRoot = diagnosticRequest?.output_root
+    if (!outputRoot) return
+    let disposed = false
+    const refresh = async () => {
+      try {
+        const entries = await listTrafficTracerPipelines(outputRoot)
+        if (!disposed) setPipelineHistory(entries)
+      } catch {
+        if (!disposed) setPipelineHistory([])
+      }
+    }
+    void refresh()
+    const interval = window.setInterval(() => void refresh(), 5000)
+    return () => {
+      disposed = true
+      window.clearInterval(interval)
+    }
+  }, [diagnosticRequest?.output_root, pipelineLocator])
+
   const terminalJobStates = new Set([
     'completed',
     'failed',
@@ -113,10 +210,12 @@ const TrafficTracerPage = () => {
   const activeJobId =
     job && !terminalJobStates.has(job.state) ? job.job_id : null
   const activeBatchId =
-    batches.batchStatus &&
-    !terminalJobStates.has(batches.batchStatus.batch.state)
-      ? batches.batchStatus.batch.batch_id
-      : null
+    pipeline && !pipelineTerminal.has(pipeline.state)
+      ? (pipeline.runs[pipeline.current_run_index ?? -1]?.batch_id ?? null)
+      : batches.batchStatus &&
+          !terminalJobStates.has(batches.batchStatus.batch.state)
+        ? batches.batchStatus.batch.batch_id
+        : null
 
   useEffect(() => {
     let mounted = true
@@ -167,6 +266,65 @@ const TrafficTracerPage = () => {
     }
   }
 
+  const handleStartPipeline = async (batch: BatchStartRequest) => {
+    setPipelineActionPending(true)
+    try {
+      const started = await startTrafficTracerPipeline({
+        batch,
+        candidates: pipelineCandidates,
+        continue_on_run_failure: true,
+      })
+      const locator = {
+        pipeline_id: started.pipeline_id,
+        output_root: started.output_root,
+      }
+      localStorage.setItem(ACTIVE_PIPELINE_STORAGE_KEY, JSON.stringify(locator))
+      setPipelineLocator(locator)
+      setPipeline(started)
+      clearJob()
+      batches.clearBatch()
+      clearStartFailure()
+      showNotice.success('TrafficTracer pipeline started.')
+    } catch (error) {
+      recordStartFailure(error, 'pipeline.start')
+      showNotice.error(error)
+    } finally {
+      setPipelineActionPending(false)
+    }
+  }
+
+  const handleResumePipeline = async () => {
+    if (!pipelineLocator) return
+    setPipelineActionPending(true)
+    try {
+      const resumed = await resumeTrafficTracerPipeline(
+        pipelineLocator.output_root,
+      )
+      setPipeline(resumed)
+      clearStartFailure()
+      showNotice.success('TrafficTracer pipeline resumed.')
+    } catch (error) {
+      recordStartFailure(error, 'pipeline.resume')
+      showNotice.error(error)
+    } finally {
+      setPipelineActionPending(false)
+    }
+  }
+
+  const handlePipelineStop = async (cancel: boolean) => {
+    if (!pipeline) return
+    setPipelineActionPending(true)
+    try {
+      const updated = cancel
+        ? await cancelTrafficTracerPipeline(pipeline.pipeline_id)
+        : await interruptTrafficTracerPipeline(pipeline.pipeline_id)
+      setPipeline(updated)
+    } catch (error) {
+      showNotice.error(error)
+    } finally {
+      setPipelineActionPending(false)
+    }
+  }
   useEffect(() => {
     if (job?.state === 'failed') {
       recordStartFailure(
@@ -296,6 +454,106 @@ const TrafficTracerPage = () => {
             />
           </Box>
         )}
+        {pipelineHistory.length > 0 && (
+          <Box sx={{ mb: 2, maxWidth: 720 }}>
+            <TextField
+              select
+              fullWidth
+              size="small"
+              label="Profile / node pipeline history"
+              value={pipelineLocator?.output_root ?? ''}
+              onChange={(event) => {
+                const selected = pipelineHistory.find(
+                  (item) => item.output_root === event.target.value,
+                )
+                if (!selected) return
+                const locator = {
+                  pipeline_id: selected.pipeline_id,
+                  output_root: selected.output_root,
+                }
+                localStorage.setItem(
+                  ACTIVE_PIPELINE_STORAGE_KEY,
+                  JSON.stringify(locator),
+                )
+                setPipelineLocator(locator)
+              }}
+            >
+              {pipelineHistory.map((item) => (
+                <MenuItem key={item.pipeline_id} value={item.output_root}>
+                  {new Date(item.updated_at).toLocaleString()} · {item.state} ·{' '}
+                  {item.completed_runs}/{item.total_runs}
+                </MenuItem>
+              ))}
+            </TextField>
+          </Box>
+        )}
+        {pipeline && (
+          <Alert
+            severity={
+              pipeline.state === 'failed' || pipeline.state === 'restore_failed'
+                ? 'error'
+                : pipeline.state === 'completed_with_errors'
+                  ? 'warning'
+                  : 'info'
+            }
+            sx={{ mb: 2 }}
+          >
+            <AlertTitle>Profile / node pipeline</AlertTitle>
+            <Box>
+              {pipeline.state} · {pipeline.stage} · run{' '}
+              {(pipeline.current_run_index ?? pipeline.runs.length - 1) + 1}/
+              {pipeline.runs.length}
+            </Box>
+            <Box sx={{ opacity: 0.65, overflowWrap: 'anywhere' }}>
+              {pipelineLocator?.output_root}
+            </Box>
+            {pipeline.current_run_index !== null && (
+              <Box sx={{ opacity: 0.8 }}>
+                {pipeline.runs[pipeline.current_run_index]?.profile_uid} ·{' '}
+                {pipeline.runs[pipeline.current_run_index]?.selection_group} ·{' '}
+                {pipeline.runs[pipeline.current_run_index]?.requested_node}
+              </Box>
+            )}
+            {pipeline.state === 'interrupted' && (
+              <Button
+                size="small"
+                variant="contained"
+                sx={{ mt: 1 }}
+                disabled={pipelineActionPending || Boolean(captureLock?.locked)}
+                onClick={() => void handleResumePipeline()}
+              >
+                Resume pipeline
+              </Button>
+            )}
+            {!pipelineTerminal.has(pipeline.state) && (
+              <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  disabled={pipelineActionPending}
+                  onClick={() => void handlePipelineStop(false)}
+                >
+                  Interrupt
+                </Button>
+                <Button
+                  size="small"
+                  color="error"
+                  disabled={pipelineActionPending}
+                  onClick={() => void handlePipelineStop(true)}
+                >
+                  Cancel
+                </Button>
+              </Stack>
+            )}
+          </Alert>
+        )}
+        <TrafficTracerPipelineQueue
+          enabled={pipelineEnabled}
+          candidates={pipelineCandidates}
+          disabled={Boolean(captureLock?.locked)}
+          onEnabledChange={setPipelineEnabled}
+          onChange={setPipelineCandidates}
+        />
         <TrafficTracerCaptureForm
           environment={environment}
           diagnosticRequest={diagnosticRequest}
@@ -303,12 +561,17 @@ const TrafficTracerPage = () => {
           diagnosticError={environmentQuery.error}
           captureLocked={captureLock?.locked}
           submitting={
-            startMutation.isPending || batches.startMutation.isPending
+            startMutation.isPending ||
+            batches.startMutation.isPending ||
+            pipelineActionPending
           }
           onDiagnose={handleDiagnose}
           onRetryDiagnostics={() => void environmentQuery.refetch()}
           onSubmit={handleStartCapture}
           onSubmitBatch={handleStartBatch}
+          pipelineEnabled={pipelineEnabled}
+          pipelineCandidateCount={pipelineCandidates.length}
+          onSubmitPipeline={handleStartPipeline}
         />
         <Box sx={{ mt: 2 }}>
           <TrafficTracerSessionsView

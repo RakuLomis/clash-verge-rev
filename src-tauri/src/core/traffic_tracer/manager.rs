@@ -304,7 +304,7 @@ impl WorkerManager {
         *self.session_root.lock() = None;
         *self.recovery.lock() = None;
         *self.active_job.lock() = None;
-        CaptureLock::global().clear();
+        CaptureLock::global().clear_owner_kind("job");
         *self.state.lock() = WorkerManagerState::Stopped;
     }
 
@@ -361,7 +361,7 @@ impl WorkerManager {
                         }
                     }
                     Ok(WorkerEvent::Exited { status, .. }) => {
-                        capture_lock.clear();
+                        capture_lock.clear_owner_kind("job");
                         *active_job.lock() = None;
                         let mut state = state.lock();
                         if *state != WorkerManagerState::Stopped {

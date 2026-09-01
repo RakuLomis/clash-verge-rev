@@ -110,6 +110,7 @@ rust_iso3166 = "0.1.14"
 dark-light = { git = "https://github.com/rust-dark-light/dark-light" }
 bytes = "1.11.1"
 tokio-util = { version = "0.7.18", features = ["time"] }
+sha2 = "0.10.9"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.189"

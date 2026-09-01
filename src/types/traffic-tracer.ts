@@ -143,6 +143,107 @@ export interface BatchStartRequest {
   fail_fast: boolean
 }
 
+export interface PipelineCandidate {
+  profile_uid: string
+  profile_fingerprint: string
+  selection_group: string
+  requested_node: string
+}
+
+export interface PipelineStartRequest {
+  batch: BatchStartRequest
+  candidates: PipelineCandidate[]
+  continue_on_run_failure: boolean
+}
+
+export type PipelineState =
+  | 'created'
+  | 'validating'
+  | 'running'
+  | 'interrupted'
+  | 'completed'
+  | 'completed_with_errors'
+  | 'failed'
+  | 'cancelled'
+  | 'restoring'
+  | 'restore_failed'
+
+export type PipelineStage =
+  | 'queued'
+  | 'activating_profile'
+  | 'waiting_controller'
+  | 'selecting_proxy'
+  | 'draining_connections'
+  | 'preflight'
+  | 'running_batch'
+  | 'verifying_protocol'
+  | 'checkpoint'
+  | 'restoring'
+  | 'finished'
+
+export interface PipelineRun {
+  ordinal: number
+  run_id: string
+  profile_uid: string
+  profile_fingerprint: string
+  selection_group: string
+  requested_node: string
+  state:
+    | 'pending'
+    | 'running'
+    | 'completed'
+    | 'degraded'
+    | 'failed'
+    | 'interrupted'
+    | 'skipped'
+    | 'cancelled'
+  stage: PipelineStage
+  resolved_chain: string[]
+  resolved_leaf: string | null
+  expected_protocol: string
+  observed_protocol: string
+  batch_id: string | null
+  output_path: string
+  error: { code: string; message: string } | null
+  resume_attempt: number
+  started_at: string | null
+  completed_at: string | null
+}
+
+export interface PipelineListEntry {
+  pipeline_id: string
+  output_root: string
+  state: PipelineState
+  updated_at: string
+  completed_runs: number
+  total_runs: number
+}
+
+export interface PipelineManifest {
+  schema_version: 1
+  pipeline_id: string
+  state: PipelineState
+  stage: PipelineStage
+  created_at: string
+  updated_at: string
+  output_root: string
+  config: { path: string; sha256: string }
+  targets: TargetConfigEntry[]
+  execution: Record<string, unknown>
+  policy: {
+    continue_on_run_failure: boolean
+    restore_original_state: true
+  }
+  current_run_index: number | null
+  runs: PipelineRun[]
+  restore: {
+    profile_uid: string | null
+    selections: Array<{ group: string; node: string }>
+    state: 'pending' | 'not_required' | 'restoring' | 'restored' | 'failed'
+    error: { code: string; message: string } | null
+  }
+}
+
 export type BatchState =
   | 'created'
   | 'running'
@@ -199,6 +300,7 @@ export interface BatchListResult {
 
 export interface CaptureLockSnapshot {
   locked: boolean
+  owner_kind?: 'job' | 'pipeline' | string
   job_id?: string
   reason?: string
 }

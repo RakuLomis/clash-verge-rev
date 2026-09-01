@@ -95,6 +95,9 @@ export interface TrafficTracerCaptureFormProps {
   onRetryDiagnostics?: () => void
   onSubmit: (request: CaptureStartRequest) => Promise<unknown> | void
   onSubmitBatch?: (request: BatchStartRequest) => Promise<unknown> | void
+  pipelineEnabled?: boolean
+  pipelineCandidateCount?: number
+  onSubmitPipeline?: (request: BatchStartRequest) => Promise<unknown> | void
 }
 
 function restoredDraft(): CaptureFormDraft {
@@ -125,6 +128,9 @@ export function TrafficTracerCaptureForm({
   onRetryDiagnostics,
   onSubmit,
   onSubmitBatch,
+  pipelineEnabled = false,
+  pipelineCandidateCount = 0,
+  onSubmitPipeline,
 }: TrafficTracerCaptureFormProps) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -235,6 +241,10 @@ export function TrafficTracerCaptureForm({
     captureLocked ||
     diagnosing ||
     blocking ||
+    (pipelineEnabled &&
+      (draft.target_mode !== 'config' ||
+        !targetConfig ||
+        pipelineCandidateCount === 0)) ||
     (draft.target_mode === 'config' &&
       Boolean(targetConfig) &&
       selectedTargetIndexes.size === 0) ||
@@ -363,6 +373,17 @@ export function TrafficTracerCaptureForm({
   const handleSubmit = async () => {
     setSubmitted(true)
     if (disabled) return
+    if (
+      pipelineEnabled &&
+      targetConfig &&
+      selectedTargetIndexes.size > 0 &&
+      onSubmitPipeline
+    ) {
+      await onSubmitPipeline(
+        batchRequestFromDraft(draft, targetConfig, selectedTargetIndexes),
+      )
+      return
+    }
     if (targetConfig && selectedTargetIndexes.size > 1 && onSubmitBatch) {
       await onSubmitBatch(
         batchRequestFromDraft(draft, targetConfig, selectedTargetIndexes),
@@ -944,7 +965,9 @@ export function TrafficTracerCaptureForm({
               disabled={disabled}
               onClick={() => void handleSubmit()}
             >
-              {t('settings.trafficTracer.common.actions.startCapture')}
+              {pipelineEnabled
+                ? `Start pipeline (${pipelineCandidateCount} nodes)`
+                : t('settings.trafficTracer.common.actions.startCapture')}
             </Button>
           </Stack>
         </Stack>

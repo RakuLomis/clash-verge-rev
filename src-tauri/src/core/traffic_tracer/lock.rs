@@ -8,6 +8,8 @@ use crate::singleton;
 pub struct CaptureLockSnapshot {
     pub locked: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -15,6 +17,7 @@ pub struct CaptureLockSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ActiveCapture {
+    owner_kind: String,
     job_id: String,
     reason: String,
 }
@@ -34,6 +37,7 @@ impl CaptureLock {
         match self.active.lock().as_ref() {
             Some(active) => CaptureLockSnapshot {
                 locked: true,
+                owner_kind: Some(active.owner_kind.clone()),
                 job_id: Some(active.job_id.clone()),
                 reason: Some(active.reason.clone()),
             },
@@ -53,10 +57,20 @@ impl CaptureLock {
     }
 
     pub fn acquire(&self, job_id: impl Into<String>, reason: impl Into<String>) -> Result<()> {
+        self.acquire_owned("job", job_id, reason)
+    }
+
+    pub fn acquire_owned(
+        &self,
+        owner_kind: impl Into<String>,
+        job_id: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Result<()> {
+        let owner_kind = owner_kind.into();
         let job_id = job_id.into();
         let reason = reason.into();
-        if job_id.trim().is_empty() || reason.trim().is_empty() {
-            bail!("Capture lock job_id and reason must not be empty");
+        if owner_kind.trim().is_empty() || job_id.trim().is_empty() || reason.trim().is_empty() {
+            bail!("Capture lock owner_kind, job_id and reason must not be empty");
         }
 
         let mut active = self.active.lock();
@@ -67,7 +81,22 @@ impl CaptureLock {
                 existing.reason
             );
         }
-        *active = Some(ActiveCapture { job_id, reason });
+        *active = Some(ActiveCapture {
+            owner_kind,
+            job_id,
+            reason,
+        });
+        Ok(())
+    }
+
+    pub fn ensure_owned(&self, owner_kind: &str, owner_id: &str, action: &str) -> Result<()> {
+        let active = self.active.lock();
+        let Some(existing) = active.as_ref() else {
+            bail!("{action} requires an active TrafficTracer {owner_kind} lock");
+        };
+        if existing.owner_kind != owner_kind || existing.job_id != owner_id {
+            bail!("{action} is not authorized for TrafficTracer {owner_kind} {owner_id}");
+        }
         Ok(())
     }
 
@@ -85,6 +114,14 @@ impl CaptureLock {
         }
         *active = None;
         Ok(true)
+    }
+
+    pub fn clear_owner_kind(&self, owner_kind: &str) -> bool {
+        let mut active = self.active.lock();
+        if active.as_ref().is_some_and(|capture| capture.owner_kind == owner_kind) {
+            return active.take().is_some();
+        }
+        false
     }
 
     pub fn clear(&self) -> bool {
@@ -106,6 +143,7 @@ mod tests {
             lock.snapshot(),
             CaptureLockSnapshot {
                 locked: true,
+                owner_kind: Some("job".to_owned()),
                 job_id: Some("job-one".to_owned()),
                 reason: Some("capture in progress".to_owned()),
             }
@@ -143,6 +181,35 @@ mod tests {
         lock.acquire("job-one", "capture in progress").unwrap();
         assert!(lock.clear());
         assert!(!lock.clear());
+        assert!(!lock.snapshot().locked);
+    }
+
+    #[test]
+    fn pipeline_owner_authorizes_only_its_internal_transitions() {
+        let lock = CaptureLock::new();
+        lock.acquire_owned("pipeline", "pipeline-one", "pipeline active")
+            .unwrap();
+        assert!(
+            lock.ensure_owned("pipeline", "pipeline-one", "switching profile")
+                .is_ok()
+        );
+        assert!(
+            lock.ensure_owned("pipeline", "pipeline-two", "switching profile")
+                .is_err()
+        );
+        assert!(lock.ensure_owned("job", "pipeline-one", "starting batch").is_err());
+        assert_eq!(lock.snapshot().owner_kind.as_deref(), Some("pipeline"));
+        lock.release("pipeline-one").unwrap();
+    }
+
+    #[test]
+    fn worker_failure_does_not_clear_pipeline_owner() {
+        let lock = CaptureLock::new();
+        lock.acquire_owned("pipeline", "pipeline-one", "pipeline active")
+            .unwrap();
+        assert!(!lock.clear_owner_kind("job"));
+        assert!(lock.snapshot().locked);
+        assert!(lock.clear_owner_kind("pipeline"));
         assert!(!lock.snapshot().locked);
     }
 }

@@ -622,6 +622,55 @@ export function getTrafficTracerCaptureLock() {
   return invoke<TrafficTracer.CaptureLockSnapshot>('tt_get_capture_lock')
 }
 
+export function snapshotTrafficTracerPipelineCandidate(request: {
+  profile_uid: string
+  selection_group: string
+  requested_node: string
+}) {
+  return invoke<TrafficTracer.PipelineCandidate>(
+    'tt_pipeline_current_candidate',
+    { request },
+  )
+}
+
+export function startTrafficTracerPipeline(
+  request: TrafficTracer.PipelineStartRequest,
+) {
+  return invoke<TrafficTracer.PipelineManifest>('tt_pipeline_start', {
+    request,
+  })
+}
+
+export function listTrafficTracerPipelines(outputRoot: string) {
+  return invoke<TrafficTracer.PipelineListEntry[]>('tt_pipeline_list', {
+    outputRoot,
+  })
+}
+
+export function resumeTrafficTracerPipeline(pipelineRoot: string) {
+  return invoke<TrafficTracer.PipelineManifest>('tt_pipeline_resume', {
+    pipelineRoot,
+  })
+}
+
+export function getTrafficTracerPipeline(pipelineRoot: string) {
+  return invoke<TrafficTracer.PipelineManifest>('tt_pipeline_status', {
+    pipelineRoot,
+  })
+}
+
+export function interruptTrafficTracerPipeline(pipelineId: string) {
+  return invoke<TrafficTracer.PipelineManifest>('tt_pipeline_interrupt', {
+    pipelineId,
+  })
+}
+
+export function cancelTrafficTracerPipeline(pipelineId: string) {
+  return invoke<TrafficTracer.PipelineManifest>('tt_pipeline_cancel', {
+    pipelineId,
+  })
+}
+
 export function startTrafficTracerBatch(
   request: TrafficTracer.BatchStartRequest,
 ) {

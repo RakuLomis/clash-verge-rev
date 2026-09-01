@@ -3,25 +3,33 @@ use std::{
     net::IpAddr,
     path::{Component, Path, PathBuf},
     sync::{
-        OnceLock,
+        Arc, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use chrono::{DateTime, Utc};
 use clash_verge_logging::{Type, logging};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Url};
 
 use super::{CmdResult, StringifyErr as _};
 use crate::{
-    config::{Config, IVerge},
+    config::{Config, IProfiles, IVerge},
     core::{
-        controller, service,
+        controller, handle, service,
         traffic_tracer::{
             lock::{CaptureLock, CaptureLockSnapshot},
             manager::{WorkerManager, WorkerManagerState, WorkerRecoveryReport, WorkerRecoveryStatus},
+            pipeline::{
+                PIPELINE_MANIFEST_NAME, PipelineCandidate, PipelineConfigSnapshot, PipelineError, PipelineManifest,
+                PipelinePolicy, PipelineRestore, PipelineRunState, PipelineSelection, PipelineStage, PipelineState,
+                PipelineTarget, RestoreState,
+            },
             protocol::{JOB_SCHEMA_VERSION, RequestMethod},
         },
     },
@@ -39,6 +47,24 @@ struct UiHeartbeatState {
     last_seen_ms: AtomicU64,
     warned: AtomicBool,
     monitor_started: AtomicBool,
+}
+
+struct ActivePipeline {
+    pipeline_id: String,
+    manifest_path: PathBuf,
+    interrupt: Arc<AtomicBool>,
+    cancel: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct PipelineRuntime {
+    active: Mutex<Option<ActivePipeline>>,
+}
+
+static PIPELINE_RUNTIME: OnceLock<PipelineRuntime> = OnceLock::new();
+
+fn pipeline_runtime() -> &'static PipelineRuntime {
+    PIPELINE_RUNTIME.get_or_init(PipelineRuntime::default)
 }
 
 static UI_HEARTBEAT: OnceLock<UiHeartbeatState> = OnceLock::new();
@@ -796,6 +822,69 @@ pub fn tt_get_capture_lock() -> CaptureLockSnapshot {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct PipelineCurrentCandidateRequest {
+    pub profile_uid: String,
+    pub selection_group: String,
+    pub requested_node: String,
+}
+
+#[tauri::command]
+pub async fn tt_pipeline_current_candidate(request: PipelineCurrentCandidateRequest) -> CmdResult<PipelineCandidate> {
+    CaptureLock::global()
+        .ensure_unlocked("adding a profile and proxy pipeline candidate")
+        .stringify_err()?;
+    for (label, value) in [
+        ("profile_uid", request.profile_uid.as_str()),
+        ("selection_group", request.selection_group.as_str()),
+        ("requested_node", request.requested_node.as_str()),
+    ] {
+        if value.trim().is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
+            return Err(format!("pipeline {label} is invalid").into());
+        }
+    }
+
+    let profiles = Config::profiles().await.latest_arc();
+    if profiles.current.as_deref() != Some(request.profile_uid.as_str()) {
+        return Err("pipeline candidate must match the currently active Profile".into());
+    }
+    profiles
+        .get_item(request.profile_uid.as_str())
+        .map_err(|error| error.to_string())?;
+
+    let proxies = handle::Handle::mihomo()
+        .await
+        .get_proxies()
+        .await
+        .map_err(|error| error.to_string())?;
+    let group = proxies.proxies.get(request.selection_group.as_str()).ok_or_else(|| {
+        smartstring::alias::String::from("pipeline selector group is not present in the active runtime")
+    })?;
+    if group.now.as_deref() != Some(request.requested_node.as_str()) {
+        return Err("pipeline requested node is not the selector's current node".into());
+    }
+    if !group
+        .all
+        .as_ref()
+        .is_some_and(|nodes| nodes.iter().any(|node| node.as_str() == request.requested_node))
+    {
+        return Err("pipeline requested node is not selectable from the runtime group".into());
+    }
+
+    let runtime_path = crate::utils::dirs::app_home_dir()
+        .stringify_err()?
+        .join(crate::constants::files::RUNTIME_CONFIG);
+    let runtime = fs::read(runtime_path).stringify_err()?;
+    let profile_fingerprint = format!("{:x}", Sha256::digest(runtime));
+    Ok(PipelineCandidate {
+        profile_uid: request.profile_uid,
+        profile_fingerprint,
+        selection_group: request.selection_group,
+        requested_node: request.requested_node,
+    })
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BatchStartRequest {
     pub config_path: String,
     pub config_sha256: String,
@@ -806,6 +895,16 @@ pub struct BatchStartRequest {
     pub chrome_binary: String,
     pub options: CaptureOptions,
     pub fail_fast: bool,
+}
+
+#[derive(Clone, Serialize)]
+struct PipelineOrchestration {
+    pipeline_id: String,
+    run_id: String,
+    run_ordinal: usize,
+    profile_uid: String,
+    selection_group: String,
+    requested_node: String,
 }
 
 #[derive(Serialize)]
@@ -827,6 +926,8 @@ struct BatchJobSpec {
     controller: CaptureController,
     options: CaptureOptions,
     fail_fast: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    orchestration: Option<PipelineOrchestration>,
 }
 
 #[derive(Serialize)]
@@ -842,6 +943,15 @@ struct BatchStopParams {
 
 #[tauri::command]
 pub async fn tt_batch_start(app_handle: AppHandle, request: BatchStartRequest) -> CmdResult<JobSnapshot> {
+    tt_batch_start_for_owner(app_handle, request, None, None).await
+}
+
+async fn tt_batch_start_for_owner(
+    app_handle: AppHandle,
+    request: BatchStartRequest,
+    pipeline_owner: Option<&str>,
+    orchestration: Option<PipelineOrchestration>,
+) -> CmdResult<JobSnapshot> {
     if request.targets.is_empty() {
         return Err("batch targets must not be empty".into());
     }
@@ -903,10 +1013,18 @@ pub async fn tt_batch_start(app_handle: AppHandle, request: BatchStartRequest) -
         .unwrap_or_default();
     let job_id = new_job_id()?;
     let lock = CaptureLock::global();
-    lock.acquire(job_id.clone(), "TrafficTracer batch capture is active")
-        .stringify_err()?;
+    match pipeline_owner {
+        Some(owner) => lock
+            .ensure_owned("pipeline", owner, "starting a pipeline batch")
+            .stringify_err()?,
+        None => lock
+            .acquire(job_id.clone(), "TrafficTracer batch capture is active")
+            .stringify_err()?,
+    }
     if let Err(error) = manager.mark_busy(&job_id) {
-        let _ = lock.release(&job_id);
+        if pipeline_owner.is_none() {
+            let _ = lock.release(&job_id);
+        }
         return Err(error.to_string().into());
     }
     let result = client
@@ -932,28 +1050,34 @@ pub async fn tt_batch_start(app_handle: AppHandle, request: BatchStartRequest) -
                     },
                     options: request.options,
                     fail_fast: request.fail_fast,
+                    orchestration,
                 },
             },
         )
         .await;
-    finish_batch_request(result, &job_id, manager)
+    finish_batch_request(result, &job_id, manager, pipeline_owner.is_none())
 }
 
 fn finish_batch_request(
     result: Result<JobSnapshot, crate::core::traffic_tracer::client::ClientError>,
     job_id: &str,
     manager: &WorkerManager,
+    release_capture_lock: bool,
 ) -> CmdResult<JobSnapshot> {
     match result {
         Ok(snapshot) => {
             if snapshot.state.terminal() {
-                let _ = CaptureLock::global().release(job_id);
+                if release_capture_lock {
+                    let _ = CaptureLock::global().release(job_id);
+                }
                 let _ = manager.mark_ready(job_id);
             }
             Ok(snapshot)
         }
         Err(error) => {
-            let _ = CaptureLock::global().release(job_id);
+            if release_capture_lock {
+                let _ = CaptureLock::global().release(job_id);
+            }
             let _ = manager.mark_ready(job_id);
             Err(error.to_string().into())
         }
@@ -974,6 +1098,729 @@ fn validate_batch_selection(preview: &TargetConfigPreview, request: &BatchStartR
         }
     }
     Ok(())
+}
+
+fn pipeline_default_continue() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PipelineStartRequest {
+    pub batch: BatchStartRequest,
+    pub candidates: Vec<PipelineCandidate>,
+    #[serde(default = "pipeline_default_continue")]
+    pub continue_on_run_failure: bool,
+}
+
+fn pipeline_execution_snapshot(batch: &BatchStartRequest) -> Value {
+    serde_json::json!({ "tun_interface": batch.tun_interface, "physical_interface": batch.physical_interface, "chrome_binary": batch.chrome_binary, "options": batch.options, "fail_fast": batch.fail_fast })
+}
+
+fn pipeline_target(target: &TargetConfigEntry) -> PipelineTarget {
+    PipelineTarget {
+        index: target.index,
+        url: target.url.clone(),
+        domain: target.domain.clone(),
+        duration_seconds: u64::from(target.duration_seconds),
+        network: match target.network {
+            CaptureNetwork::Tcp => "tcp",
+            CaptureNetwork::Udp => "udp",
+            CaptureNetwork::All => "all",
+        }
+        .to_owned(),
+        run_label: target.run_label.clone(),
+        wait_load_timeout: u64::from(target.wait_load_timeout),
+        page_type: target.page_type.clone(),
+        playback: target
+            .playback
+            .as_ref()
+            .and_then(|value| serde_json::to_value(value).ok()),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PipelineExecutionSnapshot {
+    tun_interface: String,
+    physical_interface: String,
+    chrome_binary: String,
+    options: CaptureOptions,
+    fail_fast: bool,
+}
+
+fn pipeline_batch_from_manifest(manifest: &PipelineManifest) -> Result<BatchStartRequest, String> {
+    let execution: PipelineExecutionSnapshot = serde_json::from_value(manifest.execution.clone())
+        .map_err(|error| format!("PIPELINE_EXECUTION_INVALID: {error}"))?;
+    let targets = manifest
+        .targets
+        .iter()
+        .map(|target| {
+            let network = match target.network.as_str() {
+                "tcp" => CaptureNetwork::Tcp,
+                "udp" => CaptureNetwork::Udp,
+                "all" => CaptureNetwork::All,
+                value => return Err(format!("PIPELINE_TARGET_INVALID: unknown network {value}")),
+            };
+            let playback = target
+                .playback
+                .clone()
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|error| format!("PIPELINE_TARGET_INVALID: {error}"))?;
+            Ok(TargetConfigEntry {
+                index: target.index,
+                domain: target.domain.clone(),
+                url: target.url.clone(),
+                duration_seconds: target
+                    .duration_seconds
+                    .try_into()
+                    .map_err(|_| "PIPELINE_TARGET_INVALID: duration_seconds is too large".to_owned())?,
+                network,
+                run_label: target.run_label.clone(),
+                wait_load_timeout: target
+                    .wait_load_timeout
+                    .try_into()
+                    .map_err(|_| "PIPELINE_TARGET_INVALID: wait_load_timeout is too large".to_owned())?,
+                page_type: target.page_type.clone(),
+                playback,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(BatchStartRequest {
+        config_path: manifest.config.path.to_string_lossy().into_owned(),
+        config_sha256: manifest.config.sha256.clone(),
+        targets,
+        tun_interface: execution.tun_interface,
+        physical_interface: execution.physical_interface,
+        output_root: manifest.output_root.to_string_lossy().into_owned(),
+        chrome_binary: execution.chrome_binary,
+        options: execution.options,
+        fail_fast: execution.fail_fast,
+    })
+}
+
+fn observed_run_protocol(output_path: &Path) -> String {
+    fn scan(path: &Path, depth: usize, protocols: &mut std::collections::BTreeSet<String>) {
+        if depth > 8 {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(path) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan(&path, depth + 1, protocols);
+                continue;
+            }
+            if path.file_name().and_then(|name| name.to_str()) != Some("capture-context.json") {
+                continue;
+            }
+            let Ok(value) = fs::read(&path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .ok_or(())
+            else {
+                continue;
+            };
+            if let Some(items) = value
+                .pointer("/proxy_protocol/runtime_observation/protocols")
+                .and_then(Value::as_array)
+            {
+                protocols.extend(items.iter().filter_map(Value::as_str).map(str::to_owned));
+            }
+        }
+    }
+    let mut protocols = std::collections::BTreeSet::new();
+    scan(output_path, 0, &mut protocols);
+    match protocols.len() {
+        0 => String::new(),
+        1 => protocols.into_iter().next().unwrap_or_default(),
+        _ => "mixed".to_owned(),
+    }
+}
+
+fn effective_runtime_fingerprint() -> CmdResult<String> {
+    let path = crate::utils::dirs::app_home_dir()
+        .stringify_err()?
+        .join(crate::constants::files::RUNTIME_CONFIG);
+    Ok(format!("{:x}", Sha256::digest(fs::read(path).stringify_err()?)))
+}
+
+fn pipeline_directory(workspace_root: &str, pipeline_id: &str) -> CmdResult<PathBuf> {
+    let root = PathBuf::from(workspace_root);
+    if !root.is_absolute() {
+        return Err("pipeline output_root must be absolute".into());
+    }
+    let prefix = Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
+    Ok(root.join(format!(
+        "{prefix}__pipeline-{}",
+        &pipeline_id[..12.min(pipeline_id.len())]
+    )))
+}
+
+fn launch_pipeline_supervisor(
+    app_handle: AppHandle,
+    manifest_path: PathBuf,
+    pipeline_id: String,
+    batch: BatchStartRequest,
+) {
+    let interrupt = Arc::new(AtomicBool::new(false));
+    let cancel = Arc::new(AtomicBool::new(false));
+    *pipeline_runtime().active.lock() = Some(ActivePipeline {
+        pipeline_id: pipeline_id.clone(),
+        manifest_path: manifest_path.clone(),
+        interrupt: Arc::clone(&interrupt),
+        cancel: Arc::clone(&cancel),
+    });
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = run_pipeline(app_handle, manifest_path.clone(), batch, interrupt, cancel).await {
+            logging!(error, Type::System, "TrafficTracer pipeline supervisor failed: {error}");
+            if let Ok(mut failed) = PipelineManifest::load(&manifest_path) {
+                if failed.current_run_index.is_some() {
+                    let _ = failed.finish_run(
+                        PipelineRunState::Failed,
+                        Some(PipelineError {
+                            code: "PIPELINE_SUPERVISOR_FAILED".into(),
+                            message: error,
+                        }),
+                    );
+                }
+                failed.state = PipelineState::Failed;
+                failed.stage = PipelineStage::Finished;
+                failed.updated_at = Utc::now();
+                let _ = failed.persist();
+                restore_pipeline(&mut failed, &pipeline_id).await;
+            }
+        }
+        let _ = CaptureLock::global().release(&pipeline_id);
+        let mut active = pipeline_runtime().active.lock();
+        if active.as_ref().is_some_and(|item| item.pipeline_id == pipeline_id) {
+            *active = None;
+        }
+    });
+}
+
+#[tauri::command]
+pub async fn tt_pipeline_start(
+    app_handle: AppHandle,
+    mut request: PipelineStartRequest,
+) -> CmdResult<PipelineManifest> {
+    if request.candidates.is_empty() {
+        return Err("pipeline candidates must not be empty".into());
+    }
+    let preview = tt_target_config_load(request.batch.config_path.clone()).await?;
+    validate_batch_selection(&preview, &request.batch)?;
+    let selected = request
+        .batch
+        .targets
+        .iter()
+        .map(|target| target.index)
+        .collect::<std::collections::HashSet<_>>();
+    request.batch.targets = preview
+        .targets
+        .iter()
+        .filter(|target| selected.contains(&target.index))
+        .cloned()
+        .collect();
+
+    let pipeline_id = new_job_id()?;
+    let output_root = pipeline_directory(&request.batch.output_root, &pipeline_id)?;
+    let original_profile = Config::profiles().await.latest_arc().current.clone();
+    let proxies = handle::Handle::mihomo()
+        .await
+        .get_proxies()
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut restore_groups = std::collections::HashSet::new();
+    let restore_selections = request
+        .candidates
+        .iter()
+        .filter(|candidate| original_profile.as_deref() == Some(candidate.profile_uid.as_str()))
+        .filter_map(|candidate| {
+            let group = proxies.proxies.get(candidate.selection_group.as_str())?;
+            if !restore_groups.insert(candidate.selection_group.clone()) {
+                return None;
+            }
+            Some(PipelineSelection {
+                group: candidate.selection_group.clone(),
+                node: group.now.clone()?,
+            })
+        })
+        .collect();
+    let candidates = request
+        .candidates
+        .iter()
+        .cloned()
+        .map(|candidate| new_job_id().map(|run_id| (run_id, candidate)))
+        .collect::<CmdResult<Vec<_>>>()?;
+    let manifest = PipelineManifest::create(
+        pipeline_id.clone(),
+        output_root,
+        PipelineConfigSnapshot {
+            path: PathBuf::from(&request.batch.config_path),
+            sha256: request.batch.config_sha256.clone(),
+        },
+        request.batch.targets.iter().map(pipeline_target).collect(),
+        pipeline_execution_snapshot(&request.batch),
+        candidates,
+        PipelinePolicy {
+            continue_on_run_failure: request.continue_on_run_failure,
+            restore_original_state: true,
+        },
+        PipelineRestore {
+            profile_uid: original_profile.map(Into::into),
+            selections: restore_selections,
+            state: RestoreState::Pending,
+            error: None,
+        },
+    )
+    .stringify_err()?;
+
+    CaptureLock::global()
+        .acquire_owned(
+            "pipeline",
+            pipeline_id.clone(),
+            "TrafficTracer profile and proxy pipeline is active",
+        )
+        .stringify_err()?;
+    if let Err(error) = manifest.persist() {
+        let _ = CaptureLock::global().release(&pipeline_id);
+        return Err(error.to_string().into());
+    }
+    let manifest_path = manifest.output_root.join(PIPELINE_MANIFEST_NAME);
+    launch_pipeline_supervisor(app_handle, manifest_path, pipeline_id, request.batch);
+    Ok(manifest)
+}
+
+fn pipeline_checkpoint(manifest: &mut PipelineManifest, stage: PipelineStage) -> Result<(), String> {
+    manifest.checkpoint_run(stage).map_err(|error| error.to_string())?;
+    manifest.persist().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+async fn execute_pipeline_run(
+    app_handle: &AppHandle,
+    pipeline_id: &str,
+    manifest: &mut PipelineManifest,
+    index: usize,
+    batch_template: &BatchStartRequest,
+    interrupt: &AtomicBool,
+    cancel: &AtomicBool,
+) -> Result<PipelineRunState, String> {
+    let run = manifest.runs[index].clone();
+    pipeline_checkpoint(manifest, PipelineStage::ActivatingProfile)?;
+    if Config::profiles().await.latest_arc().current.as_deref() != Some(run.profile_uid.as_str()) {
+        let outcome = super::profile::patch_profiles_config_for_owner(
+            IProfiles {
+                current: Some(run.profile_uid.clone().into()),
+                items: None,
+            },
+            Some(pipeline_id),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        if !outcome.is_valid() {
+            return Err(format!("PROFILE_ACTIVATION_FAILED: {outcome}"));
+        }
+    }
+    pipeline_checkpoint(manifest, PipelineStage::WaitingController)?;
+    if effective_runtime_fingerprint().map_err(|error| error.to_string())? != run.profile_fingerprint {
+        return Err("PROFILE_FINGERPRINT_MISMATCH: effective runtime changed after the candidate was queued".into());
+    }
+
+    pipeline_checkpoint(manifest, PipelineStage::SelectingProxy)?;
+    let proxies = handle::Handle::mihomo()
+        .await
+        .get_proxies()
+        .await
+        .map_err(|error| error.to_string())?;
+    let group = proxies
+        .proxies
+        .get(run.selection_group.as_str())
+        .ok_or_else(|| "SELECTOR_NOT_FOUND: selector is absent from the active runtime".to_owned())?;
+    if !group
+        .all
+        .as_ref()
+        .is_some_and(|nodes| nodes.iter().any(|node| node.as_str() == run.requested_node))
+    {
+        return Err("NODE_NOT_SELECTABLE: requested node is absent from selector".into());
+    }
+    handle::Handle::mihomo()
+        .await
+        .select_node_for_group(&run.selection_group, &run.requested_node)
+        .await
+        .map_err(|error| error.to_string())?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let readback = handle::Handle::mihomo()
+        .await
+        .get_proxies()
+        .await
+        .map_err(|error| error.to_string())?;
+    if readback
+        .proxies
+        .get(run.selection_group.as_str())
+        .and_then(|group| group.now.as_deref())
+        != Some(run.requested_node.as_str())
+    {
+        return Err("NODE_READBACK_MISMATCH: Mihomo did not retain the requested selection".into());
+    }
+    let mut resolved_chain = vec![run.requested_node.clone()];
+    let mut resolved_leaf = run.requested_node.clone();
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        if !seen.insert(resolved_leaf.clone()) {
+            return Err("PROXY_CHAIN_CYCLE: selected proxy chain contains a cycle".into());
+        }
+        let proxy = readback
+            .proxies
+            .get(resolved_leaf.as_str())
+            .ok_or_else(|| "PROXY_LEAF_NOT_FOUND: selected node is absent from the active runtime".to_owned())?;
+        let Some(next) = proxy.now.as_ref() else {
+            let value = serde_json::to_value(proxy).map_err(|error| error.to_string())?;
+            manifest.runs[index].expected_protocol = value
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_ascii_lowercase();
+            break;
+        };
+        resolved_leaf = next.clone();
+        resolved_chain.push(resolved_leaf.clone());
+        if resolved_chain.len() > 16 {
+            return Err("PROXY_CHAIN_TOO_DEEP: selected proxy chain exceeds 16 hops".into());
+        }
+    }
+    manifest.runs[index].resolved_chain = resolved_chain;
+    manifest.runs[index].resolved_leaf = Some(resolved_leaf);
+
+    pipeline_checkpoint(manifest, PipelineStage::DrainingConnections)?;
+    handle::Handle::mihomo()
+        .await
+        .close_all_connections()
+        .await
+        .map_err(|error| error.to_string())?;
+    tokio::time::sleep(Duration::from_millis(750)).await;
+    if interrupt.load(Ordering::Acquire) {
+        return Ok(PipelineRunState::Interrupted);
+    }
+    if cancel.load(Ordering::Acquire) {
+        return Ok(PipelineRunState::Cancelled);
+    }
+
+    pipeline_checkpoint(manifest, PipelineStage::Preflight)?;
+    let mut batch = batch_template.clone();
+    batch.output_root = run.output_path.to_string_lossy().into_owned();
+    batch.options.proxy_selection_group = run.selection_group.clone();
+    batch.options.expected_proxy_protocol.clear();
+    let snapshot = if let Some(batch_id) = run.batch_id {
+        tt_batch_resume_for_owner(batch_id, Some(pipeline_id)).await
+    } else {
+        tt_batch_start_for_owner(
+            app_handle.clone(),
+            batch,
+            Some(pipeline_id),
+            Some(PipelineOrchestration {
+                pipeline_id: pipeline_id.to_owned(),
+                run_id: run.run_id.clone(),
+                run_ordinal: run.ordinal,
+                profile_uid: run.profile_uid.clone(),
+                selection_group: run.selection_group.clone(),
+                requested_node: run.requested_node.clone(),
+            }),
+        )
+        .await
+    }
+    .map_err(|error| error.to_string())?;
+    manifest.runs[index].batch_id = Some(snapshot.job_id.clone());
+    pipeline_checkpoint(manifest, PipelineStage::RunningBatch)?;
+    let batch_id = snapshot.job_id;
+    let mut stop_requested = false;
+    loop {
+        if !stop_requested && cancel.load(Ordering::Acquire) {
+            let _ = tt_batch_cancel(batch_id.clone(), Some("Pipeline cancelled by user".into())).await;
+            stop_requested = true;
+        } else if !stop_requested && interrupt.load(Ordering::Acquire) {
+            let _ = tt_batch_interrupt(batch_id.clone(), Some("Pipeline interrupted by user".into())).await;
+            stop_requested = true;
+        }
+        let status = tt_batch_status(batch_id.clone()).await?;
+        if let Some(state) = status
+            .pointer("/batch/state")
+            .and_then(Value::as_str)
+            .filter(|state| terminal_batch_state(state))
+        {
+            manifest.runs[index].observed_protocol = observed_run_protocol(&run.output_path);
+            return Ok(match state {
+                "completed" => PipelineRunState::Completed,
+                "cancelled" => PipelineRunState::Cancelled,
+                "interrupted" => PipelineRunState::Interrupted,
+                _ => PipelineRunState::Failed,
+            });
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+async fn restore_pipeline(manifest: &mut PipelineManifest, pipeline_id: &str) {
+    let terminal_state = manifest.state;
+    manifest.state = PipelineState::Restoring;
+    manifest.stage = PipelineStage::Restoring;
+    manifest.restore.state = RestoreState::Restoring;
+    manifest.updated_at = Utc::now();
+    let _ = manifest.persist();
+    let result: Result<(), String> = async {
+        if let Some(profile_uid) = manifest.restore.profile_uid.clone()
+            && Config::profiles().await.latest_arc().current.as_deref() != Some(profile_uid.as_str())
+        {
+            let outcome = super::profile::patch_profiles_config_for_owner(
+                IProfiles {
+                    current: Some(profile_uid.into()),
+                    items: None,
+                },
+                Some(pipeline_id),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            if !outcome.is_valid() {
+                return Err(format!("original Profile restore failed: {outcome}"));
+            }
+        }
+        for selection in &manifest.restore.selections {
+            handle::Handle::mihomo()
+                .await
+                .select_node_for_group(&selection.group, &selection.node)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+    .await;
+    match result {
+        Ok(()) => {
+            manifest.restore.state = RestoreState::Restored;
+            manifest.state = terminal_state;
+            manifest.stage = PipelineStage::Finished;
+        }
+        Err(message) => {
+            manifest.restore.state = RestoreState::Failed;
+            manifest.restore.error = Some(PipelineError {
+                code: "RESTORE_FAILED".into(),
+                message,
+            });
+            manifest.state = PipelineState::RestoreFailed;
+        }
+    }
+    manifest.updated_at = Utc::now();
+    let _ = manifest.persist();
+}
+
+async fn run_pipeline(
+    app_handle: AppHandle,
+    manifest_path: PathBuf,
+    batch: BatchStartRequest,
+    interrupt: Arc<AtomicBool>,
+    cancel: Arc<AtomicBool>,
+) -> Result<(), String> {
+    let mut manifest = PipelineManifest::load(&manifest_path).map_err(|error| error.to_string())?;
+    let pipeline_id = manifest.pipeline_id.clone();
+    loop {
+        if cancel.load(Ordering::Acquire) || interrupt.load(Ordering::Acquire) {
+            manifest.state = if cancel.load(Ordering::Acquire) {
+                PipelineState::Cancelled
+            } else {
+                PipelineState::Interrupted
+            };
+            manifest.stage = PipelineStage::Finished;
+            manifest.updated_at = Utc::now();
+            manifest.persist().map_err(|error| error.to_string())?;
+            break;
+        }
+        let Some(index) = manifest.begin_next_run().map_err(|error| error.to_string())? else {
+            break;
+        };
+        manifest.persist().map_err(|error| error.to_string())?;
+        match execute_pipeline_run(
+            &app_handle,
+            &pipeline_id,
+            &mut manifest,
+            index,
+            &batch,
+            &interrupt,
+            &cancel,
+        )
+        .await
+        {
+            Ok(PipelineRunState::Interrupted) => {
+                manifest
+                    .finish_run(PipelineRunState::Interrupted, None)
+                    .map_err(|error| error.to_string())?;
+                manifest.state = PipelineState::Interrupted;
+            }
+            Ok(PipelineRunState::Cancelled) => {
+                manifest
+                    .finish_run(PipelineRunState::Cancelled, None)
+                    .map_err(|error| error.to_string())?;
+                manifest.state = PipelineState::Cancelled;
+            }
+            Ok(state) => {
+                manifest.finish_run(state, None).map_err(|error| error.to_string())?;
+            }
+            Err(message) => {
+                manifest
+                    .finish_run(
+                        PipelineRunState::Failed,
+                        Some(PipelineError {
+                            code: "PIPELINE_RUN_FAILED".into(),
+                            message,
+                        }),
+                    )
+                    .map_err(|error| error.to_string())?;
+                if !manifest.policy.continue_on_run_failure {
+                    manifest.state = PipelineState::Failed;
+                }
+            }
+        }
+        manifest.persist().map_err(|error| error.to_string())?;
+        if matches!(
+            manifest.state,
+            PipelineState::Interrupted | PipelineState::Cancelled | PipelineState::Failed
+        ) {
+            break;
+        }
+    }
+    if manifest.state == PipelineState::Running {
+        let _ = manifest.begin_next_run().map_err(|error| error.to_string())?;
+    }
+    restore_pipeline(&mut manifest, &pipeline_id).await;
+    Ok(())
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PipelineListEntry {
+    pub pipeline_id: String,
+    pub output_root: PathBuf,
+    pub state: PipelineState,
+    pub updated_at: DateTime<Utc>,
+    pub completed_runs: usize,
+    pub total_runs: usize,
+}
+
+fn active_pipeline_matches(pipeline_id: &str) -> bool {
+    pipeline_runtime()
+        .active
+        .lock()
+        .as_ref()
+        .is_some_and(|active| active.pipeline_id == pipeline_id)
+}
+
+#[tauri::command]
+pub fn tt_pipeline_status(pipeline_root: String) -> CmdResult<PipelineManifest> {
+    let root = PathBuf::from(pipeline_root);
+    if !root.is_absolute() {
+        return Err("pipeline_root must be absolute".into());
+    }
+    let path = root.join(PIPELINE_MANIFEST_NAME);
+    let mut manifest = PipelineManifest::load(&path).stringify_err()?;
+    if !active_pipeline_matches(&manifest.pipeline_id) && manifest.recover_interrupted_supervisor().stringify_err()? {
+        manifest.persist().stringify_err()?;
+    }
+    Ok(manifest)
+}
+
+#[tauri::command]
+pub fn tt_pipeline_list(output_root: String) -> CmdResult<Vec<PipelineListEntry>> {
+    let root = PathBuf::from(output_root);
+    if !root.is_absolute() {
+        return Err("output_root must be absolute".into());
+    }
+    let mut pipelines = Vec::new();
+    for entry in fs::read_dir(&root).stringify_err()? {
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let path = entry.path().join(PIPELINE_MANIFEST_NAME);
+        let Ok(manifest) = PipelineManifest::load(path) else {
+            continue;
+        };
+        pipelines.push(PipelineListEntry {
+            pipeline_id: manifest.pipeline_id,
+            output_root: manifest.output_root,
+            state: manifest.state,
+            updated_at: manifest.updated_at,
+            completed_runs: manifest.runs.iter().filter(|run| run.state.terminal()).count(),
+            total_runs: manifest.runs.len(),
+        });
+    }
+    pipelines.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    Ok(pipelines)
+}
+
+#[tauri::command]
+pub async fn tt_pipeline_resume(app_handle: AppHandle, pipeline_root: String) -> CmdResult<PipelineManifest> {
+    let root = PathBuf::from(pipeline_root);
+    if !root.is_absolute() {
+        return Err("pipeline_root must be absolute".into());
+    }
+    let manifest_path = root.join(PIPELINE_MANIFEST_NAME);
+    let mut manifest = PipelineManifest::load(&manifest_path).stringify_err()?;
+    if manifest.state != PipelineState::Interrupted {
+        return Err("only an interrupted TrafficTracer pipeline can be resumed".into());
+    }
+    let current_sha = format!("{:x}", Sha256::digest(fs::read(&manifest.config.path).stringify_err()?));
+    if current_sha != manifest.config.sha256 {
+        return Err("PIPELINE_CONFIG_CHANGED: restore the frozen sites configuration before resume".into());
+    }
+    let batch = pipeline_batch_from_manifest(&manifest).map_err(smartstring::alias::String::from)?;
+    let pipeline_id = manifest.pipeline_id.clone();
+    CaptureLock::global()
+        .acquire_owned(
+            "pipeline",
+            pipeline_id.clone(),
+            "TrafficTracer profile and proxy pipeline is active",
+        )
+        .stringify_err()?;
+    manifest.restore.state = RestoreState::Pending;
+    manifest.restore.error = None;
+    manifest.updated_at = Utc::now();
+    if let Err(error) = manifest.persist() {
+        let _ = CaptureLock::global().release(&pipeline_id);
+        return Err(error.to_string().into());
+    }
+    launch_pipeline_supervisor(app_handle, manifest_path, pipeline_id, batch);
+    Ok(manifest)
+}
+
+#[tauri::command]
+pub async fn tt_pipeline_interrupt(pipeline_id: String) -> CmdResult<PipelineManifest> {
+    let (manifest_path, interrupt) = {
+        let active = pipeline_runtime().active.lock();
+        let item = active
+            .as_ref()
+            .ok_or_else(|| smartstring::alias::String::from("no active TrafficTracer pipeline"))?;
+        if item.pipeline_id != pipeline_id {
+            return Err("requested pipeline is not active".into());
+        }
+        (item.manifest_path.clone(), Arc::clone(&item.interrupt))
+    };
+    interrupt.store(true, Ordering::Release);
+    PipelineManifest::load(manifest_path).stringify_err()
+}
+
+#[tauri::command]
+pub async fn tt_pipeline_cancel(pipeline_id: String) -> CmdResult<PipelineManifest> {
+    let (manifest_path, cancel) = {
+        let active = pipeline_runtime().active.lock();
+        let item = active
+            .as_ref()
+            .ok_or_else(|| smartstring::alias::String::from("no active TrafficTracer pipeline"))?;
+        if item.pipeline_id != pipeline_id {
+            return Err("requested pipeline is not active".into());
+        }
+        (item.manifest_path.clone(), Arc::clone(&item.cancel))
+    };
+    cancel.store(true, Ordering::Release);
+    PipelineManifest::load(manifest_path).stringify_err()
 }
 
 #[tauri::command]
@@ -1066,13 +1913,25 @@ pub async fn tt_batch_cancel(batch_id: String, reason: Option<String>) -> CmdRes
 
 #[tauri::command]
 pub async fn tt_batch_resume(batch_id: String) -> CmdResult<JobSnapshot> {
+    tt_batch_resume_for_owner(batch_id, None).await
+}
+
+async fn tt_batch_resume_for_owner(batch_id: String, pipeline_owner: Option<&str>) -> CmdResult<JobSnapshot> {
     validate_job_id(&batch_id)?;
     let manager = WorkerManager::global();
     let lock = CaptureLock::global();
-    lock.acquire(batch_id.clone(), "TrafficTracer batch capture is active")
-        .stringify_err()?;
+    match pipeline_owner {
+        Some(owner) => lock
+            .ensure_owned("pipeline", owner, "resuming a pipeline batch")
+            .stringify_err()?,
+        None => lock
+            .acquire(batch_id.clone(), "TrafficTracer batch capture is active")
+            .stringify_err()?,
+    }
     if let Err(error) = manager.mark_busy(&batch_id) {
-        let _ = lock.release(&batch_id);
+        if pipeline_owner.is_none() {
+            let _ = lock.release(&batch_id);
+        }
         return Err(error.to_string().into());
     }
     let result = manager
@@ -1085,7 +1944,7 @@ pub async fn tt_batch_resume(batch_id: String) -> CmdResult<JobSnapshot> {
             },
         )
         .await;
-    finish_batch_request(result, &batch_id, manager)
+    finish_batch_request(result, &batch_id, manager, pipeline_owner.is_none())
 }
 
 fn validate_capture_request(request: &CaptureStartRequest) -> CmdResult {
@@ -2431,6 +3290,7 @@ mod capture_tests {
             },
             options: CaptureOptions::default(),
             fail_fast: true,
+            orchestration: None,
         })
         .unwrap();
 

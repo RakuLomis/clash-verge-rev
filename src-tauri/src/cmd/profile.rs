@@ -296,9 +296,22 @@ async fn perform_config_update(
 /// 修改profiles的配置
 #[tauri::command]
 pub async fn patch_profiles_config(profiles: IProfiles) -> CmdResult<ValidationOutcome> {
-    CaptureLock::global()
-        .ensure_unlocked("switching the active profile")
-        .stringify_err()?;
+    patch_profiles_config_for_owner(profiles, None).await
+}
+
+pub(crate) async fn patch_profiles_config_for_owner(
+    profiles: IProfiles,
+    pipeline_owner: Option<&str>,
+) -> CmdResult<ValidationOutcome> {
+    let capture_lock = CaptureLock::global();
+    match pipeline_owner {
+        Some(owner) => capture_lock
+            .ensure_owned("pipeline", owner, "switching the active profile")
+            .stringify_err()?,
+        None => capture_lock
+            .ensure_unlocked("switching the active profile")
+            .stringify_err()?,
+    }
     if CURRENT_SWITCHING_PROFILE
         .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
         .is_err()
