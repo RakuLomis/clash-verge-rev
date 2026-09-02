@@ -22,6 +22,7 @@ import { TrafficTracerPipelineQueue } from '@/components/traffic-tracer/pipeline
 import {
   PIPELINE_MODE_STORAGE_KEY,
   restoredPipelineCandidates,
+  restoredPipelineRepetitions,
 } from '@/components/traffic-tracer/pipeline-queue-storage'
 import { TrafficTracerSessionsView } from '@/components/traffic-tracer/sessions-view'
 import { useCaptureJob } from '@/hooks/use-capture-job'
@@ -138,6 +139,10 @@ const TrafficTracerPage = () => {
   const [pipelineCandidates, setPipelineCandidates] = useState<
     PipelineCandidate[]
   >(restoredPipelineCandidates)
+  const [pipelineRepetitions, setPipelineRepetitions] = useState(
+    restoredPipelineRepetitions,
+  )
+  const [pipelineTargetCount, setPipelineTargetCount] = useState(0)
   const [pipeline, setPipeline] = useState<PipelineManifest | null>(null)
   const [pipelineNow, setPipelineNow] = useState(() => Date.now())
   const [pipelineBatchStatus, setPipelineBatchStatus] =
@@ -160,6 +165,7 @@ const TrafficTracerPage = () => {
   )
   const pipelineTerminal = new Set([
     'completed',
+    'completed_with_degraded',
     'completed_with_errors',
     'failed',
     'cancelled',
@@ -334,6 +340,7 @@ const TrafficTracerPage = () => {
       const started = await startTrafficTracerPipeline({
         batch,
         candidates: pipelineCandidates,
+        repetitions_per_candidate: pipelineRepetitions,
         continue_on_run_failure: true,
       })
       const locator = {
@@ -570,7 +577,9 @@ const TrafficTracerPage = () => {
               {pipelineHistory.map((item) => (
                 <MenuItem key={item.pipeline_id} value={item.output_root}>
                   {new Date(item.updated_at).toLocaleString()} · {item.state} ·{' '}
-                  {item.completed_runs}/{item.total_runs}
+                  {item.completed_runs}/{item.total_runs} ·{' '}
+                  {item.candidate_count} nodes ×{' '}
+                  {item.repetitions_per_candidate}
                 </MenuItem>
               ))}
             </TextField>
@@ -581,7 +590,8 @@ const TrafficTracerPage = () => {
             severity={
               pipeline.state === 'failed' || pipeline.state === 'restore_failed'
                 ? 'error'
-                : pipeline.state === 'completed_with_errors'
+                : pipeline.state === 'completed_with_errors' ||
+                    pipeline.state === 'completed_with_degraded'
                   ? 'warning'
                   : 'info'
             }
@@ -598,6 +608,14 @@ const TrafficTracerPage = () => {
             </Box>
             {displayedPipelineRun && (
               <Stack spacing={0.5} sx={{ mt: 0.75 }}>
+                <Box sx={{ opacity: 0.8 }}>
+                  Candidate {displayedPipelineRun.candidate_ordinal}/
+                  {Math.max(
+                    ...pipeline.runs.map((run) => run.candidate_ordinal),
+                  )}{' '}
+                  · repetition {displayedPipelineRun.repetition_index}/
+                  {displayedPipelineRun.repetition_total}
+                </Box>
                 <Box sx={{ opacity: 0.8 }}>
                   {displayedPipelineRun.profile_uid} ·{' '}
                   {displayedPipelineRun.selection_group} ·{' '}
@@ -828,8 +846,11 @@ const TrafficTracerPage = () => {
         <TrafficTracerPipelineQueue
           enabled={pipelineEnabled}
           candidates={pipelineCandidates}
+          repetitions={pipelineRepetitions}
+          targetCount={pipelineTargetCount}
           disabled={Boolean(captureLock?.locked)}
           onEnabledChange={setPipelineEnabled}
+          onRepetitionsChange={setPipelineRepetitions}
           onChange={setPipelineCandidates}
         />
         <TrafficTracerCaptureForm
@@ -849,6 +870,8 @@ const TrafficTracerPage = () => {
           onSubmitBatch={handleStartBatch}
           pipelineEnabled={pipelineEnabled}
           pipelineCandidateCount={pipelineCandidates.length}
+          pipelineRepetitions={pipelineRepetitions}
+          onSelectedTargetCountChange={setPipelineTargetCount}
           onSubmitPipeline={handleStartPipeline}
         />
         <Box sx={{ mt: 2 }}>

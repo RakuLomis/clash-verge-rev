@@ -2,6 +2,18 @@ import type { PipelineCandidate } from '@/types/traffic-tracer'
 
 export const PIPELINE_QUEUE_STORAGE_KEY = 'traffictracer.pipelineQueue.v1'
 export const PIPELINE_MODE_STORAGE_KEY = 'traffictracer.pipelineMode.v1'
+export const PIPELINE_REPETITIONS_STORAGE_KEY =
+  'traffictracer.pipelineRepetitions.v1'
+export const PIPELINE_MAX_REPETITIONS = 20
+
+export function restoredPipelineRepetitions(): number {
+  const value = Number(localStorage.getItem(PIPELINE_REPETITIONS_STORAGE_KEY))
+  return Number.isInteger(value) &&
+    value >= 1 &&
+    value <= PIPELINE_MAX_REPETITIONS
+    ? value
+    : 1
+}
 
 export function restoredPipelineCandidates(): PipelineCandidate[] {
   try {

@@ -97,6 +97,8 @@ export interface TrafficTracerCaptureFormProps {
   onSubmitBatch?: (request: BatchStartRequest) => Promise<unknown> | void
   pipelineEnabled?: boolean
   pipelineCandidateCount?: number
+  pipelineRepetitions?: number
+  onSelectedTargetCountChange?: (count: number) => void
   onSubmitPipeline?: (request: BatchStartRequest) => Promise<unknown> | void
 }
 
@@ -130,6 +132,8 @@ export function TrafficTracerCaptureForm({
   onSubmitBatch,
   pipelineEnabled = false,
   pipelineCandidateCount = 0,
+  pipelineRepetitions = 1,
+  onSelectedTargetCountChange,
   onSubmitPipeline,
 }: TrafficTracerCaptureFormProps) {
   const { t } = useTranslation()
@@ -145,6 +149,11 @@ export function TrafficTracerCaptureForm({
   const [selectedTargetIndexes, setSelectedTargetIndexes] = useState<
     Set<number>
   >(() => new Set())
+
+  useEffect(() => {
+    onSelectedTargetCountChange?.(selectedTargetIndexes.size)
+  }, [onSelectedTargetCountChange, selectedTargetIndexes])
+
   const tunRef = useRef<HTMLInputElement>(null)
   const physicalRef = useRef<HTMLInputElement>(null)
   const automaticConfigPathRef = useRef<string | null>(null)
@@ -231,6 +240,7 @@ export function TrafficTracerCaptureForm({
     () => environmentRequestFromDraft(draft),
     [draft],
   )
+
   const diagnosticsCurrent = environmentRequestsEqual(
     diagnosticRequest,
     environmentRequest,
@@ -997,7 +1007,7 @@ export function TrafficTracerCaptureForm({
               onClick={() => void handleSubmit()}
             >
               {pipelineEnabled
-                ? `Start pipeline (${pipelineCandidateCount} nodes)`
+                ? `Start pipeline (${pipelineCandidateCount} nodes × ${pipelineRepetitions})`
                 : t('settings.trafficTracer.common.actions.startCapture')}
             </Button>
           </Stack>

@@ -8,6 +8,7 @@ import {
   IconButton,
   Paper,
   Stack,
+  TextField,
   Typography,
 } from '@mui/material'
 import { useState } from 'react'
@@ -19,23 +20,31 @@ import { showNotice } from '@/services/notice-service'
 import type { PipelineCandidate } from '@/types/traffic-tracer'
 
 import {
+  PIPELINE_MAX_REPETITIONS,
   PIPELINE_MODE_STORAGE_KEY,
   PIPELINE_QUEUE_STORAGE_KEY,
+  PIPELINE_REPETITIONS_STORAGE_KEY,
 } from './pipeline-queue-storage'
 
 interface Props {
   enabled: boolean
   candidates: PipelineCandidate[]
+  repetitions: number
+  targetCount: number
   disabled?: boolean
   onEnabledChange: (enabled: boolean) => void
+  onRepetitionsChange: (repetitions: number) => void
   onChange: (candidates: PipelineCandidate[]) => void
 }
 
 export function TrafficTracerPipelineQueue({
   enabled,
   candidates,
+  repetitions,
+  targetCount,
   disabled = false,
   onEnabledChange,
+  onRepetitionsChange,
   onChange,
 }: Props) {
   const { current } = useProfiles()
@@ -100,6 +109,43 @@ export function TrafficTracerPipelineQueue({
         </Typography>
         {enabled && (
           <>
+            <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
+              <TextField
+                size="small"
+                type="number"
+                label="Repetitions per node"
+                value={repetitions}
+                disabled={disabled}
+                slotProps={{
+                  htmlInput: { min: 1, max: PIPELINE_MAX_REPETITIONS },
+                }}
+                onChange={(event) => {
+                  const value = Number(event.target.value)
+                  if (
+                    !Number.isInteger(value) ||
+                    value < 1 ||
+                    value > PIPELINE_MAX_REPETITIONS
+                  )
+                    return
+                  localStorage.setItem(
+                    PIPELINE_REPETITIONS_STORAGE_KEY,
+                    String(value),
+                  )
+                  onRepetitionsChange(value)
+                }}
+                sx={{ width: 190 }}
+              />
+              <Typography variant="body2" color="text.secondary">
+                {candidates.length * repetitions} batches ·{' '}
+                {candidates.length * repetitions * targetCount} baseline
+                Sessions · strict serial order
+              </Typography>
+            </Stack>
+            <Alert severity="info">
+              Repetitions are independent full sites.yaml samples. A URL-level
+              application retry remains a separate recovery attempt inside one
+              batch.
+            </Alert>
             <Stack
               direction="row"
               spacing={1}

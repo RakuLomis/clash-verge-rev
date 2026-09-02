@@ -8,9 +8,15 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-pub const PIPELINE_SCHEMA_VERSION: u32 = 3;
+pub const PIPELINE_SCHEMA_VERSION: u32 = 4;
 const PIPELINE_MIN_SCHEMA_VERSION: u32 = 1;
 pub const PIPELINE_MANIFEST_NAME: &str = "pipeline-manifest.json";
+pub const PIPELINE_AGGREGATE_NAME: &str = "pipeline-aggregate.json";
+pub const PIPELINE_MAX_REPETITIONS: u16 = 20;
+
+fn default_repetitions() -> u16 {
+    1
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,6 +26,7 @@ pub enum PipelineState {
     Running,
     Interrupted,
     Completed,
+    CompletedWithDegraded,
     CompletedWithErrors,
     Failed,
     Cancelled,
@@ -31,7 +38,12 @@ impl PipelineState {
     pub fn terminal(self) -> bool {
         matches!(
             self,
-            Self::Completed | Self::CompletedWithErrors | Self::Failed | Self::Cancelled | Self::RestoreFailed
+            Self::Completed
+                | Self::CompletedWithDegraded
+                | Self::CompletedWithErrors
+                | Self::Failed
+                | Self::Cancelled
+                | Self::RestoreFailed
         )
     }
 }
@@ -112,6 +124,58 @@ pub struct PipelineRunQuality {
     pub correlation: PipelineQualityPlane,
     pub application: PipelineQualityPlane,
     pub application_issues: Vec<PipelineApplicationIssue>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PipelineAggregateQuality {
+    pub passed: usize,
+    pub degraded: usize,
+    pub failed: usize,
+    pub indeterminate: usize,
+    pub not_applicable: usize,
+}
+
+impl PipelineAggregateQuality {
+    fn add(&mut self, plane: &PipelineQualityPlane) {
+        self.passed += plane.passed;
+        self.degraded += plane.degraded;
+        self.failed += plane.failed;
+        self.indeterminate += plane.indeterminate;
+        self.not_applicable += plane.not_applicable;
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PipelineCandidateAggregate {
+    pub candidate_ordinal: u16,
+    pub profile_uid: String,
+    pub selection_group: String,
+    pub requested_node: String,
+    pub repetitions_planned: u16,
+    pub repetitions_terminal: usize,
+    pub completed: usize,
+    pub degraded: usize,
+    pub failed: usize,
+    pub interrupted: usize,
+    pub cancelled: usize,
+    pub sessions_total: usize,
+    pub capture_integrity: PipelineAggregateQuality,
+    pub correlation: PipelineAggregateQuality,
+    pub application: PipelineAggregateQuality,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PipelineAggregate {
+    pub schema_version: u32,
+    pub pipeline_id: String,
+    pub updated_at: DateTime<Utc>,
+    pub repetitions_per_candidate: u16,
+    pub planned_runs: usize,
+    pub terminal_runs: usize,
+    pub candidates: Vec<PipelineCandidateAggregate>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -266,6 +330,12 @@ pub struct PipelineRestore {
 #[serde(deny_unknown_fields)]
 pub struct PipelineRun {
     pub ordinal: usize,
+    #[serde(default = "default_repetitions")]
+    pub candidate_ordinal: u16,
+    #[serde(default = "default_repetitions")]
+    pub repetition_index: u16,
+    #[serde(default = "default_repetitions")]
+    pub repetition_total: u16,
     pub run_id: String,
     pub profile_uid: String,
     pub profile_fingerprint: String,
@@ -310,6 +380,8 @@ pub struct PipelineManifest {
     pub targets: Vec<PipelineTarget>,
     pub execution: serde_json::Value,
     pub policy: PipelinePolicy,
+    #[serde(default = "default_repetitions")]
+    pub repetitions_per_candidate: u16,
     pub current_run_index: Option<usize>,
     pub runs: Vec<PipelineRun>,
     pub restore: PipelineRestore,
@@ -322,12 +394,16 @@ impl PipelineManifest {
         config: PipelineConfigSnapshot,
         targets: Vec<PipelineTarget>,
         execution: serde_json::Value,
-        candidates: Vec<(String, PipelineCandidate)>,
+        candidates: Vec<(PipelineCandidate, Vec<String>)>,
+        repetitions_per_candidate: u16,
         policy: PipelinePolicy,
         restore: PipelineRestore,
     ) -> Result<Self> {
         if targets.is_empty() || candidates.is_empty() {
             bail!("pipeline requires at least one target and candidate");
+        }
+        if !(1..=PIPELINE_MAX_REPETITIONS).contains(&repetitions_per_candidate) {
+            bail!("pipeline repetitions_per_candidate must be between 1 and {PIPELINE_MAX_REPETITIONS}");
         }
         if !output_root.is_absolute() || !config.path.is_absolute() {
             bail!("pipeline paths must be absolute");
@@ -336,8 +412,8 @@ impl PipelineManifest {
             bail!("pipeline config sha256 must be SHA-256");
         }
         let mut identities = HashSet::new();
-        let mut runs = Vec::with_capacity(candidates.len());
-        for (index, (run_id, candidate)) in candidates.into_iter().enumerate() {
+        let mut runs = Vec::with_capacity(candidates.len() * usize::from(repetitions_per_candidate));
+        for (candidate_index, (candidate, run_ids)) in candidates.into_iter().enumerate() {
             candidate.validate()?;
             let identity = (
                 candidate.profile_uid.clone(),
@@ -347,32 +423,45 @@ impl PipelineManifest {
             if !identities.insert(identity) {
                 bail!("pipeline candidates must be unique by profile, selector and node");
             }
-            runs.push(PipelineRun {
-                ordinal: index + 1,
-                run_id: run_id.clone(),
-                profile_uid: candidate.profile_uid,
-                profile_fingerprint: candidate.profile_fingerprint,
-                selection_group: candidate.selection_group,
-                requested_node: candidate.requested_node,
-                state: PipelineRunState::Pending,
-                stage: PipelineStage::Queued,
-                resolved_chain: Vec::new(),
-                resolved_leaf: None,
-                expected_protocol: String::new(),
-                observed_protocol: String::new(),
-                batch_id: None,
-                output_path: output_root.join("runs").join(format!(
-                    "{:03}_{}",
-                    index + 1,
-                    &run_id[..12.min(run_id.len())]
-                )),
-                error: None,
-                quality: None,
-                evidence: None,
-                resume_attempt: 0,
-                started_at: None,
-                completed_at: None,
-            });
+            if run_ids.len() != usize::from(repetitions_per_candidate) {
+                bail!("pipeline candidate run-id count does not match repetitions_per_candidate");
+            }
+            for (repetition_index, run_id) in run_ids.into_iter().enumerate() {
+                let ordinal = runs.len() + 1;
+                runs.push(PipelineRun {
+                    ordinal,
+                    candidate_ordinal: u16::try_from(candidate_index + 1)
+                        .context("pipeline candidate ordinal overflow")?,
+                    repetition_index: u16::try_from(repetition_index + 1)
+                        .context("pipeline repetition index overflow")?,
+                    repetition_total: repetitions_per_candidate,
+                    run_id: run_id.clone(),
+                    profile_uid: candidate.profile_uid.clone(),
+                    profile_fingerprint: candidate.profile_fingerprint.clone(),
+                    selection_group: candidate.selection_group.clone(),
+                    requested_node: candidate.requested_node.clone(),
+                    state: PipelineRunState::Pending,
+                    stage: PipelineStage::Queued,
+                    resolved_chain: Vec::new(),
+                    resolved_leaf: None,
+                    expected_protocol: String::new(),
+                    observed_protocol: String::new(),
+                    batch_id: None,
+                    output_path: output_root.join("runs").join(format!(
+                        "{:03}_candidate-{:02}_repeat-{:02}_{}",
+                        ordinal,
+                        candidate_index + 1,
+                        repetition_index + 1,
+                        &run_id[..12.min(run_id.len())]
+                    )),
+                    error: None,
+                    quality: None,
+                    evidence: None,
+                    resume_attempt: 0,
+                    started_at: None,
+                    completed_at: None,
+                });
+            }
         }
         let now = Utc::now();
         Ok(Self {
@@ -387,10 +476,67 @@ impl PipelineManifest {
             targets,
             execution,
             policy,
+            repetitions_per_candidate,
             current_run_index: None,
             runs,
             restore,
         })
+    }
+
+    pub fn aggregate(&self) -> PipelineAggregate {
+        let mut candidates = Vec::new();
+        for candidate_ordinal in 1..=self.runs.iter().map(|run| run.candidate_ordinal).max().unwrap_or(0) {
+            let candidate_runs = self
+                .runs
+                .iter()
+                .filter(|run| run.candidate_ordinal == candidate_ordinal)
+                .collect::<Vec<_>>();
+            let Some(first) = candidate_runs.first() else { continue };
+            let mut aggregate = PipelineCandidateAggregate {
+                candidate_ordinal,
+                profile_uid: first.profile_uid.clone(),
+                selection_group: first.selection_group.clone(),
+                requested_node: first.requested_node.clone(),
+                repetitions_planned: self.repetitions_per_candidate,
+                repetitions_terminal: 0,
+                completed: 0,
+                degraded: 0,
+                failed: 0,
+                interrupted: 0,
+                cancelled: 0,
+                sessions_total: 0,
+                capture_integrity: PipelineAggregateQuality::default(),
+                correlation: PipelineAggregateQuality::default(),
+                application: PipelineAggregateQuality::default(),
+            };
+            for run in candidate_runs {
+                aggregate.repetitions_terminal += usize::from(run.state.terminal());
+                match run.state {
+                    PipelineRunState::Completed => aggregate.completed += 1,
+                    PipelineRunState::Degraded => aggregate.degraded += 1,
+                    PipelineRunState::Failed | PipelineRunState::Skipped => aggregate.failed += 1,
+                    PipelineRunState::Interrupted => aggregate.interrupted += 1,
+                    PipelineRunState::Cancelled => aggregate.cancelled += 1,
+                    PipelineRunState::Pending | PipelineRunState::Running => {}
+                }
+                if let Some(quality) = &run.quality {
+                    aggregate.sessions_total += quality.sessions_total;
+                    aggregate.capture_integrity.add(&quality.capture_integrity);
+                    aggregate.correlation.add(&quality.correlation);
+                    aggregate.application.add(&quality.application);
+                }
+            }
+            candidates.push(aggregate);
+        }
+        PipelineAggregate {
+            schema_version: 1,
+            pipeline_id: self.pipeline_id.clone(),
+            updated_at: self.updated_at,
+            repetitions_per_candidate: self.repetitions_per_candidate,
+            planned_runs: self.runs.len(),
+            terminal_runs: self.runs.iter().filter(|run| run.state.terminal()).count(),
+            candidates,
+        }
     }
 
     pub fn persist(&self) -> Result<PathBuf> {
@@ -401,6 +547,14 @@ impl PipelineManifest {
         bytes.push(b'\n');
         fs::write(&temporary, bytes).context("write pipeline manifest checkpoint")?;
         fs::rename(&temporary, &path).context("commit pipeline manifest checkpoint")?;
+
+        let aggregate_path = self.output_root.join(PIPELINE_AGGREGATE_NAME);
+        let aggregate_temporary = self.output_root.join(format!(".{PIPELINE_AGGREGATE_NAME}.tmp"));
+        let mut aggregate_bytes =
+            serde_json::to_vec_pretty(&self.aggregate()).context("serialize pipeline aggregate")?;
+        aggregate_bytes.push(b'\n');
+        fs::write(&aggregate_temporary, aggregate_bytes).context("write pipeline aggregate checkpoint")?;
+        fs::rename(&aggregate_temporary, &aggregate_path).context("commit pipeline aggregate checkpoint")?;
         Ok(path)
     }
 
@@ -409,6 +563,15 @@ impl PipelineManifest {
         let mut manifest: Self = serde_json::from_slice(&data).context("decode pipeline manifest")?;
         if !(PIPELINE_MIN_SCHEMA_VERSION..=PIPELINE_SCHEMA_VERSION).contains(&manifest.schema_version) {
             bail!("unsupported pipeline manifest schema version");
+        }
+        if manifest.schema_version < 4 {
+            manifest.repetitions_per_candidate = 1;
+            for run in &mut manifest.runs {
+                run.candidate_ordinal =
+                    u16::try_from(run.ordinal).context("legacy pipeline candidate ordinal overflow")?;
+                run.repetition_index = 1;
+                run.repetition_total = 1;
+            }
         }
         manifest.schema_version = PIPELINE_SCHEMA_VERSION;
         Ok(manifest)
@@ -451,13 +614,14 @@ impl PipelineManifest {
             .iter()
             .position(|run| matches!(run.state, PipelineRunState::Pending | PipelineRunState::Interrupted))
         else {
-            self.state = if self.runs.iter().any(|run| {
-                matches!(
-                    run.state,
-                    PipelineRunState::Failed | PipelineRunState::Degraded | PipelineRunState::Skipped
-                )
-            }) {
+            self.state = if self
+                .runs
+                .iter()
+                .any(|run| matches!(run.state, PipelineRunState::Failed | PipelineRunState::Skipped))
+            {
                 PipelineState::CompletedWithErrors
+            } else if self.runs.iter().any(|run| run.state == PipelineRunState::Degraded) {
+                PipelineState::CompletedWithDegraded
             } else {
                 PipelineState::Completed
             };
@@ -552,6 +716,7 @@ mod tests {
                 vec![target()],
                 serde_json::json!({"tun_interface":"Meta"}),
                 candidates,
+                1,
                 PipelinePolicy {
                     continue_on_run_failure: true,
                     restore_original_state: true,
@@ -568,8 +733,8 @@ mod tests {
             )
         };
         let manifest = build(vec![
-            ("e107516f-335d-42f5-b9f4-f71c081c41e7".into(), candidate("one")),
-            ("e38c26b7-789c-4aa0-b1bb-e3d5916390af".into(), candidate("two")),
+            (candidate("one"), vec!["e107516f-335d-42f5-b9f4-f71c081c41e7".into()]),
+            (candidate("two"), vec!["e38c26b7-789c-4aa0-b1bb-e3d5916390af".into()]),
         ])
         .unwrap();
         assert_eq!(
@@ -578,11 +743,69 @@ mod tests {
         );
         assert!(
             build(vec![
-                ("e107516f-335d-42f5-b9f4-f71c081c41e7".into(), candidate("same")),
-                ("e38c26b7-789c-4aa0-b1bb-e3d5916390af".into(), candidate("same"))
+                (candidate("same"), vec!["e107516f-335d-42f5-b9f4-f71c081c41e7".into()]),
+                (candidate("same"), vec!["e38c26b7-789c-4aa0-b1bb-e3d5916390af".into()])
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn expands_candidates_in_candidate_major_repetition_order() {
+        let manifest = PipelineManifest::create(
+            "6ea29d49-4f0e-4f9b-8a88-0ad095c50b78".into(),
+            PathBuf::from("/tmp/pipeline"),
+            PipelineConfigSnapshot {
+                path: PathBuf::from("/tmp/sites.yaml"),
+                sha256: "b".repeat(64),
+            },
+            vec![target()],
+            serde_json::json!({"tun_interface":"Meta"}),
+            vec![
+                (candidate("one"), vec!["one-r1".into(), "one-r2".into()]),
+                (candidate("two"), vec!["two-r1".into(), "two-r2".into()]),
+            ],
+            2,
+            PipelinePolicy {
+                continue_on_run_failure: true,
+                restore_original_state: true,
+            },
+            PipelineRestore {
+                profile_uid: None,
+                profile_fingerprint: None,
+                terminal_state: None,
+                selections: vec![],
+                checks: vec![],
+                state: RestoreState::Pending,
+                error: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(manifest.repetitions_per_candidate, 2);
+        assert_eq!(
+            manifest
+                .runs
+                .iter()
+                .map(|run| (run.candidate_ordinal, run.repetition_index, run.requested_node.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(1, 1, "one"), (1, 2, "one"), (2, 1, "two"), (2, 2, "two")]
+        );
+        assert!(
+            manifest.runs[0]
+                .output_path
+                .to_string_lossy()
+                .contains("candidate-01_repeat-01")
+        );
+        assert!(
+            manifest.runs[3]
+                .output_path
+                .to_string_lossy()
+                .contains("candidate-02_repeat-02")
+        );
+        let aggregate = manifest.aggregate();
+        assert_eq!(aggregate.planned_runs, 4);
+        assert_eq!(aggregate.candidates.len(), 2);
     }
 
     #[test]
@@ -597,9 +820,10 @@ mod tests {
             vec![target()],
             serde_json::json!({"tun_interface":"Meta"}),
             vec![
-                ("e107516f-335d-42f5-b9f4-f71c081c41e7".into(), candidate("one")),
-                ("e38c26b7-789c-4aa0-b1bb-e3d5916390af".into(), candidate("two")),
+                (candidate("one"), vec!["e107516f-335d-42f5-b9f4-f71c081c41e7".into()]),
+                (candidate("two"), vec!["e38c26b7-789c-4aa0-b1bb-e3d5916390af".into()]),
             ],
+            1,
             PipelinePolicy {
                 continue_on_run_failure: true,
                 restore_original_state: true,
@@ -633,6 +857,40 @@ mod tests {
     }
 
     #[test]
+    fn reports_degraded_completion_separately_from_errors() {
+        let mut manifest = PipelineManifest::create(
+            "6ea29d49-4f0e-4f9b-8a88-0ad095c50b78".into(),
+            PathBuf::from("/tmp/pipeline"),
+            PipelineConfigSnapshot {
+                path: PathBuf::from("/tmp/sites.yaml"),
+                sha256: "b".repeat(64),
+            },
+            vec![target()],
+            serde_json::json!({}),
+            vec![(candidate("one"), vec!["one-r1".into()])],
+            1,
+            PipelinePolicy {
+                continue_on_run_failure: true,
+                restore_original_state: true,
+            },
+            PipelineRestore {
+                profile_uid: None,
+                profile_fingerprint: None,
+                terminal_state: None,
+                selections: vec![],
+                checks: vec![],
+                state: RestoreState::Pending,
+                error: None,
+            },
+        )
+        .unwrap();
+        manifest.begin_next_run().unwrap();
+        manifest.finish_run(PipelineRunState::Degraded, None).unwrap();
+        assert_eq!(manifest.begin_next_run().unwrap(), None);
+        assert_eq!(manifest.state, PipelineState::CompletedWithDegraded);
+    }
+
+    #[test]
     fn persists_and_loads_a_manifest_atomically() {
         let root = std::env::temp_dir().join(format!("traffictracer-pipeline-model-{}", std::process::id()));
         let mut manifest = PipelineManifest::create(
@@ -644,7 +902,8 @@ mod tests {
             },
             vec![target()],
             serde_json::json!({"tun_interface":"Meta"}),
-            vec![("e107516f-335d-42f5-b9f4-f71c081c41e7".into(), candidate("one"))],
+            vec![(candidate("one"), vec!["e107516f-335d-42f5-b9f4-f71c081c41e7".into()])],
+            1,
             PipelinePolicy {
                 continue_on_run_failure: true,
                 restore_original_state: true,
@@ -663,6 +922,10 @@ mod tests {
         manifest.begin_next_run().unwrap();
         let path = manifest.persist().unwrap();
         assert_eq!(PipelineManifest::load(path).unwrap(), manifest);
+        let aggregate: PipelineAggregate =
+            serde_json::from_slice(&fs::read(root.join(PIPELINE_AGGREGATE_NAME)).unwrap()).unwrap();
+        assert_eq!(aggregate.pipeline_id, manifest.pipeline_id);
+        assert_eq!(aggregate.planned_runs, 1);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -678,7 +941,8 @@ mod tests {
             },
             vec![target()],
             serde_json::json!({"tun_interface":"Meta"}),
-            vec![("e107516f-335d-42f5-b9f4-f71c081c41e7".into(), candidate("one"))],
+            vec![(candidate("one"), vec!["e107516f-335d-42f5-b9f4-f71c081c41e7".into()])],
+            1,
             PipelinePolicy {
                 continue_on_run_failure: true,
                 restore_original_state: true,
@@ -698,6 +962,10 @@ mod tests {
         legacy["schema_version"] = serde_json::json!(1);
         legacy["runs"][0].as_object_mut().unwrap().remove("quality");
         legacy["runs"][0].as_object_mut().unwrap().remove("evidence");
+        legacy.as_object_mut().unwrap().remove("repetitions_per_candidate");
+        legacy["runs"][0].as_object_mut().unwrap().remove("candidate_ordinal");
+        legacy["runs"][0].as_object_mut().unwrap().remove("repetition_index");
+        legacy["runs"][0].as_object_mut().unwrap().remove("repetition_total");
         legacy["restore"].as_object_mut().unwrap().remove("profile_fingerprint");
         legacy["restore"].as_object_mut().unwrap().remove("terminal_state");
         legacy["restore"].as_object_mut().unwrap().remove("checks");
@@ -709,6 +977,10 @@ mod tests {
         assert_eq!(loaded.schema_version, PIPELINE_SCHEMA_VERSION);
         assert!(loaded.runs[0].quality.is_none());
         assert!(loaded.runs[0].evidence.is_none());
+        assert_eq!(loaded.repetitions_per_candidate, 1);
+        assert_eq!(loaded.runs[0].candidate_ordinal, 1);
+        assert_eq!(loaded.runs[0].repetition_index, 1);
+        assert_eq!(loaded.runs[0].repetition_total, 1);
         assert!(loaded.restore.checks.is_empty());
         let _ = fs::remove_dir_all(root);
     }
@@ -724,7 +996,8 @@ mod tests {
             },
             vec![target()],
             serde_json::json!({"tun_interface":"Meta"}),
-            vec![("e107516f-335d-42f5-b9f4-f71c081c41e7".into(), candidate("one"))],
+            vec![(candidate("one"), vec!["e107516f-335d-42f5-b9f4-f71c081c41e7".into()])],
+            1,
             PipelinePolicy {
                 continue_on_run_failure: true,
                 restore_original_state: true,

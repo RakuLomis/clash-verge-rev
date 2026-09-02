@@ -159,6 +159,7 @@ export interface PipelineCandidate {
 export interface PipelineStartRequest {
   batch: BatchStartRequest
   candidates: PipelineCandidate[]
+  repetitions_per_candidate: number
   continue_on_run_failure: boolean
 }
 
@@ -168,6 +169,7 @@ export type PipelineState =
   | 'running'
   | 'interrupted'
   | 'completed'
+  | 'completed_with_degraded'
   | 'completed_with_errors'
   | 'failed'
   | 'cancelled'
@@ -192,6 +194,9 @@ export type PipelineStage =
 
 export interface PipelineRun {
   ordinal: number
+  candidate_ordinal: number
+  repetition_index: number
+  repetition_total: number
   run_id: string
   profile_uid: string
   profile_fingerprint: string
@@ -309,10 +314,12 @@ export interface PipelineListEntry {
   updated_at: string
   completed_runs: number
   total_runs: number
+  candidate_count: number
+  repetitions_per_candidate: number
 }
 
 export interface PipelineManifest {
-  schema_version: 3
+  schema_version: 4
   pipeline_id: string
   state: PipelineState
   stage: PipelineStage
@@ -326,6 +333,7 @@ export interface PipelineManifest {
     continue_on_run_failure: boolean
     restore_original_state: true
   }
+  repetitions_per_candidate: number
   current_run_index: number | null
   runs: PipelineRun[]
   restore: {

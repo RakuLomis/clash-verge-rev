@@ -28,11 +28,11 @@ use crate::{
             lock::{CaptureLock, CaptureLockSnapshot},
             manager::{WorkerManager, WorkerManagerState, WorkerRecoveryReport, WorkerRecoveryStatus},
             pipeline::{
-                PIPELINE_MANIFEST_NAME, PipelineApplicationIssue, PipelineCandidate, PipelineConfigSnapshot,
-                PipelineConnectionDrain, PipelineError, PipelineManifest, PipelinePolicy, PipelineProxySnapshot,
-                PipelineQualityPlane, PipelineRestore, PipelineRestoreCheck, PipelineRunEvidence, PipelineRunQuality,
-                PipelineRunState, PipelineRunVerification, PipelineSelection, PipelineStage, PipelineState,
-                PipelineTarget, RestoreState,
+                PIPELINE_MANIFEST_NAME, PIPELINE_MAX_REPETITIONS, PipelineApplicationIssue, PipelineCandidate,
+                PipelineConfigSnapshot, PipelineConnectionDrain, PipelineError, PipelineManifest, PipelinePolicy,
+                PipelineProxySnapshot, PipelineQualityPlane, PipelineRestore, PipelineRestoreCheck,
+                PipelineRunEvidence, PipelineRunQuality, PipelineRunState, PipelineRunVerification, PipelineSelection,
+                PipelineStage, PipelineState, PipelineTarget, RestoreState,
             },
             protocol::{JOB_SCHEMA_VERSION, RequestMethod},
         },
@@ -1323,11 +1323,17 @@ fn pipeline_default_continue() -> bool {
     true
 }
 
+fn pipeline_default_repetitions() -> u16 {
+    1
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PipelineStartRequest {
     pub batch: BatchStartRequest,
     pub candidates: Vec<PipelineCandidate>,
+    #[serde(default = "pipeline_default_repetitions")]
+    pub repetitions_per_candidate: u16,
     #[serde(default = "pipeline_default_continue")]
     pub continue_on_run_failure: bool,
 }
@@ -2207,6 +2213,11 @@ pub async fn tt_pipeline_start(
     if request.candidates.is_empty() {
         return Err("pipeline candidates must not be empty".into());
     }
+    if !(1..=PIPELINE_MAX_REPETITIONS).contains(&request.repetitions_per_candidate) {
+        return Err(
+            format!("pipeline repetitions_per_candidate must be between 1 and {PIPELINE_MAX_REPETITIONS}").into(),
+        );
+    }
     validate_batch_start_request(&request.batch)?;
     let preview = tt_target_config_load(request.batch.config_path.clone()).await?;
     validate_batch_selection(&preview, &request.batch)?;
@@ -2299,7 +2310,12 @@ pub async fn tt_pipeline_start(
         .candidates
         .iter()
         .cloned()
-        .map(|candidate| new_job_id().map(|run_id| (run_id, candidate)))
+        .map(|candidate| {
+            let run_ids = (0..request.repetitions_per_candidate)
+                .map(|_| new_job_id())
+                .collect::<CmdResult<Vec<_>>>()?;
+            Ok((candidate, run_ids))
+        })
         .collect::<CmdResult<Vec<_>>>()?;
     let manifest = PipelineManifest::create(
         pipeline_id.clone(),
@@ -2311,6 +2327,7 @@ pub async fn tt_pipeline_start(
         request.batch.targets.iter().map(pipeline_target).collect(),
         pipeline_execution_snapshot(&request.batch),
         candidates,
+        request.repetitions_per_candidate,
         PipelinePolicy {
             continue_on_run_failure: request.continue_on_run_failure,
             restore_original_state: true,
@@ -3056,6 +3073,8 @@ pub struct PipelineListEntry {
     pub updated_at: DateTime<Utc>,
     pub completed_runs: usize,
     pub total_runs: usize,
+    pub candidate_count: usize,
+    pub repetitions_per_candidate: u16,
 }
 
 fn active_pipeline_matches(pipeline_id: &str) -> bool {
@@ -3105,6 +3124,13 @@ pub fn tt_pipeline_list(output_root: String) -> CmdResult<Vec<PipelineListEntry>
             updated_at: manifest.updated_at,
             completed_runs: manifest.runs.iter().filter(|run| run.state.terminal()).count(),
             total_runs: manifest.runs.len(),
+            candidate_count: manifest
+                .runs
+                .iter()
+                .map(|run| usize::from(run.candidate_ordinal))
+                .max()
+                .unwrap_or(0),
+            repetitions_per_candidate: manifest.repetitions_per_candidate,
         });
     }
     pipelines.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
