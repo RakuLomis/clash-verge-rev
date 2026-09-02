@@ -32,6 +32,8 @@ pub enum RequestMethod {
     JobStart,
     #[serde(rename = "job.cancel")]
     JobCancel,
+    #[serde(rename = "job.interrupt")]
+    JobInterrupt,
     #[serde(rename = "job.status")]
     JobStatus,
     #[serde(rename = "analysis.start")]
@@ -227,6 +229,8 @@ mod tests {
     fn batch_interrupt_method_uses_worker_wire_name() {
         let value = serde_json::to_value(RequestMethod::BatchInterrupt).unwrap();
         assert_eq!(value, serde_json::json!("batch.interrupt"));
+        let generic = serde_json::to_value(RequestMethod::JobInterrupt).unwrap();
+        assert_eq!(generic, serde_json::json!("job.interrupt"));
     }
 
     #[test]

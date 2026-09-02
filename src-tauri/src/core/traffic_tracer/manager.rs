@@ -102,6 +102,10 @@ impl WorkerManager {
         self.state.lock().clone()
     }
 
+    pub fn active_job_id(&self) -> Option<String> {
+        self.active_job.lock().clone()
+    }
+
     pub fn client(&self) -> Result<Arc<WorkerClient>> {
         if !matches!(self.state(), WorkerManagerState::Ready | WorkerManagerState::Busy) {
             bail!("TrafficTracer Worker is not ready");

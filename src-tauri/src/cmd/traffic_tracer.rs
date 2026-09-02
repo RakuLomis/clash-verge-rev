@@ -50,6 +50,9 @@ const PIPELINE_END_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(3);
 const PIPELINE_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 const PIPELINE_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PIPELINE_MIN_QUIET: Duration = Duration::from_millis(750);
+const PIPELINE_OWNER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
+const PIPELINE_OWNER_HEARTBEAT_FRESH_MS: u64 = 15_000;
+const PIPELINE_OWNER_FILE: &str = "pipeline-owner.json";
 
 struct UiHeartbeatState {
     active: AtomicBool,
@@ -65,6 +68,18 @@ struct ActivePipeline {
     cancel: Arc<AtomicBool>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PipelineOwnerRecord {
+    schema_version: u32,
+    pipeline_id: String,
+    app_pid: u32,
+    state: String,
+    stage: String,
+    batch_id: Option<String>,
+    heartbeat_at_ms: u64,
+}
+
 #[derive(Default)]
 struct PipelineRuntime {
     active: Mutex<Option<ActivePipeline>>,
@@ -74,6 +89,87 @@ static PIPELINE_RUNTIME: OnceLock<PipelineRuntime> = OnceLock::new();
 
 fn pipeline_runtime() -> &'static PipelineRuntime {
     PIPELINE_RUNTIME.get_or_init(PipelineRuntime::default)
+}
+
+fn pipeline_owner_path(manifest_path: &Path) -> PathBuf {
+    manifest_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(PIPELINE_OWNER_FILE)
+}
+
+fn write_pipeline_owner_record(manifest_path: &Path, pipeline_id: &str, state: &str) -> CmdResult {
+    let manifest = PipelineManifest::load(manifest_path).stringify_err()?;
+    let current_run = manifest.current_run_index.and_then(|index| manifest.runs.get(index));
+    let stage = current_run.map_or(manifest.stage, |run| run.stage);
+    let record = PipelineOwnerRecord {
+        schema_version: 1,
+        pipeline_id: pipeline_id.to_owned(),
+        app_pid: std::process::id(),
+        state: state.to_owned(),
+        stage: serde_json::to_value(stage)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "unknown".to_owned()),
+        batch_id: current_run.and_then(|run| run.batch_id.clone()),
+        heartbeat_at_ms: unix_time_ms(),
+    };
+    let path = pipeline_owner_path(manifest_path);
+    let temporary = path.with_extension("json.tmp");
+    let mut bytes = serde_json::to_vec_pretty(&record).stringify_err()?;
+    bytes.push(b'\n');
+    fs::write(&temporary, bytes).stringify_err()?;
+    fs::rename(temporary, path).stringify_err()?;
+    Ok(())
+}
+
+fn read_pipeline_owner_record(manifest_path: &Path) -> Option<PipelineOwnerRecord> {
+    fs::read(pipeline_owner_path(manifest_path))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+}
+
+fn process_is_alive(pid: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        Path::new("/proc").join(pid.to_string()).exists()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        pid == std::process::id()
+    }
+}
+
+fn owner_record_is_live(record: &PipelineOwnerRecord, pipeline_id: &str, now_ms: u64) -> bool {
+    record.pipeline_id == pipeline_id
+        && record.state == "supervising"
+        && now_ms.saturating_sub(record.heartbeat_at_ms) <= PIPELINE_OWNER_HEARTBEAT_FRESH_MS
+        && process_is_alive(record.app_pid)
+}
+
+fn pipeline_has_live_owner_evidence(manifest: &PipelineManifest, manifest_path: &Path) -> bool {
+    if active_pipeline_matches(&manifest.pipeline_id) {
+        return true;
+    }
+    let current_batch = manifest
+        .current_run_index
+        .and_then(|index| manifest.runs.get(index))
+        .and_then(|run| run.batch_id.as_deref());
+    let capture = CaptureLock::global().snapshot();
+    if capture.owner_kind.as_deref() == Some("pipeline")
+        && capture.job_id.as_deref() == Some(manifest.pipeline_id.as_str())
+    {
+        return true;
+    }
+    if current_batch.is_some()
+        && WorkerManager::global().active_job_id().as_deref() == current_batch
+        && WorkerManager::global().state() == WorkerManagerState::Busy
+    {
+        return true;
+    }
+    read_pipeline_owner_record(manifest_path)
+        .as_ref()
+        .is_some_and(|record| owner_record_is_live(record, &manifest.pipeline_id, unix_time_ms()))
 }
 
 static UI_HEARTBEAT: OnceLock<UiHeartbeatState> = OnceLock::new();
@@ -977,27 +1073,7 @@ async fn tt_batch_start_for_owner(
     pipeline_owner: Option<&str>,
     orchestration: Option<PipelineOrchestration>,
 ) -> CmdResult<JobSnapshot> {
-    if request.targets.is_empty() {
-        return Err("batch targets must not be empty".into());
-    }
-    if !request.options.analyze_after_capture {
-        return Err("batch requires analysis after every capture".into());
-    }
-    if !valid_pcap_split_mode(&request.options.pcap_split_mode) {
-        return Err("pcap_split_mode must be none or unique_connections".into());
-    }
-    if !valid_cache_mode(&request.options.cache_mode) {
-        return Err("cache_mode must be cold or warm".into());
-    }
-    if !valid_proxy_protocol_mode(&request.options.proxy_protocol_mode) {
-        return Err("proxy_protocol_mode must be strict_single or observe".into());
-    }
-    if !valid_proxy_protocol(&request.options.expected_proxy_protocol) {
-        return Err("expected_proxy_protocol must be a protocol name".into());
-    }
-    if request.options.proxy_selection_group.chars().any(char::is_control) {
-        return Err("proxy_selection_group must not contain control characters".into());
-    }
+    validate_batch_start_request(&request)?;
     let preview = tt_target_config_load(request.config_path.clone()).await?;
     validate_batch_selection(&preview, &request)?;
     let selected_indexes = request
@@ -1081,10 +1157,35 @@ async fn tt_batch_start_for_owner(
             },
         )
         .await;
-    finish_batch_request(result, &job_id, manager, pipeline_owner.is_none())
+    finish_batch_request(result, &job_id, manager, pipeline_owner.is_none()).await
 }
 
-fn finish_batch_request(
+fn validate_batch_start_request(request: &BatchStartRequest) -> CmdResult {
+    if request.targets.is_empty() {
+        return Err("batch targets must not be empty".into());
+    }
+    if !request.options.analyze_after_capture {
+        return Err("batch requires analysis after every capture".into());
+    }
+    if !valid_pcap_split_mode(&request.options.pcap_split_mode) {
+        return Err("pcap_split_mode must be none or unique_connections".into());
+    }
+    if !valid_cache_mode(&request.options.cache_mode) {
+        return Err("cache_mode must be cold or warm".into());
+    }
+    if !valid_proxy_protocol_mode(&request.options.proxy_protocol_mode) {
+        return Err("proxy_protocol_mode must be strict_single or observe".into());
+    }
+    if !valid_proxy_protocol(&request.options.expected_proxy_protocol) {
+        return Err("expected_proxy_protocol must be a protocol name".into());
+    }
+    if request.options.proxy_selection_group.chars().any(char::is_control) {
+        return Err("proxy_selection_group must not contain control characters".into());
+    }
+    Ok(())
+}
+
+async fn finish_batch_request(
     result: Result<JobSnapshot, crate::core::traffic_tracer::client::ClientError>,
     job_id: &str,
     manager: &WorkerManager,
@@ -1101,12 +1202,80 @@ fn finish_batch_request(
             Ok(snapshot)
         }
         Err(error) => {
+            if batch_request_outcome_unknown(&error) {
+                if let Ok(client) = manager.client() {
+                    if let Ok(status) = client
+                        .request::<_, Value>(
+                            RequestMethod::BatchStatus,
+                            BatchIdParams {
+                                batch_id: job_id.to_owned(),
+                            },
+                        )
+                        .await
+                    {
+                        if let Some(job) = status.get("job").filter(|value| !value.is_null()) {
+                            if let Ok(snapshot) = serde_json::from_value::<JobSnapshot>(job.clone()) {
+                                return Ok(snapshot);
+                            }
+                        }
+                        if status.get("batch").is_some_and(|value| !value.is_null()) {
+                            return Ok(uncertain_batch_start_snapshot(job_id));
+                        }
+                    }
+                    if let Ok(snapshot) = client
+                        .request::<_, JobSnapshot>(
+                            RequestMethod::JobStatus,
+                            JobIdParams {
+                                job_id: job_id.to_owned(),
+                            },
+                        )
+                        .await
+                    {
+                        return Ok(snapshot);
+                    }
+                }
+                // A timeout, lost response, decode failure, or Worker exit does not
+                // prove rejection. Retain capture ownership and let the supervisor
+                // reconcile the pre-generated Job ID instead of publishing a false
+                // terminal failure while a Batch may still be active.
+                return Ok(uncertain_batch_start_snapshot(job_id));
+            }
             if release_capture_lock {
                 let _ = CaptureLock::global().release(job_id);
             }
             let _ = manager.mark_ready(job_id);
             Err(error.to_string().into())
         }
+    }
+}
+
+fn batch_request_outcome_unknown(error: &crate::core::traffic_tracer::client::ClientError) -> bool {
+    use crate::core::traffic_tracer::client::ClientError;
+
+    matches!(
+        error,
+        ClientError::Decode(_)
+            | ClientError::Protocol(_)
+            | ClientError::Transport(_)
+            | ClientError::Timeout(_)
+            | ClientError::WorkerExited
+    )
+}
+
+fn uncertain_batch_start_snapshot(job_id: &str) -> JobSnapshot {
+    JobSnapshot {
+        job_id: job_id.to_owned(),
+        kind: "batch".to_owned(),
+        state: JobState::Created,
+        stage: "starting_batch".to_owned(),
+        progress: 0.0,
+        message: "Batch start outcome is being reconciled.".to_owned(),
+        cancel_requested: false,
+        interrupt_requested: false,
+        cancel_requested_now: None,
+        interrupt_requested_now: None,
+        result: None,
+        error: None,
     }
 }
 
@@ -1459,6 +1628,16 @@ fn proxy_snapshots_match(left: &PipelineProxySnapshot, right: &PipelineProxySnap
         && left.resolved_chain == right.resolved_chain
         && left.resolved_leaf == right.resolved_leaf
         && left.protocol == right.protocol
+}
+
+fn requested_pipeline_stop(interrupt: &AtomicBool, cancel: &AtomicBool) -> Option<PipelineRunState> {
+    if cancel.load(Ordering::Acquire) {
+        Some(PipelineRunState::Cancelled)
+    } else if interrupt.load(Ordering::Acquire) {
+        Some(PipelineRunState::Interrupted)
+    } else {
+        None
+    }
 }
 
 async fn drain_pipeline_connections() -> PipelineConnectionDrain {
@@ -1914,6 +2093,26 @@ fn launch_pipeline_supervisor(
         interrupt: Arc::clone(&interrupt),
         cancel: Arc::clone(&cancel),
     });
+    let heartbeat_done = Arc::new(AtomicBool::new(false));
+    let heartbeat_manifest = manifest_path.clone();
+    let heartbeat_pipeline = pipeline_id.clone();
+    let heartbeat_stop = Arc::clone(&heartbeat_done);
+    let _ = write_pipeline_owner_record(&manifest_path, &pipeline_id, "supervising");
+    tauri::async_runtime::spawn(async move {
+        while !heartbeat_stop.load(Ordering::Acquire) {
+            tokio::time::sleep(PIPELINE_OWNER_HEARTBEAT_INTERVAL).await;
+            if heartbeat_stop.load(Ordering::Acquire) {
+                break;
+            }
+            if let Err(error) = write_pipeline_owner_record(&heartbeat_manifest, &heartbeat_pipeline, "supervising") {
+                logging!(
+                    warn,
+                    Type::System,
+                    "TrafficTracer pipeline owner heartbeat failed: {error}"
+                );
+            }
+        }
+    });
     tauri::async_runtime::spawn(async move {
         if let Err(error) = run_pipeline(app_handle, manifest_path.clone(), batch, interrupt, cancel).await {
             logging!(error, Type::System, "TrafficTracer pipeline supervisor failed: {error}");
@@ -1935,6 +2134,8 @@ fn launch_pipeline_supervisor(
             }
         }
         let _ = CaptureLock::global().release(&pipeline_id);
+        heartbeat_done.store(true, Ordering::Release);
+        let _ = write_pipeline_owner_record(&manifest_path, &pipeline_id, "released");
         let mut active = pipeline_runtime().active.lock();
         if active.as_ref().is_some_and(|item| item.pipeline_id == pipeline_id) {
             *active = None;
@@ -1950,6 +2151,7 @@ pub async fn tt_pipeline_start(
     if request.candidates.is_empty() {
         return Err("pipeline candidates must not be empty".into());
     }
+    validate_batch_start_request(&request.batch)?;
     let preview = tt_target_config_load(request.batch.config_path.clone()).await?;
     validate_batch_selection(&preview, &request.batch)?;
     let selected = request
@@ -1965,6 +2167,29 @@ pub async fn tt_pipeline_start(
         .cloned()
         .collect();
 
+    let profiles = Config::profiles().await.latest_arc();
+    for candidate in &request.candidates {
+        profiles
+            .get_item(candidate.profile_uid.as_str())
+            .map_err(|error| format!("PIPELINE_PROFILE_NOT_FOUND: {error}"))?;
+    }
+    let active_profile = profiles.current.clone().map(String::from);
+    drop(profiles);
+    if let Some(active_profile) = active_profile.as_deref() {
+        let active_fingerprint = effective_runtime_fingerprint().map_err(|error| {
+            smartstring::alias::String::from(format!("PIPELINE_PROFILE_FINGERPRINT_UNAVAILABLE: {error}"))
+        })?;
+        for candidate in request
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.profile_uid == active_profile)
+        {
+            if candidate.profile_fingerprint != active_fingerprint {
+                return Err("PIPELINE_PROFILE_FINGERPRINT_MISMATCH: the active Profile changed after the candidate was recorded".into());
+            }
+        }
+    }
+
     let pipeline_id = new_job_id()?;
     let output_root = pipeline_directory(&request.batch.output_root, &pipeline_id)?;
     let original_profile = Config::profiles().await.latest_arc().current.clone();
@@ -1976,6 +2201,28 @@ pub async fn tt_pipeline_start(
         .get_proxies()
         .await
         .map_err(|error| error.to_string())?;
+    if let Some(active_profile) = active_profile.as_deref() {
+        for candidate in request
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.profile_uid == active_profile)
+        {
+            let group = proxies.proxies.get(candidate.selection_group.as_str()).ok_or_else(|| {
+                smartstring::alias::String::from(
+                    "PIPELINE_SELECTOR_NOT_FOUND: selector is absent from the active runtime",
+                )
+            })?;
+            if !group
+                .all
+                .as_ref()
+                .is_some_and(|nodes| nodes.iter().any(|node| node == &candidate.requested_node))
+            {
+                return Err(
+                    "PIPELINE_NODE_NOT_SELECTABLE: queued node is absent from the active runtime selector".into(),
+                );
+            }
+        }
+    }
     let mut restore_groups = std::collections::HashSet::new();
     let restore_selections = request
         .candidates
@@ -2031,6 +2278,29 @@ pub async fn tt_pipeline_start(
             "TrafficTracer profile and proxy pipeline is active",
         )
         .stringify_err()?;
+    let environment = tt_get_environment_for_owner(
+        app_handle.clone(),
+        EnvironmentRequest {
+            tun_interface: request.batch.tun_interface.clone(),
+            physical_interface: request.batch.physical_interface.clone(),
+            chrome_binary: request.batch.chrome_binary.clone(),
+            output_root: request.batch.output_root.clone(),
+            min_free_bytes: None,
+        },
+        Some(&pipeline_id),
+    )
+    .await;
+    let environment = match environment {
+        Ok(environment) => environment,
+        Err(error) => {
+            let _ = CaptureLock::global().release(&pipeline_id);
+            return Err(error);
+        }
+    };
+    if environment.level == CompleteEnvironmentLevel::Blocking {
+        let _ = CaptureLock::global().release(&pipeline_id);
+        return Err("TrafficTracer pipeline preflight has blocking diagnostics".into());
+    }
     if let Err(error) = manifest.persist() {
         let _ = CaptureLock::global().release(&pipeline_id);
         return Err(error.to_string().into());
@@ -2056,6 +2326,9 @@ async fn execute_pipeline_run(
     cancel: &AtomicBool,
 ) -> Result<PipelineRunState, String> {
     let run = manifest.runs[index].clone();
+    if let Some(state) = requested_pipeline_stop(interrupt, cancel) {
+        return Ok(state);
+    }
     pipeline_checkpoint(manifest, PipelineStage::ActivatingProfile)?;
     if Config::profiles().await.latest_arc().current.as_deref() != Some(run.profile_uid.as_str()) {
         let outcome = super::profile::patch_profiles_config_for_owner(
@@ -2071,6 +2344,9 @@ async fn execute_pipeline_run(
             return Err(format!("PROFILE_ACTIVATION_FAILED: {outcome}"));
         }
     }
+    if let Some(state) = requested_pipeline_stop(interrupt, cancel) {
+        return Ok(state);
+    }
     pipeline_checkpoint(manifest, PipelineStage::WaitingController)?;
     wait_for_profile_controller(
         &run.profile_uid,
@@ -2079,6 +2355,9 @@ async fn execute_pipeline_run(
     )
     .await
     .map_err(|error| error.render())?;
+    if let Some(state) = requested_pipeline_stop(interrupt, cancel) {
+        return Ok(state);
+    }
 
     pipeline_checkpoint(manifest, PipelineStage::SelectingProxy)?;
     let proxies = handle::Handle::mihomo()
@@ -2119,6 +2398,9 @@ async fn execute_pipeline_run(
         .get_or_insert_with(PipelineRunEvidence::default)
         .selection_snapshot = Some(selection_snapshot.clone());
     manifest.persist().map_err(|error| error.to_string())?;
+    if let Some(state) = requested_pipeline_stop(interrupt, cancel) {
+        return Ok(state);
+    }
 
     pipeline_checkpoint(manifest, PipelineStage::DrainingConnections)?;
     let drain = drain_pipeline_connections().await;
@@ -2135,11 +2417,8 @@ async fn execute_pipeline_run(
             drain_error.unwrap_or_else(|| "connections did not remain at zero before the deadline".into())
         ));
     }
-    if interrupt.load(Ordering::Acquire) {
-        return Ok(PipelineRunState::Interrupted);
-    }
-    if cancel.load(Ordering::Acquire) {
-        return Ok(PipelineRunState::Cancelled);
+    if let Some(state) = requested_pipeline_stop(interrupt, cancel) {
+        return Ok(state);
     }
 
     pipeline_checkpoint(manifest, PipelineStage::Preflight)?;
@@ -2163,6 +2442,9 @@ async fn execute_pipeline_run(
     if environment.level == CompleteEnvironmentLevel::Blocking {
         return Err("TrafficTracer environment has blocking diagnostics".into());
     }
+    if let Some(state) = requested_pipeline_stop(interrupt, cancel) {
+        return Ok(state);
+    }
     let pre_batch_snapshot = wait_for_selected_snapshot(
         &run.profile_uid,
         &run.profile_fingerprint,
@@ -2180,6 +2462,9 @@ async fn execute_pipeline_run(
     manifest.persist().map_err(|error| error.to_string())?;
     if !pre_batch_matches {
         return Err("PRE_BATCH_NODE_DRIFT: selector chain changed after the connection drain".into());
+    }
+    if let Some(state) = requested_pipeline_stop(interrupt, cancel) {
+        return Ok(state);
     }
     let snapshot = if let Some(batch_id) = run.batch_id {
         tt_batch_resume_for_owner(batch_id, Some(pipeline_id)).await
@@ -2209,40 +2494,32 @@ async fn execute_pipeline_run(
     let mut reconciliation_started = false;
     let mut status_error_started: Option<tokio::time::Instant> = None;
     loop {
-        if !stop_requested && cancel.load(Ordering::Acquire) {
-            if tt_batch_cancel(batch_id.clone(), Some("Pipeline cancelled by user".into()))
-                .await
-                .is_err()
+        if !stop_requested && let Some(requested) = requested_pipeline_stop(interrupt, cancel) {
+            let (batch_result, fallback_method, reason) = match requested {
+                PipelineRunState::Cancelled => (
+                    tt_batch_cancel(batch_id.clone(), Some("Pipeline cancelled by user".into())).await,
+                    RequestMethod::JobCancel,
+                    "Pipeline cancelled before Batch status became visible",
+                ),
+                PipelineRunState::Interrupted => (
+                    tt_batch_interrupt(batch_id.clone(), Some("Pipeline interrupted by user".into())).await,
+                    RequestMethod::JobInterrupt,
+                    "Pipeline interrupted before Batch status became visible",
+                ),
+                _ => unreachable!("pipeline stop request is terminal"),
+            };
+            if batch_result.is_err()
+                && let Ok(client) = WorkerManager::global().client()
             {
-                if let Ok(client) = WorkerManager::global().client() {
-                    let _ = client
-                        .request::<_, JobSnapshot>(
-                            RequestMethod::JobCancel,
-                            CancelJobParams {
-                                job_id: batch_id.clone(),
-                                reason: "Pipeline cancelled before Batch status became visible".into(),
-                            },
-                        )
-                        .await;
-                }
-            }
-            stop_requested = true;
-        } else if !stop_requested && interrupt.load(Ordering::Acquire) {
-            if tt_batch_interrupt(batch_id.clone(), Some("Pipeline interrupted by user".into()))
-                .await
-                .is_err()
-            {
-                if let Ok(client) = WorkerManager::global().client() {
-                    let _ = client
-                        .request::<_, JobSnapshot>(
-                            RequestMethod::JobCancel,
-                            CancelJobParams {
-                                job_id: batch_id.clone(),
-                                reason: "Pipeline interrupted before Batch status became visible".into(),
-                            },
-                        )
-                        .await;
-                }
+                let _ = client
+                    .request::<_, JobSnapshot>(
+                        fallback_method,
+                        CancelJobParams {
+                            job_id: batch_id.clone(),
+                            reason: reason.into(),
+                        },
+                    )
+                    .await;
             }
             stop_requested = true;
         }
@@ -2737,7 +3014,9 @@ pub fn tt_pipeline_status(pipeline_root: String) -> CmdResult<PipelineManifest> 
     }
     let path = root.join(PIPELINE_MANIFEST_NAME);
     let mut manifest = PipelineManifest::load(&path).stringify_err()?;
-    if !active_pipeline_matches(&manifest.pipeline_id) && manifest.recover_interrupted_supervisor().stringify_err()? {
+    if !pipeline_has_live_owner_evidence(&manifest, &path)
+        && manifest.recover_interrupted_supervisor().stringify_err()?
+    {
         manifest.persist().stringify_err()?;
     }
     Ok(manifest)
@@ -2998,7 +3277,7 @@ async fn tt_batch_resume_for_owner(batch_id: String, pipeline_owner: Option<&str
             },
         )
         .await;
-    finish_batch_request(result, &batch_id, manager, pipeline_owner.is_none())
+    finish_batch_request(result, &batch_id, manager, pipeline_owner.is_none()).await
 }
 
 fn validate_capture_request(request: &CaptureStartRequest) -> CmdResult {
@@ -4412,6 +4691,106 @@ mod capture_tests {
         assert!(JobState::Cancelled.terminal());
         assert!(JobState::Interrupted.terminal());
         assert!(!JobState::Capturing.terminal());
+    }
+
+    #[test]
+    fn ambiguous_batch_start_errors_retain_capture_ownership_for_reconciliation() {
+        use crate::core::traffic_tracer::{
+            client::ClientError,
+            protocol::{RequestId, WorkerErrorCode},
+        };
+
+        for error in [
+            ClientError::Transport("injected response loss".to_owned()),
+            ClientError::Timeout(RequestId::Integer(7)),
+            ClientError::Decode("injected decode failure".to_owned()),
+            ClientError::Protocol("injected protocol failure".to_owned()),
+            ClientError::WorkerExited,
+        ] {
+            assert!(batch_request_outcome_unknown(&error), "{error}");
+        }
+        assert!(!batch_request_outcome_unknown(&ClientError::Worker {
+            code: WorkerErrorCode::InvalidParams,
+            message: "rejected before acceptance".to_owned(),
+            data: None,
+        }));
+        assert!(!batch_request_outcome_unknown(&ClientError::Encode(
+            "request was not sent".to_owned()
+        )));
+
+        let snapshot = uncertain_batch_start_snapshot("00000000-0000-4000-8000-000000000001");
+        assert_eq!(snapshot.state, JobState::Created);
+        assert_eq!(snapshot.stage, "starting_batch");
+        assert!(!snapshot.state.terminal());
+    }
+
+    #[test]
+    fn pipeline_owner_heartbeat_requires_matching_fresh_live_supervisor() {
+        let now = unix_time_ms();
+        let mut record = PipelineOwnerRecord {
+            schema_version: 1,
+            pipeline_id: "pipeline-one".to_owned(),
+            app_pid: std::process::id(),
+            state: "supervising".to_owned(),
+            stage: "running_batch".to_owned(),
+            batch_id: Some("batch-one".to_owned()),
+            heartbeat_at_ms: now,
+        };
+        assert!(owner_record_is_live(&record, "pipeline-one", now));
+
+        record.state = "released".to_owned();
+        assert!(!owner_record_is_live(&record, "pipeline-one", now));
+        record.state = "supervising".to_owned();
+        assert!(!owner_record_is_live(&record, "pipeline-two", now));
+        assert!(!owner_record_is_live(
+            &record,
+            "pipeline-one",
+            now.saturating_add(PIPELINE_OWNER_HEARTBEAT_FRESH_MS + 1)
+        ));
+    }
+
+    #[test]
+    fn pipeline_reuses_batch_validation_before_creating_a_supervisor() {
+        let mut request = batch_request(vec![batch_target(0, "example.com")]);
+        assert!(validate_batch_start_request(&request).is_ok());
+
+        request.targets.clear();
+        assert!(validate_batch_start_request(&request).is_err());
+        request.targets = vec![batch_target(0, "example.com")];
+        request.options.analyze_after_capture = false;
+        assert!(validate_batch_start_request(&request).is_err());
+    }
+
+    #[test]
+    fn stop_requests_have_identical_semantics_at_every_pipeline_stage() {
+        let interrupt = AtomicBool::new(false);
+        let cancel = AtomicBool::new(false);
+        let stages = [
+            PipelineStage::ActivatingProfile,
+            PipelineStage::SelectingProxy,
+            PipelineStage::DrainingConnections,
+            PipelineStage::Preflight,
+            PipelineStage::StartingBatch,
+            PipelineStage::RunningBatch,
+            PipelineStage::FinalizingBatch,
+            PipelineStage::Restoring,
+        ];
+        for _stage in stages {
+            interrupt.store(false, Ordering::Release);
+            cancel.store(false, Ordering::Release);
+            assert_eq!(requested_pipeline_stop(&interrupt, &cancel), None);
+            interrupt.store(true, Ordering::Release);
+            assert_eq!(
+                requested_pipeline_stop(&interrupt, &cancel),
+                Some(PipelineRunState::Interrupted)
+            );
+            cancel.store(true, Ordering::Release);
+            assert_eq!(
+                requested_pipeline_stop(&interrupt, &cancel),
+                Some(PipelineRunState::Cancelled),
+                "cancel must win when both requests arrive"
+            );
+        }
     }
 
     #[test]
