@@ -160,6 +160,12 @@ const TrafficTracerPage = () => {
   ])
   const pipelineActive =
     pipeline !== null && !pipelineTerminal.has(pipeline.state)
+  const displayedPipelineRun =
+    pipeline?.current_run_index !== null &&
+    pipeline?.current_run_index !== undefined
+      ? pipeline.runs[pipeline.current_run_index]
+      : [...(pipeline?.runs ?? [])].reverse().find((run) => run.error !== null)
+  const pipelineError = displayedPipelineRun?.error ?? null
   const { environment, environmentQuery, captureLock, workerActivity } =
     useTrafficTracerWorker(
       diagnosticRequest,
@@ -506,18 +512,29 @@ const TrafficTracerPage = () => {
           >
             <AlertTitle>Profile / node pipeline</AlertTitle>
             <Box>
-              {pipeline.state} · {pipeline.stage} · run{' '}
+              {pipeline.state} · {pipeline.stage.replaceAll('_', ' ')} · run{' '}
               {(pipeline.current_run_index ?? pipeline.runs.length - 1) + 1}/
               {pipeline.runs.length}
             </Box>
             <Box sx={{ opacity: 0.65, overflowWrap: 'anywhere' }}>
               {pipelineLocator?.output_root}
             </Box>
-            {pipeline.current_run_index !== null && (
+            {displayedPipelineRun && (
               <Box sx={{ opacity: 0.8 }}>
-                {pipeline.runs[pipeline.current_run_index]?.profile_uid} ·{' '}
-                {pipeline.runs[pipeline.current_run_index]?.selection_group} ·{' '}
-                {pipeline.runs[pipeline.current_run_index]?.requested_node}
+                {displayedPipelineRun.profile_uid} ·{' '}
+                {displayedPipelineRun.selection_group} ·{' '}
+                {displayedPipelineRun.requested_node}
+              </Box>
+            )}
+            {pipelineError && (
+              <Box
+                sx={{
+                  mt: 1,
+                  fontFamily: 'monospace',
+                  overflowWrap: 'anywhere',
+                }}
+              >
+                {pipelineError.code}: {pipelineError.message}
               </Box>
             )}
             {pipeline.state === 'interrupted' && (

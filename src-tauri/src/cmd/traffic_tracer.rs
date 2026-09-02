@@ -1565,23 +1565,165 @@ async fn execute_pipeline_run(
     }
     .map_err(|error| error.to_string())?;
     manifest.runs[index].batch_id = Some(snapshot.job_id.clone());
-    pipeline_checkpoint(manifest, PipelineStage::RunningBatch)?;
+    pipeline_checkpoint(manifest, PipelineStage::StartingBatch)?;
     let batch_id = snapshot.job_id;
+    let startup_started = tokio::time::Instant::now();
+    let mut batch_confirmed = false;
     let mut stop_requested = false;
+    let mut reconciliation_started = false;
+    let mut status_error_started: Option<tokio::time::Instant> = None;
     loop {
         if !stop_requested && cancel.load(Ordering::Acquire) {
-            let _ = tt_batch_cancel(batch_id.clone(), Some("Pipeline cancelled by user".into())).await;
+            if tt_batch_cancel(batch_id.clone(), Some("Pipeline cancelled by user".into()))
+                .await
+                .is_err()
+            {
+                if let Ok(client) = WorkerManager::global().client() {
+                    let _ = client
+                        .request::<_, JobSnapshot>(
+                            RequestMethod::JobCancel,
+                            CancelJobParams {
+                                job_id: batch_id.clone(),
+                                reason: "Pipeline cancelled before Batch status became visible".into(),
+                            },
+                        )
+                        .await;
+                }
+            }
             stop_requested = true;
         } else if !stop_requested && interrupt.load(Ordering::Acquire) {
-            let _ = tt_batch_interrupt(batch_id.clone(), Some("Pipeline interrupted by user".into())).await;
+            if tt_batch_interrupt(batch_id.clone(), Some("Pipeline interrupted by user".into()))
+                .await
+                .is_err()
+            {
+                if let Ok(client) = WorkerManager::global().client() {
+                    let _ = client
+                        .request::<_, JobSnapshot>(
+                            RequestMethod::JobCancel,
+                            CancelJobParams {
+                                job_id: batch_id.clone(),
+                                reason: "Pipeline interrupted before Batch status became visible".into(),
+                            },
+                        )
+                        .await;
+                }
+            }
             stop_requested = true;
         }
-        let status = tt_batch_status(batch_id.clone()).await?;
+
+        let status = match tt_batch_status(batch_id.clone()).await {
+            Ok(status) => {
+                status_error_started = None;
+                status
+            }
+            Err(batch_error) => {
+                let error_started = *status_error_started.get_or_insert_with(tokio::time::Instant::now);
+                let manager = WorkerManager::global();
+                let job_status = match manager.client() {
+                    Ok(client) => client
+                        .request::<_, JobSnapshot>(
+                            RequestMethod::JobStatus,
+                            JobIdParams {
+                                job_id: batch_id.clone(),
+                            },
+                        )
+                        .await
+                        .map_err(|error| error.to_string()),
+                    Err(error) => Err(error.to_string()),
+                };
+                match job_status {
+                    Ok(job) if job.state.terminal() => {
+                        let _ = manager.mark_ready(&batch_id);
+                        return Err(format!("BATCH_STATUS_UNAVAILABLE_AFTER_JOB_TERMINAL: {batch_error}"));
+                    }
+                    Ok(_) => {
+                        if !reconciliation_started && error_started.elapsed() >= Duration::from_secs(15) {
+                            pipeline_checkpoint(manifest, PipelineStage::ReconcilingBatch)?;
+                            if let Ok(client) = manager.client() {
+                                let _ = client
+                                    .request::<_, JobSnapshot>(
+                                        RequestMethod::JobCancel,
+                                        CancelJobParams {
+                                            job_id: batch_id.clone(),
+                                            reason: "Batch manifest did not become visible during startup".into(),
+                                        },
+                                    )
+                                    .await;
+                            }
+                            reconciliation_started = true;
+                            stop_requested = true;
+                        }
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                        continue;
+                    }
+                    Err(_job_error) if manager.state() == WorkerManagerState::Busy => {
+                        if !reconciliation_started {
+                            pipeline_checkpoint(manifest, PipelineStage::ReconcilingBatch)?;
+                            reconciliation_started = true;
+                        }
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        continue;
+                    }
+                    Err(job_error) => {
+                        return Err(format!(
+                            "BATCH_STATUS_RECONCILIATION_FAILED: {batch_error}; job status: {job_error}"
+                        ));
+                    }
+                }
+            }
+        };
+
+        let batch_visible = status.get("batch").is_some_and(|batch| !batch.is_null());
+        if !batch_visible {
+            let job_terminal = status
+                .pointer("/job/state")
+                .and_then(Value::as_str)
+                .is_some_and(terminal_batch_state);
+            if job_terminal {
+                let _ = WorkerManager::global().mark_ready(&batch_id);
+                return Err(
+                    "BATCH_MANIFEST_UNAVAILABLE_AFTER_JOB_TERMINAL: the Worker Job ended before its Batch manifest became visible"
+                        .into(),
+                );
+            }
+            if WorkerManager::global().state() != WorkerManagerState::Busy {
+                return Err("BATCH_MANIFEST_UNAVAILABLE: no active Worker Job owns the requested Batch".into());
+            }
+            if !reconciliation_started && startup_started.elapsed() >= Duration::from_secs(15) {
+                pipeline_checkpoint(manifest, PipelineStage::ReconcilingBatch)?;
+                if let Ok(client) = WorkerManager::global().client() {
+                    let _ = client
+                        .request::<_, JobSnapshot>(
+                            RequestMethod::JobCancel,
+                            CancelJobParams {
+                                job_id: batch_id.clone(),
+                                reason: "Batch manifest did not become visible during startup".into(),
+                            },
+                        )
+                        .await;
+                }
+                reconciliation_started = true;
+                stop_requested = true;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            continue;
+        }
+        if !batch_confirmed {
+            pipeline_checkpoint(manifest, PipelineStage::RunningBatch)?;
+            batch_confirmed = true;
+        }
         if let Some(state) = status
             .pointer("/batch/state")
             .and_then(Value::as_str)
             .filter(|state| terminal_batch_state(state))
         {
+            if !batch_status_can_release_capture(&status) {
+                if manifest.stage != PipelineStage::FinalizingBatch {
+                    pipeline_checkpoint(manifest, PipelineStage::FinalizingBatch)?;
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                continue;
+            }
             manifest.runs[index].observed_protocol = observed_run_protocol(&run.output_path);
             return Ok(match state {
                 "completed" => PipelineRunState::Completed,
@@ -1590,7 +1732,12 @@ async fn execute_pipeline_run(
                 _ => PipelineRunState::Failed,
             });
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(if batch_confirmed {
+            Duration::from_secs(1)
+        } else {
+            Duration::from_millis(250)
+        })
+        .await;
     }
 }
 
