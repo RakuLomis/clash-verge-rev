@@ -209,6 +209,7 @@ export interface PipelineRun {
   output_path: string
   error: { code: string; message: string } | null
   quality?: PipelineRunQuality
+  evidence?: PipelineRunEvidence
   resume_attempt: number
   started_at: string | null
   completed_at: string | null
@@ -241,6 +242,60 @@ export interface PipelineRunQuality {
   application_issues: PipelineApplicationIssue[]
 }
 
+export interface PipelineProxySnapshot {
+  profile_uid: string
+  profile_fingerprint: string
+  selection_group: string
+  selected_node: string
+  resolved_chain: string[]
+  resolved_leaf: string
+  protocol: string
+  captured_at: string
+}
+
+export interface PipelineConnectionDrain {
+  state: 'drained' | 'timeout' | 'controller_unavailable' | 'close_failed'
+  initial_connections: number | null
+  final_connections: number | null
+  polls: number
+  quiet_millis: number
+  error: string | null
+  completed_at: string
+}
+
+export interface PipelineRunVerification {
+  node_state: 'passed' | 'node_drift' | 'observation_unavailable'
+  protocol_state: 'passed' | 'protocol_mismatch' | 'observation_unavailable'
+  observed_protocols: string[]
+  observed_selected_nodes: string[]
+  observed_leaf_nodes: string[]
+  details: string[]
+  checked_at: string
+}
+
+export interface PipelineRunEvidence {
+  selection_snapshot?: PipelineProxySnapshot
+  drain?: PipelineConnectionDrain
+  pre_batch_snapshot?: PipelineProxySnapshot
+  end_snapshot?: PipelineProxySnapshot
+  verification?: PipelineRunVerification
+}
+
+export interface PipelineRestoreCheck {
+  component: 'profile' | 'selector'
+  target: string
+  requested: string
+  observed: string | null
+  state:
+    | 'passed'
+    | 'request_failed'
+    | 'controller_unavailable'
+    | 'readback_mismatch'
+  code: string | null
+  message: string | null
+  checked_at: string
+}
+
 export interface PipelineListEntry {
   pipeline_id: string
   output_root: string
@@ -251,7 +306,7 @@ export interface PipelineListEntry {
 }
 
 export interface PipelineManifest {
-  schema_version: 2
+  schema_version: 3
   pipeline_id: string
   state: PipelineState
   stage: PipelineStage
@@ -269,7 +324,10 @@ export interface PipelineManifest {
   runs: PipelineRun[]
   restore: {
     profile_uid: string | null
+    profile_fingerprint?: string
+    terminal_state?: PipelineState
     selections: Array<{ group: string; node: string }>
+    checks: PipelineRestoreCheck[]
     state: 'pending' | 'not_required' | 'restoring' | 'restored' | 'failed'
     error: { code: string; message: string } | null
   }

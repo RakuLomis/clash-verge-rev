@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-pub const PIPELINE_SCHEMA_VERSION: u32 = 2;
+pub const PIPELINE_SCHEMA_VERSION: u32 = 3;
 const PIPELINE_MIN_SCHEMA_VERSION: u32 = 1;
 pub const PIPELINE_MANIFEST_NAME: &str = "pipeline-manifest.json";
 
@@ -116,6 +116,58 @@ pub struct PipelineRunQuality {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct PipelineProxySnapshot {
+    pub profile_uid: String,
+    pub profile_fingerprint: String,
+    pub selection_group: String,
+    pub selected_node: String,
+    pub resolved_chain: Vec<String>,
+    pub resolved_leaf: String,
+    pub protocol: String,
+    pub captured_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PipelineConnectionDrain {
+    pub state: String,
+    pub initial_connections: Option<usize>,
+    pub final_connections: Option<usize>,
+    pub polls: usize,
+    pub quiet_millis: u64,
+    pub error: Option<String>,
+    pub completed_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PipelineRunVerification {
+    pub node_state: String,
+    pub protocol_state: String,
+    pub observed_protocols: Vec<String>,
+    pub observed_selected_nodes: Vec<String>,
+    pub observed_leaf_nodes: Vec<String>,
+    pub details: Vec<String>,
+    pub checked_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PipelineRunEvidence {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_snapshot: Option<PipelineProxySnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain: Option<PipelineConnectionDrain>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_batch_snapshot: Option<PipelineProxySnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_snapshot: Option<PipelineProxySnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<PipelineRunVerification>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PipelineTarget {
     pub index: usize,
     pub url: String,
@@ -172,6 +224,19 @@ pub struct PipelineSelection {
     pub node: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PipelineRestoreCheck {
+    pub component: String,
+    pub target: String,
+    pub requested: String,
+    pub observed: Option<String>,
+    pub state: String,
+    pub code: Option<String>,
+    pub message: Option<String>,
+    pub checked_at: DateTime<Utc>,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RestoreState {
@@ -186,7 +251,13 @@ pub enum RestoreState {
 #[serde(deny_unknown_fields)]
 pub struct PipelineRestore {
     pub profile_uid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_state: Option<PipelineState>,
     pub selections: Vec<PipelineSelection>,
+    #[serde(default)]
+    pub checks: Vec<PipelineRestoreCheck>,
     pub state: RestoreState,
     pub error: Option<PipelineError>,
 }
@@ -211,6 +282,8 @@ pub struct PipelineRun {
     pub error: Option<PipelineError>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality: Option<PipelineRunQuality>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<PipelineRunEvidence>,
     pub resume_attempt: u32,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
@@ -295,6 +368,7 @@ impl PipelineManifest {
                 )),
                 error: None,
                 quality: None,
+                evidence: None,
                 resume_attempt: 0,
                 started_at: None,
                 completed_at: None,
@@ -399,6 +473,7 @@ impl PipelineManifest {
         run.stage = PipelineStage::ActivatingProfile;
         run.error = None;
         run.quality = None;
+        run.evidence = None;
         run.started_at.get_or_insert_with(Utc::now);
         self.state = PipelineState::Running;
         self.stage = PipelineStage::ActivatingProfile;
@@ -483,7 +558,10 @@ mod tests {
                 },
                 PipelineRestore {
                     profile_uid: Some("profile-one".into()),
+                    profile_fingerprint: None,
+                    terminal_state: None,
                     selections: vec![],
+                    checks: vec![],
                     state: RestoreState::Pending,
                     error: None,
                 },
@@ -528,7 +606,10 @@ mod tests {
             },
             PipelineRestore {
                 profile_uid: None,
+                profile_fingerprint: None,
+                terminal_state: None,
                 selections: vec![],
+                checks: vec![],
                 state: RestoreState::Pending,
                 error: None,
             },
@@ -570,7 +651,10 @@ mod tests {
             },
             PipelineRestore {
                 profile_uid: None,
+                profile_fingerprint: None,
+                terminal_state: None,
                 selections: vec![],
+                checks: vec![],
                 state: RestoreState::Pending,
                 error: None,
             },
@@ -601,7 +685,10 @@ mod tests {
             },
             PipelineRestore {
                 profile_uid: None,
+                profile_fingerprint: None,
+                terminal_state: None,
                 selections: vec![],
+                checks: vec![],
                 state: RestoreState::Pending,
                 error: None,
             },
@@ -610,6 +697,10 @@ mod tests {
         let mut legacy = serde_json::to_value(manifest).unwrap();
         legacy["schema_version"] = serde_json::json!(1);
         legacy["runs"][0].as_object_mut().unwrap().remove("quality");
+        legacy["runs"][0].as_object_mut().unwrap().remove("evidence");
+        legacy["restore"].as_object_mut().unwrap().remove("profile_fingerprint");
+        legacy["restore"].as_object_mut().unwrap().remove("terminal_state");
+        legacy["restore"].as_object_mut().unwrap().remove("checks");
         fs::create_dir_all(&root).unwrap();
         let path = root.join(PIPELINE_MANIFEST_NAME);
         fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
@@ -617,6 +708,8 @@ mod tests {
         let loaded = PipelineManifest::load(path).unwrap();
         assert_eq!(loaded.schema_version, PIPELINE_SCHEMA_VERSION);
         assert!(loaded.runs[0].quality.is_none());
+        assert!(loaded.runs[0].evidence.is_none());
+        assert!(loaded.restore.checks.is_empty());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -638,7 +731,10 @@ mod tests {
             },
             PipelineRestore {
                 profile_uid: None,
+                profile_fingerprint: None,
+                terminal_state: None,
                 selections: vec![],
+                checks: vec![],
                 state: RestoreState::Pending,
                 error: None,
             },

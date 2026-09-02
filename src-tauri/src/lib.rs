@@ -186,6 +186,7 @@ mod app_init {
             cmd::tt_pipeline_status,
             cmd::tt_pipeline_list,
             cmd::tt_pipeline_resume,
+            cmd::tt_pipeline_retry_restore,
             cmd::tt_pipeline_interrupt,
             cmd::tt_pipeline_cancel,
             cmd::tt_capture_start,

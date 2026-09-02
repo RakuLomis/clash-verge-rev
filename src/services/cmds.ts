@@ -653,6 +653,12 @@ export function resumeTrafficTracerPipeline(pipelineRoot: string) {
   })
 }
 
+export function retryTrafficTracerPipelineRestore(pipelineRoot: string) {
+  return invoke<TrafficTracer.PipelineManifest>('tt_pipeline_retry_restore', {
+    pipelineRoot,
+  })
+}
+
 export function getTrafficTracerPipeline(pipelineRoot: string) {
   return invoke<TrafficTracer.PipelineManifest>('tt_pipeline_status', {
     pipelineRoot,

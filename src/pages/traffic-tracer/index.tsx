@@ -33,6 +33,7 @@ import {
   getTrafficTracerPipeline,
   interruptTrafficTracerPipeline,
   listTrafficTracerPipelines,
+  retryTrafficTracerPipelineRestore,
   resumeTrafficTracerPipeline,
   startTrafficTracerPipeline,
 } from '@/services/cmds'
@@ -372,6 +373,33 @@ const TrafficTracerPage = () => {
     }
   }
 
+  const handleRetryPipelineRestore = async () => {
+    if (!pipelineLocator) return
+    setPipelineActionPending(true)
+    try {
+      const restored = await retryTrafficTracerPipelineRestore(
+        pipelineLocator.output_root,
+      )
+      setPipeline(restored)
+      if (restored.state === 'restore_failed') {
+        const error = restored.restore.error ?? {
+          code: 'RESTORE_FAILED',
+          message: 'Pipeline restoration readback did not pass.',
+        }
+        recordStartFailure(error, 'pipeline.restore')
+        showNotice.error(error)
+        return
+      }
+      clearStartFailure()
+      showNotice.success('TrafficTracer pipeline restoration completed.')
+    } catch (error) {
+      recordStartFailure(error, 'pipeline.restore')
+      showNotice.error(error)
+    } finally {
+      setPipelineActionPending(false)
+    }
+  }
+
   const handlePipelineStop = async (cancel: boolean) => {
     if (!pipeline) return
     setPipelineActionPending(true)
@@ -643,6 +671,59 @@ const TrafficTracerPage = () => {
                 ))}
               </Stack>
             )}
+            {displayedPipelineRun?.evidence?.drain && (
+              <Box sx={{ mt: 1, opacity: 0.8 }}>
+                Connection drain:{' '}
+                {displayedPipelineRun.evidence.drain.state.replaceAll('_', ' ')}
+                {' · '}
+                {displayedPipelineRun.evidence.drain.initial_connections ?? '?'}
+                {' → '}
+                {displayedPipelineRun.evidence.drain.final_connections ?? '?'}
+                {' · '}
+                {displayedPipelineRun.evidence.drain.quiet_millis}ms quiet
+              </Box>
+            )}
+            {displayedPipelineRun?.evidence?.verification && (
+              <Stack
+                direction="row"
+                spacing={0.75}
+                useFlexGap
+                sx={{ mt: 1, flexWrap: 'wrap' }}
+              >
+                {(
+                  [
+                    [
+                      'Node evidence',
+                      displayedPipelineRun.evidence.verification.node_state,
+                    ],
+                    [
+                      'Protocol evidence',
+                      displayedPipelineRun.evidence.verification.protocol_state,
+                    ],
+                  ] as const
+                ).map(([label, state]) => (
+                  <Chip
+                    key={label}
+                    size="small"
+                    label={`${label}: ${state.replaceAll('_', ' ')}`}
+                    color={
+                      state === 'node_drift' || state === 'protocol_mismatch'
+                        ? 'error'
+                        : state === 'observation_unavailable'
+                          ? 'warning'
+                          : 'success'
+                    }
+                  />
+                ))}
+              </Stack>
+            )}
+            {displayedPipelineRun?.evidence?.verification?.details.map(
+              (detail) => (
+                <Box key={detail} sx={{ mt: 0.5, opacity: 0.75 }}>
+                  {detail}
+                </Box>
+              ),
+            )}
             {displayedPipelineRun?.quality?.application_issues.map((issue) => (
               <Box
                 key={`${issue.session_id}:${issue.target_url}`}
@@ -676,6 +757,30 @@ const TrafficTracerPage = () => {
                 {pipelineError.code}: {pipelineError.message}
               </Box>
             )}
+            {pipeline.restore.error && (
+              <Box
+                sx={{
+                  mt: 1,
+                  fontFamily: 'monospace',
+                  overflowWrap: 'anywhere',
+                }}
+              >
+                Restore {pipeline.restore.error.code}:{' '}
+                {pipeline.restore.error.message}
+              </Box>
+            )}
+            {pipeline.restore.checks
+              .filter((check) => check.state !== 'passed')
+              .map((check) => (
+                <Box
+                  key={`${check.component}:${check.target}:${check.checked_at}`}
+                  sx={{ mt: 0.5, opacity: 0.8, overflowWrap: 'anywhere' }}
+                >
+                  Restore {check.component} {check.target}:{' '}
+                  {check.state.replaceAll('_', ' ')}
+                  {check.observed && ` · observed ${check.observed}`}
+                </Box>
+              ))}
             {pipeline.state === 'interrupted' && (
               <Button
                 size="small"
@@ -685,6 +790,17 @@ const TrafficTracerPage = () => {
                 onClick={() => void handleResumePipeline()}
               >
                 Resume pipeline
+              </Button>
+            )}
+            {pipeline.state === 'restore_failed' && (
+              <Button
+                size="small"
+                variant="contained"
+                sx={{ mt: 1 }}
+                disabled={pipelineActionPending || Boolean(captureLock?.locked)}
+                onClick={() => void handleRetryPipelineRestore()}
+              >
+                Retry restoration
               </Button>
             )}
             {!pipelineTerminal.has(pipeline.state) && (

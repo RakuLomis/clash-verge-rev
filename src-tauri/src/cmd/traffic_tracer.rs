@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Url};
+use tauri_plugin_mihomo::models::Proxies;
 
 use super::{CmdResult, StringifyErr as _};
 use crate::{
@@ -27,9 +28,10 @@ use crate::{
             manager::{WorkerManager, WorkerManagerState, WorkerRecoveryReport, WorkerRecoveryStatus},
             pipeline::{
                 PIPELINE_MANIFEST_NAME, PipelineApplicationIssue, PipelineCandidate, PipelineConfigSnapshot,
-                PipelineError, PipelineManifest, PipelinePolicy, PipelineQualityPlane, PipelineRestore,
-                PipelineRunQuality, PipelineRunState, PipelineSelection, PipelineStage, PipelineState, PipelineTarget,
-                RestoreState,
+                PipelineConnectionDrain, PipelineError, PipelineManifest, PipelinePolicy, PipelineProxySnapshot,
+                PipelineQualityPlane, PipelineRestore, PipelineRestoreCheck, PipelineRunEvidence, PipelineRunQuality,
+                PipelineRunState, PipelineRunVerification, PipelineSelection, PipelineStage, PipelineState,
+                PipelineTarget, RestoreState,
             },
             protocol::{JOB_SCHEMA_VERSION, RequestMethod},
         },
@@ -42,6 +44,12 @@ const DEFAULT_CHROME_BINARY: &str = "google-chrome";
 const CAPTURE_LOCK_REASON: &str = "TrafficTracer capture is active";
 
 const UI_HEARTBEAT_WARN_AFTER_MS: u64 = 12_000;
+const PIPELINE_CONTROLLER_TIMEOUT: Duration = Duration::from_secs(15);
+const PIPELINE_SELECTION_TIMEOUT: Duration = Duration::from_secs(8);
+const PIPELINE_END_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(3);
+const PIPELINE_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+const PIPELINE_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const PIPELINE_MIN_QUIET: Duration = Duration::from_millis(750);
 
 struct UiHeartbeatState {
     active: AtomicBool,
@@ -872,7 +880,7 @@ pub async fn tt_pipeline_current_candidate(request: PipelineCurrentCandidateRequ
         .await
         .get_proxies()
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("CONTROLLER_UNAVAILABLE: {error}"))?;
     let group = proxies.proxies.get(request.selection_group.as_str()).ok_or_else(|| {
         smartstring::alias::String::from("pipeline selector group is not present in the active runtime")
     })?;
@@ -1218,8 +1226,344 @@ fn pipeline_batch_from_manifest(manifest: &PipelineManifest) -> Result<BatchStar
     })
 }
 
-fn observed_run_protocol(output_path: &Path) -> String {
-    fn scan(path: &Path, depth: usize, protocols: &mut std::collections::BTreeSet<String>) {
+#[derive(Clone, Debug)]
+struct PipelineBarrierError {
+    code: &'static str,
+    message: String,
+}
+
+impl PipelineBarrierError {
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    fn render(&self) -> String {
+        format!("{}: {}", self.code, self.message)
+    }
+}
+
+fn normalize_proxy_protocol(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| !matches!(character, '-' | '_'))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn proxy_snapshot_from_runtime(
+    proxies: &Proxies,
+    profile_uid: String,
+    profile_fingerprint: String,
+    selection_group: &str,
+) -> Result<PipelineProxySnapshot, PipelineBarrierError> {
+    let group = proxies
+        .proxies
+        .get(selection_group)
+        .ok_or_else(|| PipelineBarrierError::new("SELECTOR_NOT_FOUND", "selector is absent from the active runtime"))?;
+    let selected_node = group.now.clone().ok_or_else(|| {
+        PipelineBarrierError::new(
+            "SELECTOR_READBACK_UNAVAILABLE",
+            "selector does not expose its current node",
+        )
+    })?;
+    let mut resolved_chain = vec![selected_node.clone()];
+    let mut resolved_leaf = selected_node.clone();
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        if !seen.insert(resolved_leaf.clone()) {
+            return Err(PipelineBarrierError::new(
+                "PROXY_CHAIN_CYCLE",
+                "selected proxy chain contains a cycle",
+            ));
+        }
+        let proxy = proxies.proxies.get(resolved_leaf.as_str()).ok_or_else(|| {
+            PipelineBarrierError::new(
+                "PROXY_LEAF_NOT_FOUND",
+                "selected node is absent from the active runtime",
+            )
+        })?;
+        let Some(next) = proxy.now.as_ref() else {
+            let protocol = serde_json::to_value(&proxy.proxy_type)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .map(|value| normalize_proxy_protocol(&value))
+                .unwrap_or_else(|| "unknown".into());
+            return Ok(PipelineProxySnapshot {
+                profile_uid,
+                profile_fingerprint,
+                selection_group: selection_group.to_owned(),
+                selected_node,
+                resolved_chain,
+                resolved_leaf,
+                protocol,
+                captured_at: Utc::now(),
+            });
+        };
+        resolved_leaf = next.clone();
+        resolved_chain.push(resolved_leaf.clone());
+        if resolved_chain.len() > 16 {
+            return Err(PipelineBarrierError::new(
+                "PROXY_CHAIN_TOO_DEEP",
+                "selected proxy chain exceeds 16 hops",
+            ));
+        }
+    }
+}
+
+async fn read_pipeline_proxy_snapshot(selection_group: &str) -> Result<PipelineProxySnapshot, PipelineBarrierError> {
+    let profile_uid = Config::profiles()
+        .await
+        .latest_arc()
+        .current
+        .clone()
+        .map(String::from)
+        .ok_or_else(|| PipelineBarrierError::new("PROFILE_READBACK_UNAVAILABLE", "no active Profile is reported"))?;
+    let profile_fingerprint = effective_runtime_fingerprint()
+        .map_err(|error| PipelineBarrierError::new("PROFILE_FINGERPRINT_UNAVAILABLE", error.to_string()))?;
+    let proxies = handle::Handle::mihomo()
+        .await
+        .get_proxies()
+        .await
+        .map_err(|error| PipelineBarrierError::new("CONTROLLER_UNAVAILABLE", error.to_string()))?;
+    proxy_snapshot_from_runtime(&proxies, profile_uid, profile_fingerprint, selection_group)
+}
+
+async fn wait_for_profile_controller(
+    expected_profile: &str,
+    expected_fingerprint: Option<&str>,
+    timeout: Duration,
+) -> Result<(), PipelineBarrierError> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let current = Config::profiles().await.latest_arc().current.clone().map(String::from);
+        let current_error = if current.as_deref() != Some(expected_profile) {
+            PipelineBarrierError::new(
+                "PROFILE_READBACK_MISMATCH",
+                format!(
+                    "expected Profile {expected_profile}; observed {}",
+                    current.as_deref().unwrap_or("none")
+                ),
+            )
+        } else {
+            match effective_runtime_fingerprint() {
+                Ok(fingerprint) if expected_fingerprint.is_none_or(|expected| fingerprint == expected) => {
+                    match handle::Handle::mihomo().await.get_proxies().await {
+                        Ok(_) => return Ok(()),
+                        Err(error) => PipelineBarrierError::new("CONTROLLER_UNAVAILABLE", error.to_string()),
+                    }
+                }
+                Ok(fingerprint) => PipelineBarrierError::new(
+                    "PROFILE_FINGERPRINT_MISMATCH",
+                    format!("effective runtime fingerprint is {fingerprint}"),
+                ),
+                Err(error) => PipelineBarrierError::new("PROFILE_FINGERPRINT_UNAVAILABLE", error.to_string()),
+            }
+        };
+        if tokio::time::Instant::now() >= deadline {
+            return Err(current_error);
+        }
+        tokio::time::sleep(PIPELINE_POLL_INTERVAL).await;
+    }
+}
+
+async fn wait_for_selected_snapshot(
+    expected_profile: &str,
+    expected_fingerprint: &str,
+    selection_group: &str,
+    expected_node: &str,
+    timeout: Duration,
+) -> Result<PipelineProxySnapshot, PipelineBarrierError> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let current_error = match read_pipeline_proxy_snapshot(selection_group).await {
+            Ok(snapshot)
+                if snapshot.profile_uid == expected_profile
+                    && snapshot.profile_fingerprint == expected_fingerprint
+                    && snapshot.selected_node == expected_node =>
+            {
+                return Ok(snapshot);
+            }
+            Ok(snapshot) => {
+                let (code, message) = if snapshot.profile_uid != expected_profile {
+                    (
+                        "PROFILE_READBACK_MISMATCH",
+                        format!("expected Profile {expected_profile}; observed {}", snapshot.profile_uid),
+                    )
+                } else if snapshot.profile_fingerprint != expected_fingerprint {
+                    (
+                        "PROFILE_FINGERPRINT_MISMATCH",
+                        "effective runtime changed after the candidate was queued".into(),
+                    )
+                } else {
+                    (
+                        "NODE_READBACK_MISMATCH",
+                        format!("expected node {expected_node}; observed {}", snapshot.selected_node),
+                    )
+                };
+                PipelineBarrierError::new(code, message)
+            }
+            Err(error) => error,
+        };
+        if tokio::time::Instant::now() >= deadline {
+            return Err(current_error);
+        }
+        tokio::time::sleep(PIPELINE_POLL_INTERVAL).await;
+    }
+}
+
+async fn wait_for_end_snapshot(
+    selection_group: &str,
+    expected_profile: &str,
+    expected_fingerprint: &str,
+    timeout: Duration,
+) -> Result<PipelineProxySnapshot, PipelineBarrierError> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let current_error = match read_pipeline_proxy_snapshot(selection_group).await {
+            Ok(snapshot) => return Ok(snapshot),
+            Err(error) => {
+                let current = Config::profiles().await.latest_arc().current.clone().map(String::from);
+                if current.as_deref() != Some(expected_profile) {
+                    PipelineBarrierError::new(
+                        "PROFILE_READBACK_MISMATCH",
+                        format!(
+                            "expected Profile {expected_profile}; observed {}",
+                            current.as_deref().unwrap_or("none")
+                        ),
+                    )
+                } else if effective_runtime_fingerprint().is_ok_and(|value| value != expected_fingerprint) {
+                    PipelineBarrierError::new(
+                        "PROFILE_FINGERPRINT_MISMATCH",
+                        "effective runtime changed during the Batch",
+                    )
+                } else {
+                    error
+                }
+            }
+        };
+        if tokio::time::Instant::now() >= deadline {
+            return Err(current_error);
+        }
+        tokio::time::sleep(PIPELINE_POLL_INTERVAL).await;
+    }
+}
+
+fn proxy_snapshots_match(left: &PipelineProxySnapshot, right: &PipelineProxySnapshot) -> bool {
+    left.profile_uid == right.profile_uid
+        && left.profile_fingerprint == right.profile_fingerprint
+        && left.selection_group == right.selection_group
+        && left.selected_node == right.selected_node
+        && left.resolved_chain == right.resolved_chain
+        && left.resolved_leaf == right.resolved_leaf
+        && left.protocol == right.protocol
+}
+
+async fn drain_pipeline_connections() -> PipelineConnectionDrain {
+    let initial = handle::Handle::mihomo().await.get_connections().await;
+    let old_connection_ids = match initial {
+        Ok(value) => value
+            .connections
+            .unwrap_or_default()
+            .into_iter()
+            .map(|connection| connection.id)
+            .collect::<std::collections::HashSet<_>>(),
+        Err(error) => {
+            let _ = handle::Handle::mihomo().await.close_all_connections().await;
+            return PipelineConnectionDrain {
+                state: "controller_unavailable".into(),
+                initial_connections: None,
+                final_connections: None,
+                polls: 0,
+                quiet_millis: 0,
+                error: Some(error.to_string()),
+                completed_at: Utc::now(),
+            };
+        }
+    };
+    let initial_connections = Some(old_connection_ids.len());
+    if let Err(error) = handle::Handle::mihomo().await.close_all_connections().await {
+        return PipelineConnectionDrain {
+            state: "close_failed".into(),
+            initial_connections,
+            final_connections: initial_connections,
+            polls: 0,
+            quiet_millis: 0,
+            error: Some(error.to_string()),
+            completed_at: Utc::now(),
+        };
+    }
+
+    let deadline = tokio::time::Instant::now() + PIPELINE_DRAIN_TIMEOUT;
+    let mut quiet_started = None;
+    let mut polls = 0;
+    let mut final_connections = None;
+    loop {
+        polls += 1;
+        let poll_error = match handle::Handle::mihomo().await.get_connections().await {
+            Ok(value) => {
+                let count = value
+                    .connections
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|connection| old_connection_ids.contains(&connection.id))
+                    .count();
+                final_connections = Some(count);
+                if count == 0 {
+                    let started = *quiet_started.get_or_insert_with(tokio::time::Instant::now);
+                    if started.elapsed() >= PIPELINE_MIN_QUIET {
+                        return PipelineConnectionDrain {
+                            state: "drained".into(),
+                            initial_connections,
+                            final_connections,
+                            polls,
+                            quiet_millis: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+                            error: None,
+                            completed_at: Utc::now(),
+                        };
+                    }
+                } else {
+                    quiet_started = None;
+                }
+                None
+            }
+            Err(error) => {
+                quiet_started = None;
+                Some(error.to_string())
+            }
+        };
+        if tokio::time::Instant::now() >= deadline {
+            return PipelineConnectionDrain {
+                state: if final_connections.is_some() {
+                    "timeout"
+                } else {
+                    "controller_unavailable"
+                }
+                .into(),
+                initial_connections,
+                final_connections,
+                polls,
+                quiet_millis: 0,
+                error: poll_error,
+                completed_at: Utc::now(),
+            };
+        }
+        tokio::time::sleep(PIPELINE_POLL_INTERVAL).await;
+    }
+}
+
+#[derive(Default)]
+struct ObservedRunEvidence {
+    protocols: std::collections::BTreeSet<String>,
+    selected_nodes: std::collections::BTreeSet<String>,
+    leaf_nodes: std::collections::BTreeSet<String>,
+    contexts: usize,
+}
+
+fn observed_run_evidence(output_path: &Path) -> ObservedRunEvidence {
+    fn scan(path: &Path, depth: usize, evidence: &mut ObservedRunEvidence) {
         if depth > 8 {
             return;
         }
@@ -1227,7 +1571,7 @@ fn observed_run_protocol(output_path: &Path) -> String {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                scan(&path, depth + 1, protocols);
+                scan(&path, depth + 1, evidence);
                 continue;
             }
             if path.file_name().and_then(|name| name.to_str()) != Some("capture-context.json") {
@@ -1240,20 +1584,143 @@ fn observed_run_protocol(output_path: &Path) -> String {
             else {
                 continue;
             };
+            evidence.contexts += 1;
             if let Some(items) = value
                 .pointer("/proxy_protocol/runtime_observation/protocols")
                 .and_then(Value::as_array)
             {
-                protocols.extend(items.iter().filter_map(Value::as_str).map(str::to_owned));
+                evidence.protocols.extend(
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(normalize_proxy_protocol)
+                        .filter(|value| !value.is_empty()),
+                );
+            }
+            if let Some(node) = value
+                .pointer("/proxy_protocol/selected_scope/node")
+                .and_then(Value::as_str)
+            {
+                evidence.selected_nodes.insert(node.to_owned());
+            }
+            if let Some(node) = value
+                .pointer("/proxy_protocol/selected_scope/leaf_node")
+                .and_then(Value::as_str)
+            {
+                evidence.leaf_nodes.insert(node.to_owned());
             }
         }
     }
-    let mut protocols = std::collections::BTreeSet::new();
-    scan(output_path, 0, &mut protocols);
-    match protocols.len() {
+    let mut evidence = ObservedRunEvidence::default();
+    scan(output_path, 0, &mut evidence);
+    evidence
+}
+
+fn observed_run_protocol(evidence: &ObservedRunEvidence) -> String {
+    match evidence.protocols.len() {
         0 => String::new(),
-        1 => protocols.into_iter().next().unwrap_or_default(),
+        1 => evidence.protocols.iter().next().cloned().unwrap_or_default(),
         _ => "mixed".to_owned(),
+    }
+}
+
+fn classify_run_verification(
+    start: &PipelineProxySnapshot,
+    end: Option<&PipelineProxySnapshot>,
+    observed: &ObservedRunEvidence,
+    end_error: Option<&PipelineBarrierError>,
+) -> PipelineRunVerification {
+    let mut details = Vec::new();
+    let mut node_state = "passed";
+    match end {
+        Some(snapshot) if !proxy_snapshots_match(start, snapshot) => {
+            node_state = "node_drift";
+            details.push("Controller selection or resolved chain changed during the Batch".into());
+        }
+        None => {
+            node_state = if end_error.is_some_and(|error| {
+                matches!(
+                    error.code,
+                    "PROFILE_READBACK_MISMATCH" | "PROFILE_FINGERPRINT_MISMATCH" | "NODE_READBACK_MISMATCH"
+                )
+            }) {
+                "node_drift"
+            } else {
+                "observation_unavailable"
+            };
+            details.push(
+                end_error
+                    .map(PipelineBarrierError::render)
+                    .unwrap_or_else(|| "end-of-run Controller snapshot is unavailable".into()),
+            );
+        }
+        _ => {}
+    }
+    if observed.contexts == 0 || observed.selected_nodes.is_empty() {
+        if node_state == "passed" {
+            node_state = "observation_unavailable";
+        }
+        details.push("Session proxy selection snapshots are unavailable".into());
+    } else if observed.selected_nodes.len() != 1
+        || !observed.selected_nodes.contains(&start.selected_node)
+        || (!observed.leaf_nodes.is_empty()
+            && (observed.leaf_nodes.len() != 1 || !observed.leaf_nodes.contains(&start.resolved_leaf)))
+    {
+        node_state = "node_drift";
+        details.push("Session snapshots do not agree with the frozen node chain".into());
+    }
+
+    let expected_protocol = normalize_proxy_protocol(&start.protocol);
+    let mut protocol_state =
+        if observed.protocols.is_empty() || expected_protocol.is_empty() || expected_protocol == "unknown" {
+            "observation_unavailable"
+        } else if observed.protocols.len() == 1 && observed.protocols.contains(&expected_protocol) {
+            "passed"
+        } else {
+            "protocol_mismatch"
+        };
+    if let Some(snapshot) = end
+        && normalize_proxy_protocol(&snapshot.protocol) != expected_protocol
+    {
+        protocol_state = "protocol_mismatch";
+        details.push("end-of-run leaf protocol differs from the frozen protocol".into());
+    }
+    if protocol_state == "observation_unavailable" {
+        details.push("bounded Mihomo trace contains no proxy protocol observation".into());
+    } else if protocol_state == "protocol_mismatch" {
+        details.push("bounded Mihomo trace protocol differs from the frozen protocol".into());
+    }
+
+    PipelineRunVerification {
+        node_state: node_state.into(),
+        protocol_state: protocol_state.into(),
+        observed_protocols: observed.protocols.iter().cloned().collect(),
+        observed_selected_nodes: observed.selected_nodes.iter().cloned().collect(),
+        observed_leaf_nodes: observed.leaf_nodes.iter().cloned().collect(),
+        details,
+        checked_at: Utc::now(),
+    }
+}
+
+fn verification_requires_attention(verification: &PipelineRunVerification) -> bool {
+    verification.node_state != "passed" || verification.protocol_state != "passed"
+}
+
+fn pipeline_run_error(message: String) -> PipelineError {
+    let code = message
+        .split_once(':')
+        .map(|(code, _)| code)
+        .filter(|code| {
+            !code.is_empty()
+                && code.len() <= 96
+                && code
+                    .chars()
+                    .all(|character| character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_')
+        })
+        .unwrap_or("PIPELINE_RUN_FAILED");
+    PipelineError {
+        code: code.into(),
+        message,
     }
 }
 
@@ -1501,6 +1968,9 @@ pub async fn tt_pipeline_start(
     let pipeline_id = new_job_id()?;
     let output_root = pipeline_directory(&request.batch.output_root, &pipeline_id)?;
     let original_profile = Config::profiles().await.latest_arc().current.clone();
+    let original_profile_fingerprint = original_profile
+        .as_ref()
+        .and_then(|_| effective_runtime_fingerprint().ok());
     let proxies = handle::Handle::mihomo()
         .await
         .get_proxies()
@@ -1544,7 +2014,10 @@ pub async fn tt_pipeline_start(
         },
         PipelineRestore {
             profile_uid: original_profile.map(Into::into),
+            profile_fingerprint: original_profile_fingerprint,
+            terminal_state: None,
             selections: restore_selections,
+            checks: vec![],
             state: RestoreState::Pending,
             error: None,
         },
@@ -1593,22 +2066,26 @@ async fn execute_pipeline_run(
             Some(pipeline_id),
         )
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("PROFILE_ACTIVATION_REQUEST_FAILED: {error}"))?;
         if !outcome.is_valid() {
             return Err(format!("PROFILE_ACTIVATION_FAILED: {outcome}"));
         }
     }
     pipeline_checkpoint(manifest, PipelineStage::WaitingController)?;
-    if effective_runtime_fingerprint().map_err(|error| error.to_string())? != run.profile_fingerprint {
-        return Err("PROFILE_FINGERPRINT_MISMATCH: effective runtime changed after the candidate was queued".into());
-    }
+    wait_for_profile_controller(
+        &run.profile_uid,
+        Some(&run.profile_fingerprint),
+        PIPELINE_CONTROLLER_TIMEOUT,
+    )
+    .await
+    .map_err(|error| error.render())?;
 
     pipeline_checkpoint(manifest, PipelineStage::SelectingProxy)?;
     let proxies = handle::Handle::mihomo()
         .await
         .get_proxies()
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("CONTROLLER_UNAVAILABLE: {error}"))?;
     let group = proxies
         .proxies
         .get(run.selection_group.as_str())
@@ -1624,57 +2101,40 @@ async fn execute_pipeline_run(
         .await
         .select_node_for_group(&run.selection_group, &run.requested_node)
         .await
-        .map_err(|error| error.to_string())?;
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let readback = handle::Handle::mihomo()
-        .await
-        .get_proxies()
-        .await
-        .map_err(|error| error.to_string())?;
-    if readback
-        .proxies
-        .get(run.selection_group.as_str())
-        .and_then(|group| group.now.as_deref())
-        != Some(run.requested_node.as_str())
-    {
-        return Err("NODE_READBACK_MISMATCH: Mihomo did not retain the requested selection".into());
-    }
-    let mut resolved_chain = vec![run.requested_node.clone()];
-    let mut resolved_leaf = run.requested_node.clone();
-    let mut seen = std::collections::HashSet::new();
-    loop {
-        if !seen.insert(resolved_leaf.clone()) {
-            return Err("PROXY_CHAIN_CYCLE: selected proxy chain contains a cycle".into());
-        }
-        let proxy = readback
-            .proxies
-            .get(resolved_leaf.as_str())
-            .ok_or_else(|| "PROXY_LEAF_NOT_FOUND: selected node is absent from the active runtime".to_owned())?;
-        let Some(next) = proxy.now.as_ref() else {
-            let value = serde_json::to_value(proxy).map_err(|error| error.to_string())?;
-            manifest.runs[index].expected_protocol = value
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown")
-                .to_ascii_lowercase();
-            break;
-        };
-        resolved_leaf = next.clone();
-        resolved_chain.push(resolved_leaf.clone());
-        if resolved_chain.len() > 16 {
-            return Err("PROXY_CHAIN_TOO_DEEP: selected proxy chain exceeds 16 hops".into());
-        }
-    }
-    manifest.runs[index].resolved_chain = resolved_chain;
-    manifest.runs[index].resolved_leaf = Some(resolved_leaf);
+        .map_err(|error| format!("NODE_SELECTION_REQUEST_FAILED: {error}"))?;
+    let selection_snapshot = wait_for_selected_snapshot(
+        &run.profile_uid,
+        &run.profile_fingerprint,
+        &run.selection_group,
+        &run.requested_node,
+        PIPELINE_SELECTION_TIMEOUT,
+    )
+    .await
+    .map_err(|error| error.render())?;
+    manifest.runs[index].resolved_chain = selection_snapshot.resolved_chain.clone();
+    manifest.runs[index].resolved_leaf = Some(selection_snapshot.resolved_leaf.clone());
+    manifest.runs[index].expected_protocol = selection_snapshot.protocol.clone();
+    manifest.runs[index]
+        .evidence
+        .get_or_insert_with(PipelineRunEvidence::default)
+        .selection_snapshot = Some(selection_snapshot.clone());
+    manifest.persist().map_err(|error| error.to_string())?;
 
     pipeline_checkpoint(manifest, PipelineStage::DrainingConnections)?;
-    handle::Handle::mihomo()
-        .await
-        .close_all_connections()
-        .await
-        .map_err(|error| error.to_string())?;
-    tokio::time::sleep(Duration::from_millis(750)).await;
+    let drain = drain_pipeline_connections().await;
+    let drain_state = drain.state.clone();
+    let drain_error = drain.error.clone();
+    manifest.runs[index]
+        .evidence
+        .get_or_insert_with(PipelineRunEvidence::default)
+        .drain = Some(drain);
+    manifest.persist().map_err(|error| error.to_string())?;
+    if drain_state != "drained" {
+        return Err(format!(
+            "CONNECTION_DRAIN_FAILED: state={drain_state}; {}",
+            drain_error.unwrap_or_else(|| "connections did not remain at zero before the deadline".into())
+        ));
+    }
     if interrupt.load(Ordering::Acquire) {
         return Ok(PipelineRunState::Interrupted);
     }
@@ -1687,23 +2147,41 @@ async fn execute_pipeline_run(
     batch.output_root = run.output_path.to_string_lossy().into_owned();
     batch.options.proxy_selection_group = run.selection_group.clone();
     batch.options.expected_proxy_protocol.clear();
+    let environment = tt_get_environment_for_owner(
+        app_handle.clone(),
+        EnvironmentRequest {
+            tun_interface: batch.tun_interface.clone(),
+            physical_interface: batch.physical_interface.clone(),
+            chrome_binary: batch.chrome_binary.clone(),
+            output_root: batch.output_root.clone(),
+            min_free_bytes: None,
+        },
+        Some(pipeline_id),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    if environment.level == CompleteEnvironmentLevel::Blocking {
+        return Err("TrafficTracer environment has blocking diagnostics".into());
+    }
+    let pre_batch_snapshot = wait_for_selected_snapshot(
+        &run.profile_uid,
+        &run.profile_fingerprint,
+        &run.selection_group,
+        &run.requested_node,
+        PIPELINE_SELECTION_TIMEOUT,
+    )
+    .await
+    .map_err(|error| error.render())?;
+    let pre_batch_matches = proxy_snapshots_match(&selection_snapshot, &pre_batch_snapshot);
+    manifest.runs[index]
+        .evidence
+        .get_or_insert_with(PipelineRunEvidence::default)
+        .pre_batch_snapshot = Some(pre_batch_snapshot);
+    manifest.persist().map_err(|error| error.to_string())?;
+    if !pre_batch_matches {
+        return Err("PRE_BATCH_NODE_DRIFT: selector chain changed after the connection drain".into());
+    }
     let snapshot = if let Some(batch_id) = run.batch_id {
-        let environment = tt_get_environment_for_owner(
-            app_handle.clone(),
-            EnvironmentRequest {
-                tun_interface: batch.tun_interface.clone(),
-                physical_interface: batch.physical_interface.clone(),
-                chrome_binary: batch.chrome_binary.clone(),
-                output_root: batch.output_root.clone(),
-                min_free_bytes: None,
-            },
-            Some(pipeline_id),
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-        if environment.level == CompleteEnvironmentLevel::Blocking {
-            return Err("TrafficTracer environment has blocking diagnostics".into());
-        }
         tt_batch_resume_for_owner(batch_id, Some(pipeline_id)).await
     } else {
         tt_batch_start_for_owner(
@@ -1882,12 +2360,48 @@ async fn execute_pipeline_run(
                 tokio::time::sleep(Duration::from_millis(250)).await;
                 continue;
             }
-            manifest.runs[index].observed_protocol = observed_run_protocol(&run.output_path);
+            pipeline_checkpoint(manifest, PipelineStage::VerifyingProtocol)?;
+            let observed = observed_run_evidence(&run.output_path);
+            manifest.runs[index].observed_protocol = observed_run_protocol(&observed);
+            let end_result = wait_for_end_snapshot(
+                &run.selection_group,
+                &run.profile_uid,
+                &run.profile_fingerprint,
+                PIPELINE_END_SNAPSHOT_TIMEOUT,
+            )
+            .await;
+            let (end_snapshot, end_error) = match end_result {
+                Ok(snapshot) => (Some(snapshot), None),
+                Err(error) => (None, Some(error)),
+            };
+            let start_snapshot = manifest.runs[index]
+                .evidence
+                .as_ref()
+                .and_then(|evidence| {
+                    evidence
+                        .pre_batch_snapshot
+                        .as_ref()
+                        .or(evidence.selection_snapshot.as_ref())
+                })
+                .cloned()
+                .ok_or_else(|| {
+                    "PIPELINE_START_SNAPSHOT_MISSING: pre-Batch node evidence was not persisted".to_owned()
+                })?;
+            let verification =
+                classify_run_verification(&start_snapshot, end_snapshot.as_ref(), &observed, end_error.as_ref());
+            let verification_requires_attention = verification_requires_attention(&verification);
+            let evidence = manifest.runs[index]
+                .evidence
+                .get_or_insert_with(PipelineRunEvidence::default);
+            evidence.end_snapshot = end_snapshot;
+            evidence.verification = Some(verification);
             let quality = pipeline_run_quality(&run.output_path);
             let quality_requires_attention = run_quality_requires_attention(&quality);
             manifest.runs[index].quality = Some(quality);
             return Ok(match state {
-                "completed" if quality_requires_attention => PipelineRunState::Degraded,
+                "completed" if quality_requires_attention || verification_requires_attention => {
+                    PipelineRunState::Degraded
+                }
                 "completed" => PipelineRunState::Completed,
                 "cancelled" => PipelineRunState::Cancelled,
                 "interrupted" => PipelineRunState::Interrupted,
@@ -1903,51 +2417,217 @@ async fn execute_pipeline_run(
     }
 }
 
+fn persist_restore_check(manifest: &mut PipelineManifest, check: PipelineRestoreCheck) {
+    manifest.restore.checks.push(check);
+    manifest.updated_at = Utc::now();
+    let _ = manifest.persist();
+}
+
+fn restore_check(
+    component: &str,
+    target: &str,
+    requested: &str,
+    observed: Option<String>,
+    state: &str,
+    error: Option<&PipelineBarrierError>,
+) -> PipelineRestoreCheck {
+    PipelineRestoreCheck {
+        component: component.into(),
+        target: target.into(),
+        requested: requested.into(),
+        observed,
+        state: state.into(),
+        code: error.map(|value| value.code.to_owned()),
+        message: error.map(|value| value.message.clone()),
+        checked_at: Utc::now(),
+    }
+}
+
 async fn restore_pipeline(manifest: &mut PipelineManifest, pipeline_id: &str) {
-    let terminal_state = manifest.state;
+    let terminal_state = if manifest.state == PipelineState::RestoreFailed {
+        manifest
+            .restore
+            .terminal_state
+            .unwrap_or(PipelineState::CompletedWithErrors)
+    } else {
+        manifest.state
+    };
+    manifest.restore.terminal_state = Some(terminal_state);
     manifest.state = PipelineState::Restoring;
     manifest.stage = PipelineStage::Restoring;
     manifest.restore.state = RestoreState::Restoring;
+    manifest.restore.error = None;
+    manifest.restore.checks.clear();
     manifest.updated_at = Utc::now();
     let _ = manifest.persist();
-    let result: Result<(), String> = async {
-        if let Some(profile_uid) = manifest.restore.profile_uid.clone()
-            && Config::profiles().await.latest_arc().current.as_deref() != Some(profile_uid.as_str())
-        {
-            let outcome = super::profile::patch_profiles_config_for_owner(
+    let mut failure: Option<PipelineBarrierError> = None;
+    let profile_uid = manifest.restore.profile_uid.clone();
+    let mut effective_restore_fingerprint = manifest.restore.profile_fingerprint.clone();
+
+    if let Some(profile_uid) = profile_uid.as_deref() {
+        if Config::profiles().await.latest_arc().current.as_deref() != Some(profile_uid) {
+            let request = super::profile::patch_profiles_config_for_owner(
                 IProfiles {
                     current: Some(profile_uid.into()),
                     items: None,
                 },
                 Some(pipeline_id),
             )
-            .await
-            .map_err(|error| error.to_string())?;
-            if !outcome.is_valid() {
-                return Err(format!("original Profile restore failed: {outcome}"));
+            .await;
+            let request_error = match request {
+                Ok(outcome) if outcome.is_valid() => None,
+                Ok(outcome) => Some(PipelineBarrierError::new(
+                    "RESTORE_PROFILE_REQUEST_FAILED",
+                    outcome.to_string(),
+                )),
+                Err(error) => Some(PipelineBarrierError::new(
+                    "RESTORE_PROFILE_REQUEST_FAILED",
+                    error.to_string(),
+                )),
+            };
+            if let Some(error) = request_error {
+                persist_restore_check(
+                    manifest,
+                    restore_check(
+                        "profile",
+                        profile_uid,
+                        profile_uid,
+                        None,
+                        "request_failed",
+                        Some(&error),
+                    ),
+                );
+                failure = Some(error);
             }
         }
-        for selection in &manifest.restore.selections {
-            handle::Handle::mihomo()
+
+        if failure.is_none() {
+            match wait_for_profile_controller(
+                profile_uid,
+                effective_restore_fingerprint.as_deref(),
+                PIPELINE_CONTROLLER_TIMEOUT,
+            )
+            .await
+            {
+                Ok(()) => {
+                    let observed = Config::profiles().await.latest_arc().current.clone().map(String::from);
+                    effective_restore_fingerprint.get_or_insert(effective_runtime_fingerprint().unwrap_or_default());
+                    persist_restore_check(
+                        manifest,
+                        restore_check("profile", profile_uid, profile_uid, observed, "passed", None),
+                    );
+                }
+                Err(error) => {
+                    let state = if error.code == "CONTROLLER_UNAVAILABLE" {
+                        "controller_unavailable"
+                    } else {
+                        "readback_mismatch"
+                    };
+                    let observed = Config::profiles().await.latest_arc().current.clone().map(String::from);
+                    let wrapped = PipelineBarrierError::new(
+                        match state {
+                            "controller_unavailable" => "RESTORE_CONTROLLER_UNAVAILABLE",
+                            _ => "RESTORE_PROFILE_READBACK_MISMATCH",
+                        },
+                        error.render(),
+                    );
+                    persist_restore_check(
+                        manifest,
+                        restore_check("profile", profile_uid, profile_uid, observed, state, Some(&wrapped)),
+                    );
+                    failure = Some(wrapped);
+                }
+            }
+        }
+    }
+
+    if failure.is_none()
+        && let Some(profile_uid) = profile_uid.as_deref()
+    {
+        let fingerprint = effective_restore_fingerprint.unwrap_or_default();
+        for selection in manifest.restore.selections.clone() {
+            let request = handle::Handle::mihomo()
                 .await
                 .select_node_for_group(&selection.group, &selection.node)
-                .await
-                .map_err(|error| error.to_string())?;
+                .await;
+            if let Err(error) = request {
+                let wrapped = PipelineBarrierError::new("RESTORE_SELECTOR_REQUEST_FAILED", error.to_string());
+                persist_restore_check(
+                    manifest,
+                    restore_check(
+                        "selector",
+                        &selection.group,
+                        &selection.node,
+                        None,
+                        "request_failed",
+                        Some(&wrapped),
+                    ),
+                );
+                failure.get_or_insert(wrapped);
+                continue;
+            }
+            match wait_for_selected_snapshot(
+                profile_uid,
+                &fingerprint,
+                &selection.group,
+                &selection.node,
+                PIPELINE_SELECTION_TIMEOUT,
+            )
+            .await
+            {
+                Ok(snapshot) => persist_restore_check(
+                    manifest,
+                    restore_check(
+                        "selector",
+                        &selection.group,
+                        &selection.node,
+                        Some(snapshot.selected_node),
+                        "passed",
+                        None,
+                    ),
+                ),
+                Err(error) => {
+                    let state = if error.code == "CONTROLLER_UNAVAILABLE" {
+                        "controller_unavailable"
+                    } else {
+                        "readback_mismatch"
+                    };
+                    let wrapped = PipelineBarrierError::new(
+                        match state {
+                            "controller_unavailable" => "RESTORE_CONTROLLER_UNAVAILABLE",
+                            _ => "RESTORE_SELECTOR_READBACK_MISMATCH",
+                        },
+                        error.render(),
+                    );
+                    persist_restore_check(
+                        manifest,
+                        restore_check(
+                            "selector",
+                            &selection.group,
+                            &selection.node,
+                            None,
+                            state,
+                            Some(&wrapped),
+                        ),
+                    );
+                    failure.get_or_insert(wrapped);
+                }
+            }
         }
-        Ok(())
     }
-    .await;
+
+    let result: Result<(), PipelineBarrierError> = failure.map_or(Ok(()), Err);
     match result {
         Ok(()) => {
             manifest.restore.state = RestoreState::Restored;
             manifest.state = terminal_state;
             manifest.stage = PipelineStage::Finished;
         }
-        Err(message) => {
+        Err(error) => {
             manifest.restore.state = RestoreState::Failed;
             manifest.restore.error = Some(PipelineError {
-                code: "RESTORE_FAILED".into(),
-                message,
+                code: error.code.into(),
+                message: error.message,
             });
             manifest.state = PipelineState::RestoreFailed;
         }
@@ -2009,13 +2689,7 @@ async fn run_pipeline(
             }
             Err(message) => {
                 manifest
-                    .finish_run(
-                        PipelineRunState::Failed,
-                        Some(PipelineError {
-                            code: "PIPELINE_RUN_FAILED".into(),
-                            message,
-                        }),
-                    )
+                    .finish_run(PipelineRunState::Failed, Some(pipeline_run_error(message)))
                     .map_err(|error| error.to_string())?;
                 if !manifest.policy.continue_on_run_failure {
                     manifest.state = PipelineState::Failed;
@@ -2130,6 +2804,44 @@ pub async fn tt_pipeline_resume(app_handle: AppHandle, pipeline_root: String) ->
         return Err(error.to_string().into());
     }
     launch_pipeline_supervisor(app_handle, manifest_path, pipeline_id, batch);
+    Ok(manifest)
+}
+
+#[tauri::command]
+pub async fn tt_pipeline_retry_restore(pipeline_root: String) -> CmdResult<PipelineManifest> {
+    let root = PathBuf::from(pipeline_root);
+    if !root.is_absolute() {
+        return Err("pipeline_root must be absolute".into());
+    }
+    let manifest_path = root.join(PIPELINE_MANIFEST_NAME);
+    let mut manifest = PipelineManifest::load(&manifest_path).stringify_err()?;
+    if manifest.state != PipelineState::RestoreFailed {
+        return Err("only a restore_failed TrafficTracer pipeline can retry restoration".into());
+    }
+    if pipeline_runtime().active.lock().is_some() {
+        return Err("another TrafficTracer pipeline is active".into());
+    }
+    let pipeline_id = manifest.pipeline_id.clone();
+    CaptureLock::global()
+        .acquire_owned(
+            "pipeline",
+            pipeline_id.clone(),
+            "TrafficTracer pipeline restoration is active",
+        )
+        .stringify_err()?;
+    *pipeline_runtime().active.lock() = Some(ActivePipeline {
+        pipeline_id: pipeline_id.clone(),
+        manifest_path,
+        interrupt: Arc::new(AtomicBool::new(false)),
+        cancel: Arc::new(AtomicBool::new(false)),
+    });
+    restore_pipeline(&mut manifest, &pipeline_id).await;
+    let _ = CaptureLock::global().release(&pipeline_id);
+    let mut active = pipeline_runtime().active.lock();
+    if active.as_ref().is_some_and(|item| item.pipeline_id == pipeline_id) {
+        *active = None;
+    }
+    drop(active);
     Ok(manifest)
 }
 
@@ -3420,6 +4132,80 @@ mod session_tests {
 #[cfg(test)]
 mod capture_tests {
     use super::*;
+
+    fn proxy_snapshot(node: &str, leaf: &str, protocol: &str) -> PipelineProxySnapshot {
+        PipelineProxySnapshot {
+            profile_uid: "profile-one".into(),
+            profile_fingerprint: "a".repeat(64),
+            selection_group: "GLOBAL".into(),
+            selected_node: node.into(),
+            resolved_chain: if node == leaf {
+                vec![node.into()]
+            } else {
+                vec![node.into(), leaf.into()]
+            },
+            resolved_leaf: leaf.into(),
+            protocol: protocol.into(),
+            captured_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn resolves_selector_chain_into_a_frozen_proxy_snapshot() {
+        let proxies: Proxies = serde_json::from_value(serde_json::json!({
+            "proxies": {
+                "GLOBAL": {"name":"GLOBAL", "type":"Selector", "now":"edge", "all":["edge"]},
+                "edge": {"name":"edge", "type":"Selector", "now":"leaf"},
+                "leaf": {"name":"leaf", "type":"Hysteria2"}
+            }
+        }))
+        .unwrap();
+        let snapshot = proxy_snapshot_from_runtime(&proxies, "profile-one".into(), "a".repeat(64), "GLOBAL").unwrap();
+        assert_eq!(snapshot.selected_node, "edge");
+        assert_eq!(snapshot.resolved_chain, ["edge", "leaf"]);
+        assert_eq!(snapshot.resolved_leaf, "leaf");
+        assert_eq!(snapshot.protocol, "hysteria2");
+    }
+
+    #[test]
+    fn classifies_node_protocol_drift_and_missing_observation_separately() {
+        let start = proxy_snapshot("edge", "leaf-one", "hysteria2");
+        let mut matched = ObservedRunEvidence::default();
+        matched.contexts = 2;
+        matched.protocols.insert("hysteria2".into());
+        matched.selected_nodes.insert("edge".into());
+        matched.leaf_nodes.insert("leaf-one".into());
+        let passed = classify_run_verification(&start, Some(&start), &matched, None);
+        assert_eq!(passed.node_state, "passed");
+        assert_eq!(passed.protocol_state, "passed");
+
+        let end = proxy_snapshot("other", "leaf-two", "vless");
+        let mut drifted = ObservedRunEvidence::default();
+        drifted.contexts = 1;
+        drifted.protocols.insert("vless".into());
+        drifted.selected_nodes.insert("other".into());
+        drifted.leaf_nodes.insert("leaf-two".into());
+        let drift = classify_run_verification(&start, Some(&end), &drifted, None);
+        assert_eq!(drift.node_state, "node_drift");
+        assert_eq!(drift.protocol_state, "protocol_mismatch");
+
+        let unavailable = classify_run_verification(
+            &start,
+            None,
+            &ObservedRunEvidence::default(),
+            Some(&PipelineBarrierError::new("CONTROLLER_UNAVAILABLE", "offline")),
+        );
+        assert_eq!(unavailable.node_state, "observation_unavailable");
+        assert_eq!(unavailable.protocol_state, "observation_unavailable");
+    }
+
+    #[test]
+    fn preserves_structured_pipeline_barrier_error_codes() {
+        let error = pipeline_run_error("CONNECTION_DRAIN_FAILED: old connections remain".into());
+        assert_eq!(error.code, "CONNECTION_DRAIN_FAILED");
+        let fallback = pipeline_run_error("unstructured controller error".into());
+        assert_eq!(fallback.code, "PIPELINE_RUN_FAILED");
+    }
 
     #[test]
     fn pipeline_quality_separates_application_failure_from_valid_correlation() {
