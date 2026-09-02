@@ -208,9 +208,37 @@ export interface PipelineRun {
   batch_id: string | null
   output_path: string
   error: { code: string; message: string } | null
+  quality?: PipelineRunQuality
   resume_attempt: number
   started_at: string | null
   completed_at: string | null
+}
+
+export interface PipelineQualityPlane {
+  state: 'passed' | 'degraded' | 'failed' | 'indeterminate' | 'not_applicable'
+  passed: number
+  degraded: number
+  failed: number
+  indeterminate: number
+  not_applicable: number
+}
+
+export interface PipelineApplicationIssue {
+  session_id: string
+  target_url: string
+  final_url: string | null
+  state: 'degraded' | 'failed' | 'indeterminate'
+  reason: string | null
+  primary_content_millis: number | null
+  desired_primary_seconds: number | null
+}
+
+export interface PipelineRunQuality {
+  sessions_total: number
+  capture_integrity: PipelineQualityPlane
+  correlation: PipelineQualityPlane
+  application: PipelineQualityPlane
+  application_issues: PipelineApplicationIssue[]
 }
 
 export interface PipelineListEntry {
@@ -223,7 +251,7 @@ export interface PipelineListEntry {
 }
 
 export interface PipelineManifest {
-  schema_version: 1
+  schema_version: 2
   pipeline_id: string
   state: PipelineState
   stage: PipelineStage

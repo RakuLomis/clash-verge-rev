@@ -8,7 +8,8 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-pub const PIPELINE_SCHEMA_VERSION: u32 = 1;
+pub const PIPELINE_SCHEMA_VERSION: u32 = 2;
+const PIPELINE_MIN_SCHEMA_VERSION: u32 = 1;
 pub const PIPELINE_MANIFEST_NAME: &str = "pipeline-manifest.json";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -78,6 +79,39 @@ impl PipelineRunState {
 pub struct PipelineError {
     pub code: String,
     pub message: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PipelineQualityPlane {
+    pub state: String,
+    pub passed: usize,
+    pub degraded: usize,
+    pub failed: usize,
+    pub indeterminate: usize,
+    pub not_applicable: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PipelineApplicationIssue {
+    pub session_id: String,
+    pub target_url: String,
+    pub final_url: Option<String>,
+    pub state: String,
+    pub reason: Option<String>,
+    pub primary_content_millis: Option<u64>,
+    pub desired_primary_seconds: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PipelineRunQuality {
+    pub sessions_total: usize,
+    pub capture_integrity: PipelineQualityPlane,
+    pub correlation: PipelineQualityPlane,
+    pub application: PipelineQualityPlane,
+    pub application_issues: Vec<PipelineApplicationIssue>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -175,6 +209,8 @@ pub struct PipelineRun {
     pub batch_id: Option<String>,
     pub output_path: PathBuf,
     pub error: Option<PipelineError>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<PipelineRunQuality>,
     pub resume_attempt: u32,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
@@ -258,6 +294,7 @@ impl PipelineManifest {
                     &run_id[..12.min(run_id.len())]
                 )),
                 error: None,
+                quality: None,
                 resume_attempt: 0,
                 started_at: None,
                 completed_at: None,
@@ -295,10 +332,11 @@ impl PipelineManifest {
 
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let data = fs::read(path.as_ref()).context("read pipeline manifest")?;
-        let manifest: Self = serde_json::from_slice(&data).context("decode pipeline manifest")?;
-        if manifest.schema_version != PIPELINE_SCHEMA_VERSION {
+        let mut manifest: Self = serde_json::from_slice(&data).context("decode pipeline manifest")?;
+        if !(PIPELINE_MIN_SCHEMA_VERSION..=PIPELINE_SCHEMA_VERSION).contains(&manifest.schema_version) {
             bail!("unsupported pipeline manifest schema version");
         }
+        manifest.schema_version = PIPELINE_SCHEMA_VERSION;
         Ok(manifest)
     }
 
@@ -360,6 +398,7 @@ impl PipelineManifest {
         run.state = PipelineRunState::Running;
         run.stage = PipelineStage::ActivatingProfile;
         run.error = None;
+        run.quality = None;
         run.started_at.get_or_insert_with(Utc::now);
         self.state = PipelineState::Running;
         self.stage = PipelineStage::ActivatingProfile;
@@ -540,6 +579,44 @@ mod tests {
         manifest.begin_next_run().unwrap();
         let path = manifest.persist().unwrap();
         assert_eq!(PipelineManifest::load(path).unwrap(), manifest);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn loads_schema_one_without_quality_and_migrates_in_memory() {
+        let root = std::env::temp_dir().join(format!("traffictracer-pipeline-v1-model-{}", std::process::id()));
+        let manifest = PipelineManifest::create(
+            "6ea29d49-4f0e-4f9b-8a88-0ad095c50b78".into(),
+            root.clone(),
+            PipelineConfigSnapshot {
+                path: PathBuf::from("/tmp/sites.yaml"),
+                sha256: "b".repeat(64),
+            },
+            vec![target()],
+            serde_json::json!({"tun_interface":"Meta"}),
+            vec![("e107516f-335d-42f5-b9f4-f71c081c41e7".into(), candidate("one"))],
+            PipelinePolicy {
+                continue_on_run_failure: true,
+                restore_original_state: true,
+            },
+            PipelineRestore {
+                profile_uid: None,
+                selections: vec![],
+                state: RestoreState::Pending,
+                error: None,
+            },
+        )
+        .unwrap();
+        let mut legacy = serde_json::to_value(manifest).unwrap();
+        legacy["schema_version"] = serde_json::json!(1);
+        legacy["runs"][0].as_object_mut().unwrap().remove("quality");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(PIPELINE_MANIFEST_NAME);
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+
+        let loaded = PipelineManifest::load(path).unwrap();
+        assert_eq!(loaded.schema_version, PIPELINE_SCHEMA_VERSION);
+        assert!(loaded.runs[0].quality.is_none());
         let _ = fs::remove_dir_all(root);
     }
 

@@ -3,9 +3,11 @@ import {
   AlertTitle,
   Box,
   Button,
+  Chip,
   MenuItem,
   Stack,
   TextField,
+  Typography,
 } from '@mui/material'
 import { invoke } from '@tauri-apps/api/core'
 import { useCallback, useEffect, useState } from 'react'
@@ -27,6 +29,7 @@ import { useTrafficTracerBatches } from '@/hooks/use-traffic-tracer-batches'
 import { useTrafficTracerWorker } from '@/hooks/use-traffic-tracer-worker'
 import {
   cancelTrafficTracerPipeline,
+  getTrafficTracerBatch,
   getTrafficTracerPipeline,
   interruptTrafficTracerPipeline,
   listTrafficTracerPipelines,
@@ -36,6 +39,7 @@ import {
 import { showNotice } from '@/services/notice-service'
 import type {
   BatchStartRequest,
+  BatchStatusResult,
   CaptureStartRequest,
   EnvironmentRequest,
   PipelineCandidate,
@@ -134,6 +138,9 @@ const TrafficTracerPage = () => {
     PipelineCandidate[]
   >(restoredPipelineCandidates)
   const [pipeline, setPipeline] = useState<PipelineManifest | null>(null)
+  const [pipelineNow, setPipelineNow] = useState(() => Date.now())
+  const [pipelineBatchStatus, setPipelineBatchStatus] =
+    useState<BatchStatusResult | null>(null)
   const [pipelineLocator, setPipelineLocator] = useState<{
     pipeline_id: string
     output_root: string
@@ -164,8 +171,32 @@ const TrafficTracerPage = () => {
     pipeline?.current_run_index !== null &&
     pipeline?.current_run_index !== undefined
       ? pipeline.runs[pipeline.current_run_index]
-      : [...(pipeline?.runs ?? [])].reverse().find((run) => run.error !== null)
-  const pipelineError = displayedPipelineRun?.error ?? null
+      : [...(pipeline?.runs ?? [])]
+          .reverse()
+          .find((run) => run.state !== 'pending')
+  const pipelineErrorRun = [...(pipeline?.runs ?? [])]
+    .reverse()
+    .find((run) => run.error !== null)
+  const pipelineError = displayedPipelineRun?.error ?? pipelineErrorRun?.error
+  const displayedBatch =
+    pipelineBatchStatus &&
+    displayedPipelineRun?.batch_id === pipelineBatchStatus.batch.batch_id
+      ? pipelineBatchStatus.batch
+      : null
+  const displayedBatchIndex =
+    displayedBatch?.current_index ?? displayedBatch?.resume.next_index ?? null
+  const displayedTarget =
+    displayedBatchIndex !== null && displayedBatchIndex !== undefined
+      ? displayedBatch?.targets[displayedBatchIndex]
+      : null
+  const pipelineElapsedSeconds = displayedPipelineRun?.started_at
+    ? Math.max(
+        0,
+        Math.floor(
+          (pipelineNow - Date.parse(displayedPipelineRun.started_at)) / 1000,
+        ),
+      )
+    : null
   const { environment, environmentQuery, captureLock, workerActivity } =
     useTrafficTracerWorker(
       diagnosticRequest,
@@ -181,7 +212,25 @@ const TrafficTracerPage = () => {
         const current = await getTrafficTracerPipeline(
           pipelineLocator.output_root,
         )
-        if (!disposed) setPipeline(current)
+        const run =
+          current.current_run_index !== null
+            ? current.runs[current.current_run_index]
+            : [...current.runs]
+                .reverse()
+                .find((item) => item.state !== 'pending')
+        let batchStatus: BatchStatusResult | null = null
+        if (run?.batch_id) {
+          try {
+            batchStatus = await getTrafficTracerBatch(run.batch_id)
+          } catch {
+            batchStatus = null
+          }
+        }
+        if (!disposed) {
+          setPipeline(current)
+          setPipelineBatchStatus(batchStatus)
+          setPipelineNow(Date.now())
+        }
       } catch (error) {
         if (!disposed) recordStartFailure(error, 'pipeline.status')
       }
@@ -520,12 +569,94 @@ const TrafficTracerPage = () => {
               {pipelineLocator?.output_root}
             </Box>
             {displayedPipelineRun && (
-              <Box sx={{ opacity: 0.8 }}>
-                {displayedPipelineRun.profile_uid} ·{' '}
-                {displayedPipelineRun.selection_group} ·{' '}
-                {displayedPipelineRun.requested_node}
+              <Stack spacing={0.5} sx={{ mt: 0.75 }}>
+                <Box sx={{ opacity: 0.8 }}>
+                  {displayedPipelineRun.profile_uid} ·{' '}
+                  {displayedPipelineRun.selection_group} ·{' '}
+                  {displayedPipelineRun.requested_node}
+                </Box>
+                <Box sx={{ opacity: 0.8 }}>
+                  Run {displayedPipelineRun.state} ·{' '}
+                  {displayedPipelineRun.stage.replaceAll('_', ' ')}
+                  {pipelineElapsedSeconds !== null &&
+                    ` · elapsed ${pipelineElapsedSeconds}s`}
+                </Box>
+                <Box sx={{ opacity: 0.65 }}>
+                  Last durable checkpoint:{' '}
+                  {new Date(pipeline.updated_at).toLocaleString()}
+                </Box>
+              </Stack>
+            )}
+            {displayedBatch && (
+              <Box sx={{ mt: 1 }}>
+                <Typography variant="body2">
+                  Target{' '}
+                  {Math.min(
+                    (displayedBatchIndex ?? displayedBatch.targets.length - 1) +
+                      1,
+                    displayedBatch.targets.length,
+                  )}
+                  /{displayedBatch.targets.length} ·{' '}
+                  {displayedBatch.stage.replaceAll('_', ' ')} · attempt{' '}
+                  {displayedBatch.resume.attempt + 1}
+                </Typography>
+                {displayedTarget && (
+                  <Typography
+                    variant="body2"
+                    title={displayedTarget.url}
+                    sx={{ overflowWrap: 'anywhere', opacity: 0.8 }}
+                  >
+                    {displayedTarget.domain} — {displayedTarget.url}
+                  </Typography>
+                )}
               </Box>
             )}
+            {displayedPipelineRun?.quality && (
+              <Stack
+                direction="row"
+                spacing={0.75}
+                useFlexGap
+                sx={{ mt: 1, flexWrap: 'wrap' }}
+              >
+                {(
+                  [
+                    ['Capture', displayedPipelineRun.quality.capture_integrity],
+                    ['Correlation', displayedPipelineRun.quality.correlation],
+                    ['Application', displayedPipelineRun.quality.application],
+                  ] as const
+                ).map(([label, quality]) => (
+                  <Chip
+                    key={label}
+                    size="small"
+                    label={`${label}: ${quality.state.replaceAll('_', ' ')}`}
+                    color={
+                      quality.state === 'failed'
+                        ? 'error'
+                        : quality.state === 'degraded' ||
+                            quality.state === 'indeterminate'
+                          ? 'warning'
+                          : quality.state === 'passed'
+                            ? 'success'
+                            : 'default'
+                    }
+                  />
+                ))}
+              </Stack>
+            )}
+            {displayedPipelineRun?.quality?.application_issues.map((issue) => (
+              <Box
+                key={`${issue.session_id}:${issue.target_url}`}
+                sx={{ mt: 1, overflowWrap: 'anywhere' }}
+              >
+                Application {issue.state}: {issue.reason ?? 'unknown outcome'}
+                {issue.primary_content_millis !== null &&
+                  issue.desired_primary_seconds !== null &&
+                  ` · ${(issue.primary_content_millis / 1000).toFixed(3)}/${issue.desired_primary_seconds}s primary content`}
+                {issue.final_url && issue.final_url !== issue.target_url && (
+                  <Box sx={{ opacity: 0.7 }}>Final URL: {issue.final_url}</Box>
+                )}
+              </Box>
+            ))}
             {pipelineError && (
               <Box
                 sx={{
@@ -534,6 +665,14 @@ const TrafficTracerPage = () => {
                   overflowWrap: 'anywhere',
                 }}
               >
+                {pipelineErrorRun &&
+                  pipelineErrorRun.run_id !== displayedPipelineRun?.run_id && (
+                    <Box sx={{ mb: 0.5, opacity: 0.8 }}>
+                      Latest pipeline failure: {pipelineErrorRun.profile_uid} ·{' '}
+                      {pipelineErrorRun.selection_group} ·{' '}
+                      {pipelineErrorRun.requested_node}
+                    </Box>
+                  )}
                 {pipelineError.code}: {pipelineError.message}
               </Box>
             )}

@@ -26,9 +26,10 @@ use crate::{
             lock::{CaptureLock, CaptureLockSnapshot},
             manager::{WorkerManager, WorkerManagerState, WorkerRecoveryReport, WorkerRecoveryStatus},
             pipeline::{
-                PIPELINE_MANIFEST_NAME, PipelineCandidate, PipelineConfigSnapshot, PipelineError, PipelineManifest,
-                PipelinePolicy, PipelineRestore, PipelineRunState, PipelineSelection, PipelineStage, PipelineState,
-                PipelineTarget, RestoreState,
+                PIPELINE_MANIFEST_NAME, PipelineApplicationIssue, PipelineCandidate, PipelineConfigSnapshot,
+                PipelineError, PipelineManifest, PipelinePolicy, PipelineQualityPlane, PipelineRestore,
+                PipelineRunQuality, PipelineRunState, PipelineSelection, PipelineStage, PipelineState, PipelineTarget,
+                RestoreState,
             },
             protocol::{JOB_SCHEMA_VERSION, RequestMethod},
         },
@@ -1256,6 +1257,163 @@ fn observed_run_protocol(output_path: &Path) -> String {
     }
 }
 
+#[derive(Default)]
+struct QualityCounts {
+    passed: usize,
+    degraded: usize,
+    failed: usize,
+    indeterminate: usize,
+    not_applicable: usize,
+}
+
+impl QualityCounts {
+    fn observe(&mut self, state: Option<&str>, applicable: bool) {
+        if !applicable {
+            self.not_applicable += 1;
+            return;
+        }
+        match state {
+            Some("passed" | "good") => self.passed += 1,
+            Some("degraded") => self.degraded += 1,
+            Some("failed" | "unavailable") => self.failed += 1,
+            _ => self.indeterminate += 1,
+        }
+    }
+
+    fn finish(self) -> PipelineQualityPlane {
+        let state = if self.failed > 0 {
+            "failed"
+        } else if self.degraded > 0 {
+            "degraded"
+        } else if self.indeterminate > 0 {
+            "indeterminate"
+        } else if self.passed > 0 {
+            "passed"
+        } else {
+            "not_applicable"
+        };
+        PipelineQualityPlane {
+            state: state.into(),
+            passed: self.passed,
+            degraded: self.degraded,
+            failed: self.failed,
+            indeterminate: self.indeterminate,
+            not_applicable: self.not_applicable,
+        }
+    }
+}
+
+fn run_quality_requires_attention(quality: &PipelineRunQuality) -> bool {
+    matches!(
+        quality.capture_integrity.state.as_str(),
+        "failed" | "degraded" | "indeterminate"
+    ) || matches!(
+        quality.correlation.state.as_str(),
+        "failed" | "degraded" | "indeterminate"
+    ) || matches!(
+        quality.application.state.as_str(),
+        "failed" | "degraded" | "indeterminate"
+    )
+}
+
+fn pipeline_run_quality(output_path: &Path) -> PipelineRunQuality {
+    fn scan(path: &Path, depth: usize, summaries: &mut Vec<PathBuf>) {
+        if depth > 8 {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(path) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan(&path, depth + 1, summaries);
+            } else if path.file_name().and_then(|name| name.to_str()) == Some("summary.json")
+                && path.parent().and_then(Path::file_name).and_then(|name| name.to_str()) == Some("analysis")
+            {
+                summaries.push(path);
+            }
+        }
+    }
+
+    fn string_at(value: &Value, pointer: &str) -> Option<String> {
+        value.pointer(pointer).and_then(Value::as_str).map(str::to_owned)
+    }
+
+    let mut summaries = Vec::new();
+    scan(output_path, 0, &mut summaries);
+    summaries.sort();
+    let mut capture = QualityCounts::default();
+    let mut correlation = QualityCounts::default();
+    let mut application = QualityCounts::default();
+    let mut application_issues = Vec::new();
+
+    for path in &summaries {
+        let value = fs::read(path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+        let Some(value) = value else {
+            capture.observe(None, true);
+            correlation.observe(None, true);
+            application.observe(None, true);
+            continue;
+        };
+        capture.observe(
+            value
+                .pointer("/analysis_integrity/page_attributed/state")
+                .and_then(Value::as_str),
+            true,
+        );
+        correlation.observe(value.get("quality_state").and_then(Value::as_str), true);
+
+        let scenario = value.get("scenario_outcome").filter(|item| item.is_object());
+        application.observe(
+            scenario.and_then(|item| item.get("state")).and_then(Value::as_str),
+            scenario.is_some(),
+        );
+        let scenario_state = scenario.and_then(|item| item.get("state")).and_then(Value::as_str);
+        if scenario.is_none() || scenario_state == Some("passed") {
+            continue;
+        }
+
+        let session_dir = path.parent().and_then(Path::parent);
+        let context = session_dir
+            .and_then(|dir| fs::read(dir.join("raw/capture-context.json")).ok())
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            .unwrap_or(Value::Null);
+        let primary_content_millis = scenario
+            .and_then(|item| item.get("primary_content_seconds"))
+            .and_then(Value::as_f64)
+            .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+            .map(|seconds| (seconds * 1000.0).round() as u64);
+        application_issues.push(PipelineApplicationIssue {
+            session_id: string_at(&value, "/session_id").unwrap_or_default(),
+            target_url: string_at(&context, "/target/url").unwrap_or_default(),
+            final_url: string_at(&value, "/playback/diagnostics/last_observation/href"),
+            state: scenario_state.unwrap_or("indeterminate").to_owned(),
+            reason: scenario
+                .and_then(|item| item.get("reason"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            primary_content_millis,
+            desired_primary_seconds: scenario
+                .and_then(|item| item.get("desired_primary_seconds"))
+                .and_then(Value::as_u64),
+        });
+    }
+
+    if summaries.is_empty() {
+        capture.observe(None, true);
+        correlation.observe(None, true);
+        application.observe(None, true);
+    }
+    PipelineRunQuality {
+        sessions_total: summaries.len(),
+        capture_integrity: capture.finish(),
+        correlation: correlation.finish(),
+        application: application.finish(),
+        application_issues,
+    }
+}
+
 fn effective_runtime_fingerprint() -> CmdResult<String> {
     let path = crate::utils::dirs::app_home_dir()
         .stringify_err()?
@@ -1725,7 +1883,11 @@ async fn execute_pipeline_run(
                 continue;
             }
             manifest.runs[index].observed_protocol = observed_run_protocol(&run.output_path);
+            let quality = pipeline_run_quality(&run.output_path);
+            let quality_requires_attention = run_quality_requires_attention(&quality);
+            manifest.runs[index].quality = Some(quality);
             return Ok(match state {
+                "completed" if quality_requires_attention => PipelineRunState::Degraded,
                 "completed" => PipelineRunState::Completed,
                 "cancelled" => PipelineRunState::Cancelled,
                 "interrupted" => PipelineRunState::Interrupted,
@@ -2320,6 +2482,8 @@ pub struct SessionSummary {
     pub analysis_integrity_state: Option<String>,
     #[serde(default)]
     pub network_outcome_state: Option<String>,
+    #[serde(default)]
+    pub scenario_outcome_state: Option<String>,
     #[serde(default)]
     pub coverage: Option<Value>,
     #[serde(default)]
@@ -3256,6 +3420,91 @@ mod session_tests {
 #[cfg(test)]
 mod capture_tests {
     use super::*;
+
+    #[test]
+    fn pipeline_quality_separates_application_failure_from_valid_correlation() {
+        let root = std::env::temp_dir().join(format!("traffictracer-pipeline-quality-{}", std::process::id()));
+        let write_session = |name: &str, summary: Value, target_url: &str| {
+            let session = root.join(name);
+            fs::create_dir_all(session.join("analysis")).unwrap();
+            fs::create_dir_all(session.join("raw")).unwrap();
+            fs::write(
+                session.join("analysis/summary.json"),
+                serde_json::to_vec(&summary).unwrap(),
+            )
+            .unwrap();
+            fs::write(
+                session.join("raw/capture-context.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "target": {"url": target_url}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        };
+        write_session(
+            "youtube-good",
+            serde_json::json!({
+                "session_id": "session-good",
+                "quality_state": "passed",
+                "analysis_integrity": {"page_attributed": {"state": "passed"}},
+                "scenario_outcome": {
+                    "state": "passed",
+                    "primary_content_seconds": 28.083,
+                    "desired_primary_seconds": 25
+                }
+            }),
+            "https://www.youtube.com/watch?v=good",
+        );
+        write_session(
+            "youtube-failed",
+            serde_json::json!({
+                "session_id": "session-failed",
+                "quality_state": "passed",
+                "analysis_integrity": {"page_attributed": {"state": "passed"}},
+                "scenario_outcome": {
+                    "state": "failed",
+                    "reason": "PLAYER_NOT_CREATED",
+                    "primary_content_seconds": 0.0,
+                    "desired_primary_seconds": 25
+                },
+                "playback": {"diagnostics": {"last_observation": {
+                    "href": "https://www.google.com/sorry/"
+                }}}
+            }),
+            "https://www.youtube.com/watch?v=failed",
+        );
+        write_session(
+            "example",
+            serde_json::json!({
+                "session_id": "session-example",
+                "quality_state": "passed",
+                "analysis_integrity": {"page_attributed": {"state": "passed"}}
+            }),
+            "https://example.com/",
+        );
+
+        let quality = pipeline_run_quality(&root);
+        assert_eq!(quality.sessions_total, 3);
+        assert_eq!(quality.capture_integrity.state, "passed");
+        assert_eq!(quality.correlation.state, "passed");
+        assert_eq!(quality.application.state, "failed");
+        assert_eq!(quality.application.passed, 1);
+        assert_eq!(quality.application.failed, 1);
+        assert_eq!(quality.application.not_applicable, 1);
+        assert!(run_quality_requires_attention(&quality));
+        assert_eq!(quality.application_issues.len(), 1);
+        assert_eq!(
+            quality.application_issues[0].reason.as_deref(),
+            Some("PLAYER_NOT_CREATED")
+        );
+        assert_eq!(
+            quality.application_issues[0].final_url.as_deref(),
+            Some("https://www.google.com/sorry/")
+        );
+        assert_eq!(quality.application_issues[0].primary_content_millis, Some(0));
+        let _ = fs::remove_dir_all(root);
+    }
 
     fn valid_request() -> CaptureStartRequest {
         CaptureStartRequest {
