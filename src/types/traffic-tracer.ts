@@ -141,6 +141,12 @@ export interface BatchStartRequest {
   chrome_binary: string
   options: CaptureOptions
   fail_fast: boolean
+  application_retry: ApplicationRetryPolicy
+}
+
+export interface ApplicationRetryPolicy {
+  enabled: boolean
+  max_retries: 1
 }
 
 export interface PipelineCandidate {
@@ -352,10 +358,24 @@ export interface BatchChild {
     | 'interrupted'
   session_id: string | null
   error: { code: string; message: string } | null
+  attempts?: BatchAttempt[]
+}
+
+export interface BatchAttempt {
+  ordinal: number
+  job_id: string | null
+  state: BatchChild['state']
+  session_id: string | null
+  error: { code: string; message: string } | null
+  application_outcome: {
+    state: 'passed' | 'degraded' | 'failed' | 'indeterminate'
+    reason: string | null
+  } | null
+  automatic_retry: boolean
 }
 
 export interface BatchManifest {
-  schema_version: 1
+  schema_version: 1 | 2
   batch_id: string
   state: BatchState
   stage:
@@ -373,6 +393,7 @@ export interface BatchManifest {
   current_index: number | null
   children: BatchChild[]
   fail_fast: boolean
+  application_retry?: ApplicationRetryPolicy
   cancel_requested: boolean
   resume: { attempt: number; next_index: number; resumed_at: string | null }
 }

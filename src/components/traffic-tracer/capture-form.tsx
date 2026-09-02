@@ -384,7 +384,11 @@ export function TrafficTracerCaptureForm({
       )
       return
     }
-    if (targetConfig && selectedTargetIndexes.size > 1 && onSubmitBatch) {
+    if (
+      targetConfig &&
+      (selectedTargetIndexes.size > 1 || draft.application_retry_enabled) &&
+      onSubmitBatch
+    ) {
       await onSubmitBatch(
         batchRequestFromDraft(draft, targetConfig, selectedTargetIndexes),
       )
@@ -772,6 +776,31 @@ export function TrafficTracerCaptureForm({
             </Alert>
           ))}
 
+          {draft.target_mode === 'config' && targetConfig && (
+            <Box>
+              <FormControlLabel
+                label="Retry classified playback failure once"
+                control={
+                  <Checkbox
+                    checked={draft.application_retry_enabled}
+                    onChange={(_, checked) =>
+                      update('application_retry_enabled', checked)
+                    }
+                  />
+                }
+              />
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: 'block', ml: 4 }}
+              >
+                Opt in to one fresh Chrome and Session attempt only for explicit
+                transient playback outcomes. Capture, analysis, protocol, and
+                unclassified failures are never retried.
+              </Typography>
+            </Box>
+          )}
+
           <Stack direction="row" spacing={2} sx={{ flexWrap: 'wrap' }}>
             {(
               [
@@ -789,13 +818,15 @@ export function TrafficTracerCaptureForm({
                   <Checkbox
                     checked={
                       key === 'analyze_after_capture' &&
-                      selectedTargetIndexes.size > 1
+                      (selectedTargetIndexes.size > 1 ||
+                        draft.application_retry_enabled)
                         ? true
                         : draft.options[key]
                     }
                     disabled={
                       key === 'analyze_after_capture' &&
-                      selectedTargetIndexes.size > 1
+                      (selectedTargetIndexes.size > 1 ||
+                        draft.application_retry_enabled)
                     }
                     onChange={(_, checked) => updateOption(key, checked)}
                   />

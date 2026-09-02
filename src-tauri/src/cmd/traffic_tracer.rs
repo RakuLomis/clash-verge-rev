@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fs,
     net::IpAddr,
     path::{Component, Path, PathBuf},
@@ -1016,6 +1017,24 @@ pub struct BatchStartRequest {
     pub chrome_binary: String,
     pub options: CaptureOptions,
     pub fail_fast: bool,
+    #[serde(default)]
+    pub application_retry: ApplicationRetryPolicy,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApplicationRetryPolicy {
+    pub enabled: bool,
+    pub max_retries: u8,
+}
+
+impl Default for ApplicationRetryPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_retries: 1,
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -1047,6 +1066,7 @@ struct BatchJobSpec {
     controller: CaptureController,
     options: CaptureOptions,
     fail_fast: bool,
+    application_retry: ApplicationRetryPolicy,
     #[serde(skip_serializing_if = "Option::is_none")]
     orchestration: Option<PipelineOrchestration>,
 }
@@ -1152,6 +1172,7 @@ async fn tt_batch_start_for_owner(
                     },
                     options: request.options,
                     fail_fast: request.fail_fast,
+                    application_retry: request.application_retry,
                     orchestration,
                 },
             },
@@ -1166,6 +1187,9 @@ fn validate_batch_start_request(request: &BatchStartRequest) -> CmdResult {
     }
     if !request.options.analyze_after_capture {
         return Err("batch requires analysis after every capture".into());
+    }
+    if request.application_retry.max_retries != 1 {
+        return Err("application retry must be bounded to exactly one retry".into());
     }
     if !valid_pcap_split_mode(&request.options.pcap_split_mode) {
         return Err("pcap_split_mode must be none or unique_connections".into());
@@ -1309,7 +1333,7 @@ pub struct PipelineStartRequest {
 }
 
 fn pipeline_execution_snapshot(batch: &BatchStartRequest) -> Value {
-    serde_json::json!({ "tun_interface": batch.tun_interface, "physical_interface": batch.physical_interface, "chrome_binary": batch.chrome_binary, "options": batch.options, "fail_fast": batch.fail_fast })
+    serde_json::json!({ "tun_interface": batch.tun_interface, "physical_interface": batch.physical_interface, "chrome_binary": batch.chrome_binary, "options": batch.options, "fail_fast": batch.fail_fast, "application_retry": batch.application_retry })
 }
 
 fn pipeline_target(target: &TargetConfigEntry) -> PipelineTarget {
@@ -1342,6 +1366,8 @@ struct PipelineExecutionSnapshot {
     chrome_binary: String,
     options: CaptureOptions,
     fail_fast: bool,
+    #[serde(default)]
+    application_retry: ApplicationRetryPolicy,
 }
 
 fn pipeline_batch_from_manifest(manifest: &PipelineManifest) -> Result<BatchStartRequest, String> {
@@ -1392,6 +1418,7 @@ fn pipeline_batch_from_manifest(manifest: &PipelineManifest) -> Result<BatchStar
         chrome_binary: execution.chrome_binary,
         options: execution.options,
         fail_fast: execution.fail_fast,
+        application_retry: execution.application_retry,
     })
 }
 
@@ -1962,7 +1989,7 @@ fn run_quality_requires_attention(quality: &PipelineRunQuality) -> bool {
     )
 }
 
-fn pipeline_run_quality(output_path: &Path) -> PipelineRunQuality {
+fn pipeline_run_quality(output_path: &Path, effective_sessions: Option<&HashSet<String>>) -> PipelineRunQuality {
     fn scan(path: &Path, depth: usize, summaries: &mut Vec<PathBuf>) {
         if depth > 8 {
             return;
@@ -1991,17 +2018,31 @@ fn pipeline_run_quality(output_path: &Path) -> PipelineRunQuality {
     let mut correlation = QualityCounts::default();
     let mut application = QualityCounts::default();
     let mut application_issues = Vec::new();
+    let mut sessions_total = 0;
 
     for path in &summaries {
         let value = fs::read(path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
         let Some(value) = value else {
+            if effective_sessions.is_some() {
+                continue;
+            }
+            sessions_total += 1;
             capture.observe(None, true);
             correlation.observe(None, true);
             application.observe(None, true);
             continue;
         };
+        if effective_sessions.is_some_and(|session_ids| {
+            value
+                .get("session_id")
+                .and_then(Value::as_str)
+                .is_none_or(|session_id| !session_ids.contains(session_id))
+        }) {
+            continue;
+        }
+        sessions_total += 1;
         capture.observe(
             value
                 .pointer("/analysis_integrity/page_attributed/state")
@@ -2046,18 +2087,33 @@ fn pipeline_run_quality(output_path: &Path) -> PipelineRunQuality {
         });
     }
 
-    if summaries.is_empty() {
+    if sessions_total == 0 {
         capture.observe(None, true);
         correlation.observe(None, true);
         application.observe(None, true);
     }
     PipelineRunQuality {
-        sessions_total: summaries.len(),
+        sessions_total,
         capture_integrity: capture.finish(),
         correlation: correlation.finish(),
         application: application.finish(),
         application_issues,
     }
+}
+
+fn batch_effective_sessions(output_root: &Path, batch_id: &str) -> Option<HashSet<String>> {
+    let path = output_root.join(".batches").join(batch_id).join("batch-manifest.json");
+    let value = fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())?;
+    let sessions = value
+        .get("children")?
+        .as_array()?
+        .iter()
+        .filter_map(|child| child.get("session_id").and_then(Value::as_str))
+        .map(str::to_owned)
+        .collect::<HashSet<_>>();
+    (!sessions.is_empty()).then_some(sessions)
 }
 
 fn effective_runtime_fingerprint() -> CmdResult<String> {
@@ -2466,8 +2522,8 @@ async fn execute_pipeline_run(
     if let Some(state) = requested_pipeline_stop(interrupt, cancel) {
         return Ok(state);
     }
-    let snapshot = if let Some(batch_id) = run.batch_id {
-        tt_batch_resume_for_owner(batch_id, Some(pipeline_id)).await
+    let snapshot = if let Some(ref batch_id) = run.batch_id {
+        tt_batch_resume_for_owner(batch_id.clone(), Some(pipeline_id)).await
     } else {
         tt_batch_start_for_owner(
             app_handle.clone(),
@@ -2672,7 +2728,11 @@ async fn execute_pipeline_run(
                 .get_or_insert_with(PipelineRunEvidence::default);
             evidence.end_snapshot = end_snapshot;
             evidence.verification = Some(verification);
-            let quality = pipeline_run_quality(&run.output_path);
+            let effective_sessions = run
+                .batch_id
+                .as_deref()
+                .and_then(|batch_id| batch_effective_sessions(&manifest.output_root, batch_id));
+            let quality = pipeline_run_quality(&run.output_path, effective_sessions.as_ref());
             let quality_requires_attention = run_quality_requires_attention(&quality);
             manifest.runs[index].quality = Some(quality);
             return Ok(match state {
@@ -4549,7 +4609,7 @@ mod capture_tests {
             "https://example.com/",
         );
 
-        let quality = pipeline_run_quality(&root);
+        let quality = pipeline_run_quality(&root, None);
         assert_eq!(quality.sessions_total, 3);
         assert_eq!(quality.capture_integrity.state, "passed");
         assert_eq!(quality.correlation.state, "passed");
@@ -4568,6 +4628,12 @@ mod capture_tests {
             Some("https://www.google.com/sorry/")
         );
         assert_eq!(quality.application_issues[0].primary_content_millis, Some(0));
+        let effective = HashSet::from(["session-good".to_owned(), "session-example".to_owned()]);
+        let retried = pipeline_run_quality(&root, Some(&effective));
+        assert_eq!(retried.sessions_total, 2);
+        assert_eq!(retried.application.state, "passed");
+        assert!(retried.application_issues.is_empty());
+        assert!(!run_quality_requires_attention(&retried));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -4852,6 +4918,7 @@ mod capture_tests {
             chrome_binary: "/usr/bin/chromium".to_owned(),
             options: CaptureOptions::default(),
             fail_fast: true,
+            application_retry: ApplicationRetryPolicy::default(),
         }
     }
 
@@ -4884,11 +4951,16 @@ mod capture_tests {
             },
             options: CaptureOptions::default(),
             fail_fast: true,
+            application_retry: ApplicationRetryPolicy::default(),
             orchestration: None,
         })
         .unwrap();
 
         assert_eq!(value["kind"], "batch");
+        assert_eq!(
+            value["application_retry"],
+            serde_json::json!({"enabled": false, "max_retries": 1})
+        );
         assert!(value["targets"][0].get("playback").is_none());
         assert_eq!(
             value["targets"][1]["playback"],
@@ -4898,6 +4970,18 @@ mod capture_tests {
                 "desired_primary_seconds": 25,
             })
         );
+    }
+
+    #[test]
+    fn batch_retry_policy_is_bounded_to_one() {
+        let mut request = batch_request(vec![batch_target(0, "youtube.com")]);
+        request.application_retry = ApplicationRetryPolicy {
+            enabled: true,
+            max_retries: 2,
+        };
+        assert!(validate_batch_start_request(&request).is_err());
+        request.application_retry.max_retries = 1;
+        assert!(validate_batch_start_request(&request).is_ok());
     }
 
     #[test]

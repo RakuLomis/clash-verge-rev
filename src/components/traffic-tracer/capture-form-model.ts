@@ -28,6 +28,7 @@ export interface CaptureFormDraft {
   options: CaptureOptions
   page_type: string
   playback: TargetConfigEntry['playback'] | null
+  application_retry_enabled: boolean
 }
 
 export function selectedTargetsInConfigOrder(
@@ -54,6 +55,10 @@ export function batchRequestFromDraft(
     chrome_binary: draft.chrome_binary.trim(),
     options: { ...draft.options, analyze_after_capture: true },
     fail_fast: false,
+    application_retry: {
+      enabled: draft.application_retry_enabled,
+      max_retries: 1,
+    },
   }
 }
 
@@ -95,6 +100,7 @@ export const defaultCaptureFormDraft: CaptureFormDraft = {
   run_label: 'all',
   page_type: 'capture',
   playback: null,
+  application_retry_enabled: false,
   options: {
     capture_packets: true,
     collect_cdp: true,

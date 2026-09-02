@@ -319,6 +319,7 @@ describe('TrafficTracer Complete workspace', () => {
         run_label: 'all',
         page_type: 'capture',
         playback: null,
+        application_retry_enabled: false,
         options: {
           capture_packets: true,
           collect_cdp: true,
@@ -493,7 +494,18 @@ describe('TrafficTracer Complete workspace', () => {
       targets: [{ index: 4 }, { index: 12 }],
       options: { analyze_after_capture: true },
       fail_fast: false,
+      application_retry: { enabled: false, max_retries: 1 },
     })
+    expect(
+      batchRequestFromDraft(
+        {
+          ...defaultCaptureFormDraft,
+          application_retry_enabled: true,
+        },
+        preview,
+        new Set([4]),
+      ).application_retry,
+    ).toEqual({ enabled: true, max_retries: 1 })
   })
 
   it('renders capture group progress and opens a child analysis', async () => {

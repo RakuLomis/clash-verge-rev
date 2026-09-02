@@ -138,6 +138,7 @@ export function TrafficTracerBatchProgress({
             <Stack spacing={0.5}>
               {batch.children.map((child, index) => {
                 const target = batch.targets[index]
+                const attempts = child.attempts ?? []
                 return (
                   <Stack
                     key={target.index}
@@ -160,6 +161,13 @@ export function TrafficTracerBatchProgress({
                       label={child.state}
                       sx={{ minWidth: 82 }}
                     />
+                    {attempts.length > 1 && (
+                      <Chip
+                        size="small"
+                        variant="outlined"
+                        label={`attempt ${attempts.length}`}
+                      />
+                    )}
                     <Typography
                       variant="body2"
                       title={`${target.domain} — ${target.url}`}
@@ -188,6 +196,26 @@ export function TrafficTracerBatchProgress({
                         {child.error.code}
                       </Typography>
                     )}
+                    {attempts
+                      .filter(
+                        (attempt) =>
+                          attempt.session_id &&
+                          attempt.session_id !== child.session_id,
+                      )
+                      .map((attempt) => (
+                        <Button
+                          key={attempt.ordinal}
+                          size="small"
+                          title={
+                            attempt.application_outcome
+                              ? `${attempt.application_outcome.state}: ${attempt.application_outcome.reason ?? 'no reason'}`
+                              : `Attempt ${attempt.ordinal}`
+                          }
+                          onClick={() => setSessionId(attempt.session_id)}
+                        >
+                          A{attempt.ordinal}
+                        </Button>
+                      ))}
                     {child.session_id && (
                       <Button
                         size="small"
