@@ -90,11 +90,13 @@ export function useTrafficTracerCaptureLock(enabled = true) {
 export function useTrafficTracerWorker(
   request: EnvironmentRequest | null,
   enabled = true,
+  diagnosticsPaused = false,
 ) {
   const queryClient = useQueryClient()
   const [workerActivity, setWorkerActivity] =
     useState<WorkerStartupActivity | null>(restoredWorkerActivity)
   const captureLockState = useTrafficTracerCaptureLock(enabled)
+  const workspaceLocked = captureLockState.captureLock?.locked === true
   const environmentQuery = useQuery({
     queryKey: request
       ? trafficTracerEnvironmentKey(request)
@@ -104,7 +106,8 @@ export function useTrafficTracerWorker(
         throw new Error('TrafficTracer environment request is missing')
       return getTrafficTracerEnvironment(request)
     },
-    enabled: enabled && request !== null,
+    enabled:
+      enabled && request !== null && !diagnosticsPaused && !workspaceLocked,
     retry: 1,
   })
 

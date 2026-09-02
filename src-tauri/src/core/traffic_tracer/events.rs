@@ -64,17 +64,26 @@ pub struct NotificationMapper {
 
 impl NotificationMapper {
     pub fn map_line(&mut self, line: &str, now: Instant) -> Result<Option<FrontendWorkerEvent>, EventBridgeError> {
-        if line.len() > MAX_FRONTEND_PAYLOAD_BYTES {
+        let oversized = line.len() > MAX_FRONTEND_PAYLOAD_BYTES;
+        let envelope: Value = serde_json::from_str(line).map_err(|error| {
+            if oversized {
+                EventBridgeError::PayloadTooLarge {
+                    actual: line.len(),
+                    maximum: MAX_FRONTEND_PAYLOAD_BYTES,
+                }
+            } else {
+                EventBridgeError::InvalidNotification(error.to_string())
+            }
+        })?;
+        if envelope.get("type").and_then(Value::as_str) != Some("notification") {
+            return Ok(None);
+        }
+        let is_worker_ready = envelope.get("method").and_then(Value::as_str) == Some("worker.ready");
+        if oversized && !is_worker_ready {
             return Err(EventBridgeError::PayloadTooLarge {
                 actual: line.len(),
                 maximum: MAX_FRONTEND_PAYLOAD_BYTES,
             });
-        }
-
-        let envelope: Value =
-            serde_json::from_str(line).map_err(|error| EventBridgeError::InvalidNotification(error.to_string()))?;
-        if envelope.get("type").and_then(Value::as_str) != Some("notification") {
-            return Ok(None);
         }
         let notification: Notification<Value> = serde_json::from_value(envelope)
             .map_err(|error| EventBridgeError::InvalidNotification(error.to_string()))?;
@@ -90,8 +99,8 @@ impl NotificationMapper {
             });
         }
 
-        let name = match notification.method {
-            NotificationMethod::WorkerReady => EVENT_WORKER_READY,
+        let (name, payload) = match notification.method {
+            NotificationMethod::WorkerReady => (EVENT_WORKER_READY, compact_worker_ready(&notification.params)),
             NotificationMethod::WorkerLog => {
                 if self
                     .last_worker_log
@@ -100,17 +109,40 @@ impl NotificationMapper {
                     return Ok(None);
                 }
                 self.last_worker_log = Some(now);
-                EVENT_WORKER_LOG
+                (EVENT_WORKER_LOG, notification.params)
             }
-            NotificationMethod::JobProgress => EVENT_JOB_PROGRESS,
-            NotificationMethod::JobStateChanged => EVENT_JOB_STATE,
-            NotificationMethod::JobCompleted => terminal_event_name(&notification.params),
+            NotificationMethod::JobProgress => (EVENT_JOB_PROGRESS, notification.params),
+            NotificationMethod::JobStateChanged => (EVENT_JOB_STATE, notification.params),
+            NotificationMethod::JobCompleted => (terminal_event_name(&notification.params), notification.params),
         };
-        Ok(Some(FrontendWorkerEvent {
-            name,
-            payload: notification.params,
-        }))
+        let payload_size = serde_json::to_vec(&payload)
+            .map_err(|error| EventBridgeError::InvalidNotification(error.to_string()))?
+            .len();
+        if payload_size > MAX_FRONTEND_PAYLOAD_BYTES {
+            return Err(EventBridgeError::PayloadTooLarge {
+                actual: payload_size,
+                maximum: MAX_FRONTEND_PAYLOAD_BYTES,
+            });
+        }
+        Ok(Some(FrontendWorkerEvent { name, payload }))
     }
+}
+
+fn compact_worker_ready(params: &Value) -> Value {
+    let recovery = params.get("recovery").unwrap_or(&Value::Null);
+    serde_json::json!({
+        "version": params.get("version").and_then(Value::as_str).unwrap_or_default(),
+        "api_version": params.get("api_version").and_then(Value::as_u64).unwrap_or_default(),
+        "output_root": params.get("output_root").and_then(Value::as_str).unwrap_or_default(),
+        "recovery": {
+            "status": recovery.get("status").and_then(Value::as_str).unwrap_or("degraded"),
+            "recovered_session_count": recovery.get("recovered_sessions").and_then(Value::as_array).map_or(0, Vec::len),
+            "terminated_pid_count": recovery.get("terminated_pids").and_then(Value::as_array).map_or(0, Vec::len),
+            "skipped_pid_count": recovery.get("skipped_pids").and_then(Value::as_array).map_or(0, Vec::len),
+            "error_count": recovery.get("errors").and_then(Value::as_array).map_or(0, Vec::len),
+            "summary_only": true,
+        }
+    })
 }
 
 fn terminal_event_name(params: &Value) -> &'static str {
@@ -234,6 +266,37 @@ mod tests {
         .to_string();
 
         assert!(mapper.map_line(&response, Instant::now()).unwrap().is_none());
+    }
+
+    #[test]
+    fn summarizes_oversized_worker_ready_notifications() {
+        let mut mapper = NotificationMapper::default();
+        let recovered_sessions = (0..40)
+            .map(|index| format!("session-{index}-{}", "x".repeat(8 * 1024)))
+            .collect::<Vec<_>>();
+        let ready = notification(
+            "worker.ready",
+            serde_json::json!({
+                "version": "1.0.14",
+                "api_version": WORKER_API_VERSION,
+                "output_root": "/captures",
+                "recovery": {
+                    "status": "ok",
+                    "recovered_sessions": recovered_sessions,
+                    "terminated_pids": [1, 2],
+                    "skipped_pids": [3],
+                    "errors": []
+                }
+            }),
+        );
+        assert!(ready.len() > MAX_FRONTEND_PAYLOAD_BYTES);
+
+        let event = mapper.map_line(&ready, Instant::now()).unwrap().unwrap();
+        assert_eq!(event.name, EVENT_WORKER_READY);
+        assert_eq!(event.payload["recovery"]["recovered_session_count"], 40);
+        assert_eq!(event.payload["recovery"]["terminated_pid_count"], 2);
+        assert_eq!(event.payload["recovery"]["summary_only"], true);
+        assert!(serde_json::to_vec(&event.payload).unwrap().len() < MAX_FRONTEND_PAYLOAD_BYTES);
     }
 
     #[test]

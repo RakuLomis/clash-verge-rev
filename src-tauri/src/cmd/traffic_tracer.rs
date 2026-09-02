@@ -207,6 +207,14 @@ pub async fn tt_get_environment(
     app_handle: AppHandle,
     request: EnvironmentRequest,
 ) -> CmdResult<CompleteEnvironmentReport> {
+    tt_get_environment_for_owner(app_handle, request, None).await
+}
+
+async fn tt_get_environment_for_owner(
+    app_handle: AppHandle,
+    request: EnvironmentRequest,
+    pipeline_owner: Option<&str>,
+) -> CmdResult<CompleteEnvironmentReport> {
     let verge = Config::verge().await.latest_arc();
     let current_core = verge.get_valid_clash_core().to_string();
     let tun_enabled = verge.enable_tun_mode.unwrap_or(false);
@@ -226,19 +234,27 @@ pub async fn tt_get_environment(
         return Err("output_root must be an absolute path".into());
     }
     let active_root = manager
-        .ensure_session_root(&app_handle, requested_root, &controller_endpoint, &controller_secret)
+        .ensure_session_root(
+            &app_handle,
+            requested_root,
+            &controller_endpoint,
+            &controller_secret,
+            pipeline_owner,
+        )
         .await
         .stringify_err()?;
     let active_root_string = active_root.to_string_lossy().into_owned();
-    feat::patch_verge(
-        &IVerge {
-            traffic_tracer_output_root: Some(active_root_string.clone().into()),
-            ..IVerge::default()
-        },
-        false,
-    )
-    .await
-    .stringify_err()?;
+    if pipeline_owner.is_none() {
+        feat::patch_verge(
+            &IVerge {
+                traffic_tracer_output_root: Some(active_root_string.clone().into()),
+                ..IVerge::default()
+            },
+            false,
+        )
+        .await
+        .stringify_err()?;
+    }
     let client = manager.client().stringify_err()?;
     let mut worker_report = client
         .request::<_, WorkerDiagnosticReport>(
@@ -989,7 +1005,7 @@ async fn tt_batch_start_for_owner(
     debug_assert_eq!(ordered_targets.len(), request.targets.len());
     let mut request = request;
     request.targets = ordered_targets;
-    let environment = tt_get_environment(
+    let environment = tt_get_environment_for_owner(
         app_handle,
         EnvironmentRequest {
             tun_interface: request.tun_interface.clone(),
@@ -998,6 +1014,7 @@ async fn tt_batch_start_for_owner(
             output_root: request.output_root.clone(),
             min_free_bytes: None,
         },
+        pipeline_owner,
     )
     .await?;
     if environment.level == CompleteEnvironmentLevel::Blocking {
@@ -1513,6 +1530,22 @@ async fn execute_pipeline_run(
     batch.options.proxy_selection_group = run.selection_group.clone();
     batch.options.expected_proxy_protocol.clear();
     let snapshot = if let Some(batch_id) = run.batch_id {
+        let environment = tt_get_environment_for_owner(
+            app_handle.clone(),
+            EnvironmentRequest {
+                tun_interface: batch.tun_interface.clone(),
+                physical_interface: batch.physical_interface.clone(),
+                chrome_binary: batch.chrome_binary.clone(),
+                output_root: batch.output_root.clone(),
+                min_free_bytes: None,
+            },
+            Some(pipeline_id),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        if environment.level == CompleteEnvironmentLevel::Blocking {
+            return Err("TrafficTracer environment has blocking diagnostics".into());
+        }
         tt_batch_resume_for_owner(batch_id, Some(pipeline_id)).await
     } else {
         tt_batch_start_for_owner(

@@ -173,8 +173,15 @@ impl WorkerManager {
         requested_root: &Path,
         controller_endpoint: &str,
         controller_secret: &str,
+        pipeline_owner: Option<&str>,
     ) -> Result<PathBuf> {
         let _workspace = self.workspace.lock().await;
+        match pipeline_owner {
+            Some(owner) => {
+                CaptureLock::global().ensure_owned("pipeline", owner, "preparing a pipeline Worker workspace")?
+            }
+            None => CaptureLock::global().ensure_unlocked("TrafficTracer environment diagnostics")?,
+        }
         let current_root = self.session_root.lock().clone();
         if session_root_action(&self.state(), current_root.as_deref(), requested_root)? == SessionRootAction::Reuse {
             return Ok(current_root.expect("a reused Worker has a Session root"));

@@ -113,8 +113,6 @@ const TrafficTracerPage = () => {
     )
     setDiagnosticRequest(request)
   }, [])
-  const { environment, environmentQuery, captureLock, workerActivity } =
-    useTrafficTracerWorker(diagnosticRequest)
   const {
     job,
     jobStartedAt,
@@ -160,6 +158,14 @@ const TrafficTracerPage = () => {
     'interrupted',
     'restore_failed',
   ])
+  const pipelineActive =
+    pipeline !== null && !pipelineTerminal.has(pipeline.state)
+  const { environment, environmentQuery, captureLock, workerActivity } =
+    useTrafficTracerWorker(
+      diagnosticRequest,
+      true,
+      pipelineActionPending || pipelineActive,
+    )
 
   useEffect(() => {
     if (!pipelineLocator) return

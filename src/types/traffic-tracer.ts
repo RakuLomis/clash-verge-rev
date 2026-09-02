@@ -902,10 +902,15 @@ export interface WorkerReadyEvent {
   output_root: string
   recovery: {
     status: 'ok' | 'degraded'
-    recovered_sessions: string[]
-    terminated_pids: number[]
-    skipped_pids: number[]
-    errors: string[]
+    recovered_sessions?: string[]
+    terminated_pids?: number[]
+    skipped_pids?: number[]
+    errors?: string[]
+    recovered_session_count?: number
+    terminated_pid_count?: number
+    skipped_pid_count?: number
+    error_count?: number
+    summary_only?: boolean
   }
 }
 
