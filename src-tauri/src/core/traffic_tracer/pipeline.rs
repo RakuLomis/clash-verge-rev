@@ -8,14 +8,20 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-pub const PIPELINE_SCHEMA_VERSION: u32 = 4;
+pub const PIPELINE_SCHEMA_VERSION: u32 = 6;
 const PIPELINE_MIN_SCHEMA_VERSION: u32 = 1;
 pub const PIPELINE_MANIFEST_NAME: &str = "pipeline-manifest.json";
 pub const PIPELINE_AGGREGATE_NAME: &str = "pipeline-aggregate.json";
 pub const PIPELINE_MAX_REPETITIONS: u16 = 20;
+pub const PIPELINE_FINGERPRINT_RUNTIME_BYTES_V1: &str = "runtime_bytes_v1";
+pub const PIPELINE_FINGERPRINT_SEMANTIC_V2: &str = "runtime_semantic_v2";
 
 fn default_repetitions() -> u16 {
     1
+}
+
+fn default_fingerprint_kind() -> String {
+    PIPELINE_FINGERPRINT_RUNTIME_BYTES_V1.into()
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -52,6 +58,7 @@ impl PipelineState {
 #[serde(rename_all = "snake_case")]
 pub enum PipelineStage {
     Queued,
+    Materializing,
     ActivatingProfile,
     WaitingController,
     SelectingProxy,
@@ -215,9 +222,32 @@ pub struct PipelineRunVerification {
     pub checked_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PipelineProfileActivationStep {
+    ActivationRequested,
+    ProfileCommitted,
+    ControllerVerified,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PipelineProfileActivation {
+    pub source_profile_uid: Option<String>,
+    pub target_profile_uid: String,
+    pub requested_at: DateTime<Utc>,
+    pub profile_already_active: bool,
+    pub resumed_from_committed_state: bool,
+    pub profile_committed_at: Option<DateTime<Utc>>,
+    pub controller_verified_at: Option<DateTime<Utc>>,
+    pub last_completed_step: PipelineProfileActivationStep,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PipelineRunEvidence {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_activation: Option<PipelineProfileActivation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection_snapshot: Option<PipelineProxySnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -250,6 +280,10 @@ pub struct PipelineTarget {
 pub struct PipelineCandidate {
     pub profile_uid: String,
     pub profile_fingerprint: String,
+    #[serde(default = "default_fingerprint_kind")]
+    pub profile_fingerprint_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded_at: Option<DateTime<Utc>>,
     pub selection_group: String,
     pub requested_node: String,
 }
@@ -269,6 +303,12 @@ impl PipelineCandidate {
             || !self.profile_fingerprint.chars().all(|value| value.is_ascii_hexdigit())
         {
             bail!("pipeline candidate profile_fingerprint must be SHA-256");
+        }
+        if !matches!(
+            self.profile_fingerprint_kind.as_str(),
+            PIPELINE_FINGERPRINT_RUNTIME_BYTES_V1 | PIPELINE_FINGERPRINT_SEMANTIC_V2
+        ) {
+            bail!("pipeline candidate profile_fingerprint_kind is unsupported");
         }
         Ok(())
     }
@@ -339,6 +379,14 @@ pub struct PipelineRun {
     pub run_id: String,
     pub profile_uid: String,
     pub profile_fingerprint: String,
+    #[serde(default = "default_fingerprint_kind")]
+    pub profile_fingerprint_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_profile_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_bound_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub profile_snapshot_changed: bool,
     pub selection_group: String,
     pub requested_node: String,
     pub state: PipelineRunState,
@@ -438,6 +486,10 @@ impl PipelineManifest {
                     run_id: run_id.clone(),
                     profile_uid: candidate.profile_uid.clone(),
                     profile_fingerprint: candidate.profile_fingerprint.clone(),
+                    profile_fingerprint_kind: candidate.profile_fingerprint_kind.clone(),
+                    queued_profile_fingerprint: Some(candidate.profile_fingerprint.clone()),
+                    profile_bound_at: None,
+                    profile_snapshot_changed: false,
                     selection_group: candidate.selection_group.clone(),
                     requested_node: candidate.requested_node.clone(),
                     state: PipelineRunState::Pending,
@@ -564,7 +616,8 @@ impl PipelineManifest {
         if !(PIPELINE_MIN_SCHEMA_VERSION..=PIPELINE_SCHEMA_VERSION).contains(&manifest.schema_version) {
             bail!("unsupported pipeline manifest schema version");
         }
-        if manifest.schema_version < 4 {
+        let loaded_schema_version = manifest.schema_version;
+        if loaded_schema_version < 4 {
             manifest.repetitions_per_candidate = 1;
             for run in &mut manifest.runs {
                 run.candidate_ordinal =
@@ -572,6 +625,16 @@ impl PipelineManifest {
                 run.repetition_index = 1;
                 run.repetition_total = 1;
             }
+        }
+        if loaded_schema_version < 6 {
+            for run in &mut manifest.runs {
+                run.profile_fingerprint_kind = PIPELINE_FINGERPRINT_RUNTIME_BYTES_V1.into();
+                run.queued_profile_fingerprint
+                    .get_or_insert_with(|| run.profile_fingerprint.clone());
+                run.profile_bound_at = None;
+                run.profile_snapshot_changed = false;
+            }
+            manifest.restore.profile_fingerprint = None;
         }
         manifest.schema_version = PIPELINE_SCHEMA_VERSION;
         Ok(manifest)
@@ -630,14 +693,17 @@ impl PipelineManifest {
             return Ok(None);
         };
         let run = &mut self.runs[index];
-        if run.state == PipelineRunState::Interrupted {
+        let resuming_interrupted = run.state == PipelineRunState::Interrupted;
+        if resuming_interrupted {
             run.resume_attempt += 1;
         }
         run.state = PipelineRunState::Running;
         run.stage = PipelineStage::ActivatingProfile;
         run.error = None;
         run.quality = None;
-        run.evidence = None;
+        if !resuming_interrupted {
+            run.evidence = None;
+        }
         run.started_at.get_or_insert_with(Utc::now);
         self.state = PipelineState::Running;
         self.stage = PipelineStage::ActivatingProfile;
@@ -674,6 +740,102 @@ impl PipelineManifest {
         self.updated_at = Utc::now();
         Ok(())
     }
+
+    pub fn bind_candidate_profile(
+        &mut self,
+        candidate_ordinal: u16,
+        fingerprint: String,
+        bound_at: DateTime<Utc>,
+    ) -> Result<bool> {
+        if fingerprint.len() != 64 || !fingerprint.chars().all(|value| value.is_ascii_hexdigit()) {
+            bail!("pipeline bound profile fingerprint must be SHA-256");
+        }
+        let mut found = false;
+        let mut changed = false;
+        for run in self
+            .runs
+            .iter_mut()
+            .filter(|run| run.candidate_ordinal == candidate_ordinal)
+        {
+            found = true;
+            let run_changed = run.profile_fingerprint != fingerprint
+                || run.profile_fingerprint_kind != PIPELINE_FINGERPRINT_SEMANTIC_V2;
+            changed |= run_changed;
+            run.profile_snapshot_changed = run_changed;
+            run.profile_fingerprint = fingerprint.clone();
+            run.profile_fingerprint_kind = PIPELINE_FINGERPRINT_SEMANTIC_V2.into();
+            run.profile_bound_at = Some(bound_at);
+        }
+        if !found {
+            bail!("pipeline candidate ordinal is absent");
+        }
+        self.updated_at = Utc::now();
+        Ok(changed)
+    }
+
+    pub fn fail_candidate_materialization(&mut self, candidate_ordinal: u16, error: PipelineError) -> Result<()> {
+        let now = Utc::now();
+        let mut first = true;
+        let mut found = false;
+        for run in self.runs.iter_mut().filter(|run| {
+            run.candidate_ordinal == candidate_ordinal
+                && matches!(run.state, PipelineRunState::Pending | PipelineRunState::Interrupted)
+        }) {
+            found = true;
+            run.state = if first {
+                PipelineRunState::Failed
+            } else {
+                PipelineRunState::Skipped
+            };
+            run.stage = PipelineStage::Finished;
+            run.error = Some(if first {
+                error.clone()
+            } else {
+                PipelineError {
+                    code: "CANDIDATE_BLOCKED".into(),
+                    message: format!(
+                        "Skipped because candidate materialization failed: {}: {}",
+                        error.code, error.message
+                    ),
+                }
+            });
+            run.started_at.get_or_insert(now);
+            run.completed_at = Some(now);
+            first = false;
+        }
+        if !found {
+            bail!("pipeline candidate has no pending runs to fail");
+        }
+        self.updated_at = now;
+        Ok(())
+    }
+
+    pub fn skip_remaining_candidate_runs(&mut self, candidate_ordinal: u16, cause: &PipelineError) -> usize {
+        let now = Utc::now();
+        let mut skipped = 0;
+        for run in self
+            .runs
+            .iter_mut()
+            .filter(|run| run.candidate_ordinal == candidate_ordinal && run.state == PipelineRunState::Pending)
+        {
+            run.state = PipelineRunState::Skipped;
+            run.stage = PipelineStage::Finished;
+            run.error = Some(PipelineError {
+                code: "CANDIDATE_BLOCKED".into(),
+                message: format!(
+                    "Skipped after non-retryable candidate error: {}: {}",
+                    cause.code, cause.message
+                ),
+            });
+            run.started_at = Some(now);
+            run.completed_at = Some(now);
+            skipped += 1;
+        }
+        if skipped > 0 {
+            self.updated_at = now;
+        }
+        skipped
+    }
 }
 
 #[cfg(test)]
@@ -684,6 +846,8 @@ mod tests {
         PipelineCandidate {
             profile_uid: "profile-one".into(),
             profile_fingerprint: "a".repeat(64),
+            profile_fingerprint_kind: PIPELINE_FINGERPRINT_SEMANTIC_V2.into(),
+            recorded_at: Some(Utc::now()),
             selection_group: "GLOBAL".into(),
             requested_node: node.into(),
         }
@@ -1015,6 +1179,20 @@ mod tests {
         .unwrap();
         manifest.begin_next_run().unwrap();
         manifest.runs[0].batch_id = Some("e38c26b7-789c-4aa0-b1bb-e3d5916390af".into());
+        let committed_at = Utc::now();
+        manifest.runs[0].evidence = Some(PipelineRunEvidence {
+            profile_activation: Some(PipelineProfileActivation {
+                source_profile_uid: Some("profile-zero".into()),
+                target_profile_uid: "profile-one".into(),
+                requested_at: committed_at,
+                profile_already_active: false,
+                resumed_from_committed_state: false,
+                profile_committed_at: Some(committed_at),
+                controller_verified_at: None,
+                last_completed_step: PipelineProfileActivationStep::ProfileCommitted,
+            }),
+            ..PipelineRunEvidence::default()
+        });
 
         assert!(manifest.recover_interrupted_supervisor().unwrap());
         assert_eq!(manifest.state, PipelineState::Interrupted);
@@ -1026,5 +1204,136 @@ mod tests {
         );
         assert_eq!(manifest.begin_next_run().unwrap(), Some(0));
         assert_eq!(manifest.runs[0].resume_attempt, 1);
+        let activation = manifest.runs[0]
+            .evidence
+            .as_ref()
+            .and_then(|evidence| evidence.profile_activation.as_ref())
+            .unwrap();
+        assert_eq!(activation.profile_committed_at, Some(committed_at));
+        assert_eq!(
+            activation.last_completed_step,
+            PipelineProfileActivationStep::ProfileCommitted
+        );
+    }
+
+    #[test]
+    fn binds_all_repetitions_to_one_semantic_profile_snapshot() {
+        let mut manifest = PipelineManifest::create(
+            "6ea29d49-4f0e-4f9b-8a88-0ad095c50b78".into(),
+            PathBuf::from("/tmp/pipeline"),
+            PipelineConfigSnapshot {
+                path: PathBuf::from("/tmp/sites.yaml"),
+                sha256: "b".repeat(64),
+            },
+            vec![target()],
+            serde_json::json!({}),
+            vec![(candidate("one"), vec!["one-r1".into(), "one-r2".into()])],
+            2,
+            PipelinePolicy {
+                continue_on_run_failure: true,
+                restore_original_state: true,
+            },
+            PipelineRestore {
+                profile_uid: None,
+                profile_fingerprint: None,
+                terminal_state: None,
+                selections: vec![],
+                checks: vec![],
+                state: RestoreState::Pending,
+                error: None,
+            },
+        )
+        .unwrap();
+
+        assert!(manifest.bind_candidate_profile(1, "c".repeat(64), Utc::now()).unwrap());
+        assert!(manifest.runs.iter().all(|run| {
+            run.profile_fingerprint == "c".repeat(64)
+                && run.profile_fingerprint_kind == PIPELINE_FINGERPRINT_SEMANTIC_V2
+                && run.profile_bound_at.is_some()
+        }));
+    }
+
+    #[test]
+    fn candidate_failure_skips_remaining_repetitions() {
+        let mut manifest = PipelineManifest::create(
+            "6ea29d49-4f0e-4f9b-8a88-0ad095c50b78".into(),
+            PathBuf::from("/tmp/pipeline"),
+            PipelineConfigSnapshot {
+                path: PathBuf::from("/tmp/sites.yaml"),
+                sha256: "b".repeat(64),
+            },
+            vec![target()],
+            serde_json::json!({}),
+            vec![(candidate("one"), vec!["one-r1".into(), "one-r2".into()])],
+            2,
+            PipelinePolicy {
+                continue_on_run_failure: true,
+                restore_original_state: true,
+            },
+            PipelineRestore {
+                profile_uid: None,
+                profile_fingerprint: None,
+                terminal_state: None,
+                selections: vec![],
+                checks: vec![],
+                state: RestoreState::Pending,
+                error: None,
+            },
+        )
+        .unwrap();
+        manifest
+            .fail_candidate_materialization(
+                1,
+                PipelineError {
+                    code: "SELECTOR_NOT_FOUND".into(),
+                    message: "selector missing".into(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(manifest.runs[0].state, PipelineRunState::Failed);
+        assert_eq!(manifest.runs[1].state, PipelineRunState::Skipped);
+        assert_eq!(manifest.runs[1].error.as_ref().unwrap().code, "CANDIDATE_BLOCKED");
+    }
+
+    #[test]
+    fn loads_schema_four_evidence_without_profile_activation() {
+        let manifest = PipelineManifest::create(
+            "6ea29d49-4f0e-4f9b-8a88-0ad095c50b78".into(),
+            PathBuf::from("/tmp/pipeline"),
+            PipelineConfigSnapshot {
+                path: PathBuf::from("/tmp/sites.yaml"),
+                sha256: "b".repeat(64),
+            },
+            vec![target()],
+            serde_json::json!({}),
+            vec![(candidate("one"), vec!["one-r1".into()])],
+            1,
+            PipelinePolicy {
+                continue_on_run_failure: true,
+                restore_original_state: true,
+            },
+            PipelineRestore {
+                profile_uid: None,
+                profile_fingerprint: None,
+                terminal_state: None,
+                selections: vec![],
+                checks: vec![],
+                state: RestoreState::Pending,
+                error: None,
+            },
+        )
+        .unwrap();
+        let mut legacy = serde_json::to_value(manifest).unwrap();
+        legacy["schema_version"] = serde_json::json!(4);
+        legacy["runs"][0]["evidence"] = serde_json::json!({});
+
+        let decoded: PipelineManifest = serde_json::from_value(legacy).unwrap();
+        assert!(
+            decoded.runs[0]
+                .evidence
+                .as_ref()
+                .is_some_and(|evidence| evidence.profile_activation.is_none())
+        );
     }
 }

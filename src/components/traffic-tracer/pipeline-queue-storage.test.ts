@@ -26,9 +26,40 @@ describe('pipeline queue persistence', () => {
       ]),
     )
     expect(restoredPipelineCandidates()).toEqual([
-      candidate,
-      { ...candidate, requested_node: 'node-two' },
+      {
+        ...candidate,
+        profile_fingerprint_kind: 'runtime_bytes_v1',
+        recorded_at: null,
+      },
+      {
+        ...candidate,
+        requested_node: 'node-two',
+        profile_fingerprint_kind: 'runtime_bytes_v1',
+        recorded_at: null,
+      },
     ])
+  })
+
+  it('migrates legacy v1 candidates as unchecked byte snapshots', () => {
+    localStorage.setItem(
+      'traffictracer.pipelineQueue.v1',
+      JSON.stringify([
+        {
+          profile_uid: 'legacy-profile',
+          profile_fingerprint: 'b'.repeat(64),
+          selection_group: 'GLOBAL',
+          requested_node: 'legacy-node',
+        },
+      ]),
+    )
+
+    expect(restoredPipelineCandidates()[0]).toMatchObject({
+      profile_uid: 'legacy-profile',
+      profile_fingerprint_kind: 'runtime_bytes_v1',
+      recorded_at: null,
+    })
+    expect(localStorage.getItem(PIPELINE_QUEUE_STORAGE_KEY)).not.toBeNull()
+    expect(localStorage.getItem('traffictracer.pipelineQueue.v1')).toBeNull()
   })
 
   it('rejects corrupt or incomplete persisted candidates', () => {

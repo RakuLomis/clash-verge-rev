@@ -18,6 +18,13 @@ pub async fn toggle_proxy_profile(profile_index: String) {
 }
 
 pub async fn switch_proxy_node(group_name: &str, proxy_name: &str) {
+    if let Err(error) =
+        crate::core::traffic_tracer::lock::CaptureLock::global().ensure_unlocked("switching a proxy node")
+    {
+        logging!(warn, Type::Config, "Proxy switch blocked by TrafficTracer: {error}");
+        handle::Handle::notice_message("traffictracer_capture_locked", error.to_string());
+        return;
+    }
     match handle::Handle::mihomo()
         .await
         .select_node_for_group(group_name, proxy_name)
@@ -193,6 +200,7 @@ pub async fn update_profile(
     ignore_auto_update: bool,
     is_mannual_trigger: bool,
 ) -> Result<()> {
+    crate::core::traffic_tracer::lock::CaptureLock::global().ensure_unlocked("updating a Profile")?;
     logging!(info, Type::Config, "[订阅更新] 开始更新订阅 {}", uid);
     let url_opt = should_update_profile(uid, ignore_auto_update).await?;
 

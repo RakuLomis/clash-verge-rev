@@ -28,11 +28,12 @@ use crate::{
             lock::{CaptureLock, CaptureLockSnapshot},
             manager::{WorkerManager, WorkerManagerState, WorkerRecoveryReport, WorkerRecoveryStatus},
             pipeline::{
-                PIPELINE_MANIFEST_NAME, PIPELINE_MAX_REPETITIONS, PipelineApplicationIssue, PipelineCandidate,
-                PipelineConfigSnapshot, PipelineConnectionDrain, PipelineError, PipelineManifest, PipelinePolicy,
-                PipelineProxySnapshot, PipelineQualityPlane, PipelineRestore, PipelineRestoreCheck,
-                PipelineRunEvidence, PipelineRunQuality, PipelineRunState, PipelineRunVerification, PipelineSelection,
-                PipelineStage, PipelineState, PipelineTarget, RestoreState,
+                PIPELINE_FINGERPRINT_SEMANTIC_V2, PIPELINE_MANIFEST_NAME, PIPELINE_MAX_REPETITIONS,
+                PipelineApplicationIssue, PipelineCandidate, PipelineConfigSnapshot, PipelineConnectionDrain,
+                PipelineError, PipelineManifest, PipelinePolicy, PipelineProfileActivation,
+                PipelineProfileActivationStep, PipelineProxySnapshot, PipelineQualityPlane, PipelineRestore,
+                PipelineRestoreCheck, PipelineRunEvidence, PipelineRunQuality, PipelineRunState,
+                PipelineRunVerification, PipelineSelection, PipelineStage, PipelineState, PipelineTarget, RestoreState,
             },
             protocol::{JOB_SCHEMA_VERSION, RequestMethod},
         },
@@ -46,6 +47,7 @@ const CAPTURE_LOCK_REASON: &str = "TrafficTracer capture is active";
 
 const UI_HEARTBEAT_WARN_AFTER_MS: u64 = 12_000;
 const PIPELINE_CONTROLLER_TIMEOUT: Duration = Duration::from_secs(15);
+const PIPELINE_PROFILE_ACTIVATION_TIMEOUT: Duration = Duration::from_secs(75);
 const PIPELINE_SELECTION_TIMEOUT: Duration = Duration::from_secs(8);
 const PIPELINE_END_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(3);
 const PIPELINE_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -992,14 +994,12 @@ pub async fn tt_pipeline_current_candidate(request: PipelineCurrentCandidateRequ
         return Err("pipeline requested node is not selectable from the runtime group".into());
     }
 
-    let runtime_path = crate::utils::dirs::app_home_dir()
-        .stringify_err()?
-        .join(crate::constants::files::RUNTIME_CONFIG);
-    let runtime = fs::read(runtime_path).stringify_err()?;
-    let profile_fingerprint = format!("{:x}", Sha256::digest(runtime));
+    let profile_fingerprint = effective_runtime_fingerprint()?;
     Ok(PipelineCandidate {
         profile_uid: request.profile_uid,
         profile_fingerprint,
+        profile_fingerprint_kind: PIPELINE_FINGERPRINT_SEMANTIC_V2.into(),
+        recorded_at: Some(Utc::now()),
         selection_group: request.selection_group,
         requested_node: request.requested_node,
     })
@@ -2122,11 +2122,63 @@ fn batch_effective_sessions(output_root: &Path, batch_id: &str) -> Option<HashSe
     (!sessions.is_empty()).then_some(sessions)
 }
 
+fn canonical_yaml_bytes(value: &serde_yaml_ng::Value, output: &mut Vec<u8>) -> Result<(), String> {
+    fn write_bytes(output: &mut Vec<u8>, tag: u8, bytes: &[u8]) {
+        output.push(tag);
+        output.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+        output.extend_from_slice(bytes);
+    }
+
+    match value {
+        serde_yaml_ng::Value::Null => output.push(b'n'),
+        serde_yaml_ng::Value::Bool(value) => output.push(if *value { b't' } else { b'f' }),
+        serde_yaml_ng::Value::Number(value) => write_bytes(output, b'#', value.to_string().as_bytes()),
+        serde_yaml_ng::Value::String(value) => write_bytes(output, b'"', value.as_bytes()),
+        serde_yaml_ng::Value::Sequence(values) => {
+            output.push(b'[');
+            output.extend_from_slice(&(values.len() as u64).to_be_bytes());
+            for value in values {
+                canonical_yaml_bytes(value, output)?;
+            }
+        }
+        serde_yaml_ng::Value::Mapping(values) => {
+            let mut entries = Vec::with_capacity(values.len());
+            for (key, value) in values {
+                let mut canonical_key = Vec::new();
+                let mut canonical_value = Vec::new();
+                canonical_yaml_bytes(key, &mut canonical_key)?;
+                canonical_yaml_bytes(value, &mut canonical_value)?;
+                entries.push((canonical_key, canonical_value));
+            }
+            entries.sort_by(|left, right| left.0.cmp(&right.0));
+            output.push(b'{');
+            output.extend_from_slice(&(entries.len() as u64).to_be_bytes());
+            for (key, value) in entries {
+                write_bytes(output, b'k', &key);
+                write_bytes(output, b'v', &value);
+            }
+        }
+        serde_yaml_ng::Value::Tagged(value) => {
+            write_bytes(output, b'!', value.tag.to_string().as_bytes());
+            canonical_yaml_bytes(&value.value, output)?;
+        }
+    }
+    Ok(())
+}
+
+fn semantic_runtime_fingerprint(runtime: &[u8]) -> Result<String, String> {
+    let value: serde_yaml_ng::Value =
+        serde_yaml_ng::from_slice(runtime).map_err(|error| format!("decode runtime YAML: {error}"))?;
+    let mut canonical = Vec::new();
+    canonical_yaml_bytes(&value, &mut canonical)?;
+    Ok(format!("{:x}", Sha256::digest(canonical)))
+}
+
 fn effective_runtime_fingerprint() -> CmdResult<String> {
     let path = crate::utils::dirs::app_home_dir()
         .stringify_err()?
         .join(crate::constants::files::RUNTIME_CONFIG);
-    Ok(format!("{:x}", Sha256::digest(fs::read(path).stringify_err()?)))
+    semantic_runtime_fingerprint(&fs::read(path).stringify_err()?).map_err(Into::into)
 }
 
 fn pipeline_directory(workspace_root: &str, pipeline_id: &str) -> CmdResult<PathBuf> {
@@ -2242,21 +2294,6 @@ pub async fn tt_pipeline_start(
     }
     let active_profile = profiles.current.clone().map(String::from);
     drop(profiles);
-    if let Some(active_profile) = active_profile.as_deref() {
-        let active_fingerprint = effective_runtime_fingerprint().map_err(|error| {
-            smartstring::alias::String::from(format!("PIPELINE_PROFILE_FINGERPRINT_UNAVAILABLE: {error}"))
-        })?;
-        for candidate in request
-            .candidates
-            .iter()
-            .filter(|candidate| candidate.profile_uid == active_profile)
-        {
-            if candidate.profile_fingerprint != active_fingerprint {
-                return Err("PIPELINE_PROFILE_FINGERPRINT_MISMATCH: the active Profile changed after the candidate was recorded".into());
-            }
-        }
-    }
-
     let pipeline_id = new_job_id()?;
     let output_root = pipeline_directory(&request.batch.output_root, &pipeline_id)?;
     let original_profile = Config::profiles().await.latest_arc().current.clone();
@@ -2403,20 +2440,93 @@ async fn execute_pipeline_run(
         return Ok(state);
     }
     pipeline_checkpoint(manifest, PipelineStage::ActivatingProfile)?;
-    if Config::profiles().await.latest_arc().current.as_deref() != Some(run.profile_uid.as_str()) {
-        let outcome = super::profile::patch_profiles_config_for_owner(
-            IProfiles {
-                current: Some(run.profile_uid.clone().into()),
-                items: None,
-            },
-            Some(pipeline_id),
+    let active_profile_uid = Config::profiles().await.latest_arc().current.clone().map(String::from);
+    let profile_already_active = active_profile_uid.as_deref() == Some(run.profile_uid.as_str());
+    let previous_activation = manifest.runs[index]
+        .evidence
+        .as_ref()
+        .and_then(|evidence| evidence.profile_activation.clone());
+    let requested_at = previous_activation
+        .as_ref()
+        .map_or_else(Utc::now, |activation| activation.requested_at);
+    let source_profile_uid = previous_activation
+        .as_ref()
+        .and_then(|activation| activation.source_profile_uid.clone())
+        .or(active_profile_uid);
+    let resumed_from_committed_state = run.resume_attempt > 0 && profile_already_active;
+    manifest.runs[index]
+        .evidence
+        .get_or_insert_with(PipelineRunEvidence::default)
+        .profile_activation = Some(PipelineProfileActivation {
+        source_profile_uid,
+        target_profile_uid: run.profile_uid.clone(),
+        requested_at,
+        profile_already_active,
+        resumed_from_committed_state,
+        profile_committed_at: previous_activation
+            .as_ref()
+            .and_then(|activation| activation.profile_committed_at),
+        controller_verified_at: previous_activation
+            .as_ref()
+            .and_then(|activation| activation.controller_verified_at),
+        last_completed_step: PipelineProfileActivationStep::ActivationRequested,
+    });
+    manifest.persist().map_err(|error| error.to_string())?;
+
+    if !profile_already_active {
+        let outcome = tokio::time::timeout(
+            PIPELINE_PROFILE_ACTIVATION_TIMEOUT,
+            super::profile::patch_profiles_config_for_owner(
+                IProfiles {
+                    current: Some(run.profile_uid.clone().into()),
+                    items: None,
+                },
+                Some(pipeline_id),
+            ),
         )
         .await
+        .map_err(|_| {
+            format!(
+                "PROFILE_ACTIVATION_TIMEOUT: activating Profile {} exceeded {} seconds",
+                run.profile_uid,
+                PIPELINE_PROFILE_ACTIVATION_TIMEOUT.as_secs()
+            )
+        })?
         .map_err(|error| format!("PROFILE_ACTIVATION_REQUEST_FAILED: {error}"))?;
         if !outcome.is_valid() {
             return Err(format!("PROFILE_ACTIVATION_FAILED: {outcome}"));
         }
     }
+
+    let committed_profile_uid = Config::profiles().await.latest_arc().current.clone().map(String::from);
+    let committed_fingerprint = effective_runtime_fingerprint().ok();
+    if committed_profile_uid.as_deref() != Some(run.profile_uid.as_str()) {
+        return Err(format!(
+            "PROFILE_COMMIT_READBACK_MISMATCH: expected Profile {}; observed Profile {}",
+            run.profile_uid,
+            committed_profile_uid.as_deref().unwrap_or("none")
+        ));
+    }
+    if committed_fingerprint.as_deref() != Some(run.profile_fingerprint.as_str()) {
+        return Err(format!(
+            "CANDIDATE_CONFIG_DRIFT: Profile {} was bound to fingerprint {}; observed {} before repetition {}",
+            run.profile_uid,
+            run.profile_fingerprint,
+            committed_fingerprint.as_deref().unwrap_or("unavailable"),
+            run.repetition_index
+        ));
+    }
+    if let Some(activation) = manifest.runs[index]
+        .evidence
+        .get_or_insert_with(PipelineRunEvidence::default)
+        .profile_activation
+        .as_mut()
+    {
+        activation.profile_committed_at.get_or_insert_with(Utc::now);
+        activation.last_completed_step = PipelineProfileActivationStep::ProfileCommitted;
+    }
+    manifest.persist().map_err(|error| error.to_string())?;
+
     if let Some(state) = requested_pipeline_stop(interrupt, cancel) {
         return Ok(state);
     }
@@ -2428,6 +2538,16 @@ async fn execute_pipeline_run(
     )
     .await
     .map_err(|error| error.render())?;
+    if let Some(activation) = manifest.runs[index]
+        .evidence
+        .get_or_insert_with(PipelineRunEvidence::default)
+        .profile_activation
+        .as_mut()
+    {
+        activation.controller_verified_at = Some(Utc::now());
+        activation.last_completed_step = PipelineProfileActivationStep::ControllerVerified;
+    }
+    manifest.persist().map_err(|error| error.to_string())?;
     if let Some(state) = requested_pipeline_stop(interrupt, cancel) {
         return Ok(state);
     }
@@ -2990,6 +3110,142 @@ async fn restore_pipeline(manifest: &mut PipelineManifest, pipeline_id: &str) {
     let _ = manifest.persist();
 }
 
+async fn materialize_pipeline_candidate(
+    manifest: &mut PipelineManifest,
+    pipeline_id: &str,
+    candidate_ordinal: u16,
+) -> Result<(), String> {
+    let candidate = manifest
+        .runs
+        .iter()
+        .find(|run| run.candidate_ordinal == candidate_ordinal)
+        .cloned()
+        .ok_or_else(|| "PIPELINE_CANDIDATE_NOT_FOUND: candidate has no runs".to_owned())?;
+
+    if Config::profiles().await.latest_arc().current.as_deref() != Some(candidate.profile_uid.as_str()) {
+        let outcome = tokio::time::timeout(
+            PIPELINE_PROFILE_ACTIVATION_TIMEOUT,
+            super::profile::patch_profiles_config_for_owner(
+                IProfiles {
+                    current: Some(candidate.profile_uid.clone().into()),
+                    items: None,
+                },
+                Some(pipeline_id),
+            ),
+        )
+        .await
+        .map_err(|_| {
+            format!(
+                "PROFILE_ACTIVATION_TIMEOUT: materializing Profile {} exceeded {} seconds",
+                candidate.profile_uid,
+                PIPELINE_PROFILE_ACTIVATION_TIMEOUT.as_secs()
+            )
+        })?
+        .map_err(|error| format!("PROFILE_ACTIVATION_REQUEST_FAILED: {error}"))?;
+        if !outcome.is_valid() {
+            return Err(format!("PROFILE_ACTIVATION_FAILED: {outcome}"));
+        }
+    }
+
+    wait_for_profile_controller(&candidate.profile_uid, None, PIPELINE_CONTROLLER_TIMEOUT)
+        .await
+        .map_err(|error| error.render())?;
+    let fingerprint =
+        effective_runtime_fingerprint().map_err(|error| format!("PROFILE_FINGERPRINT_UNAVAILABLE: {error}"))?;
+    handle::Handle::mihomo()
+        .await
+        .select_node_for_group(&candidate.selection_group, &candidate.requested_node)
+        .await
+        .map_err(|error| format!("SELECTOR_REQUEST_FAILED: {error}"))?;
+    let snapshot = wait_for_selected_snapshot(
+        &candidate.profile_uid,
+        &fingerprint,
+        &candidate.selection_group,
+        &candidate.requested_node,
+        PIPELINE_SELECTION_TIMEOUT,
+    )
+    .await
+    .map_err(|error| error.render())?;
+    let bound_at = Utc::now();
+    let changed = manifest
+        .bind_candidate_profile(candidate_ordinal, fingerprint, bound_at)
+        .map_err(|error| error.to_string())?;
+    for run in manifest
+        .runs
+        .iter_mut()
+        .filter(|run| run.candidate_ordinal == candidate_ordinal)
+    {
+        run.resolved_chain = snapshot.resolved_chain.clone();
+        run.resolved_leaf = Some(snapshot.resolved_leaf.clone());
+        run.expected_protocol = snapshot.protocol.clone();
+    }
+    logging!(
+        info,
+        Type::System,
+        "TrafficTracer candidate materialized; pipeline={pipeline_id}; candidate={candidate_ordinal}; profile={}; node={}; protocol={}; snapshot_changed={changed}",
+        candidate.profile_uid,
+        candidate.requested_node,
+        snapshot.protocol
+    );
+    manifest.persist().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+async fn materialize_pipeline_candidates(manifest: &mut PipelineManifest, pipeline_id: &str) -> Result<(), String> {
+    let candidates = manifest
+        .runs
+        .iter()
+        .filter(|run| {
+            matches!(run.state, PipelineRunState::Pending | PipelineRunState::Interrupted)
+                && run.profile_bound_at.is_none()
+        })
+        .map(|run| run.candidate_ordinal)
+        .collect::<std::collections::BTreeSet<_>>();
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    manifest.state = PipelineState::Validating;
+    manifest.stage = PipelineStage::Materializing;
+    manifest.updated_at = Utc::now();
+    manifest.persist().map_err(|error| error.to_string())?;
+
+    for candidate_ordinal in candidates {
+        if let Err(message) = materialize_pipeline_candidate(manifest, pipeline_id, candidate_ordinal).await {
+            let error = pipeline_run_error(message);
+            manifest
+                .fail_candidate_materialization(candidate_ordinal, error.clone())
+                .map_err(|failure| failure.to_string())?;
+            manifest.persist().map_err(|failure| failure.to_string())?;
+            if !manifest.policy.continue_on_run_failure {
+                manifest.state = PipelineState::Failed;
+                manifest.stage = PipelineStage::Finished;
+                manifest.updated_at = Utc::now();
+                manifest.persist().map_err(|failure| failure.to_string())?;
+                return Err(error.message);
+            }
+        }
+    }
+    manifest.state = PipelineState::Running;
+    manifest.stage = PipelineStage::Queued;
+    manifest.updated_at = Utc::now();
+    manifest.persist().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn non_retryable_candidate_error(code: &str) -> bool {
+    matches!(
+        code,
+        "CANDIDATE_CONFIG_DRIFT"
+            | "PROFILE_COMMIT_READBACK_MISMATCH"
+            | "PROFILE_READBACK_MISMATCH"
+            | "SELECTOR_NOT_FOUND"
+            | "PROXY_LEAF_NOT_FOUND"
+            | "PROXY_CHAIN_CYCLE"
+            | "PROXY_CHAIN_TOO_DEEP"
+            | "NODE_READBACK_MISMATCH"
+    )
+}
+
 async fn run_pipeline(
     app_handle: AppHandle,
     manifest_path: PathBuf,
@@ -2999,6 +3255,7 @@ async fn run_pipeline(
 ) -> Result<(), String> {
     let mut manifest = PipelineManifest::load(&manifest_path).map_err(|error| error.to_string())?;
     let pipeline_id = manifest.pipeline_id.clone();
+    materialize_pipeline_candidates(&mut manifest, &pipeline_id).await?;
     loop {
         if cancel.load(Ordering::Acquire) || interrupt.load(Ordering::Acquire) {
             manifest.state = if cancel.load(Ordering::Acquire) {
@@ -3042,9 +3299,15 @@ async fn run_pipeline(
                 manifest.finish_run(state, None).map_err(|error| error.to_string())?;
             }
             Err(message) => {
+                let candidate_ordinal = manifest.runs[index].candidate_ordinal;
+                let error = pipeline_run_error(message);
+                let stop_candidate = non_retryable_candidate_error(&error.code);
                 manifest
-                    .finish_run(PipelineRunState::Failed, Some(pipeline_run_error(message)))
-                    .map_err(|error| error.to_string())?;
+                    .finish_run(PipelineRunState::Failed, Some(error.clone()))
+                    .map_err(|failure| failure.to_string())?;
+                if stop_candidate {
+                    manifest.skip_remaining_candidate_runs(candidate_ordinal, &error);
+                }
                 if !manifest.policy.continue_on_run_failure {
                     manifest.state = PipelineState::Failed;
                 }
@@ -4497,6 +4760,24 @@ mod session_tests {
 #[cfg(test)]
 mod capture_tests {
     use super::*;
+
+    #[test]
+    fn semantic_runtime_fingerprint_ignores_mapping_order_and_formatting() {
+        let left =
+            semantic_runtime_fingerprint(b"mixed-port: 7890\ndns:\n  enable: true\n  nameserver: [1.1.1.1, 8.8.8.8]\n")
+                .unwrap();
+        let right =
+            semantic_runtime_fingerprint(b"dns: {nameserver: [1.1.1.1, 8.8.8.8], enable: true}\nmixed-port: 7890\n")
+                .unwrap();
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn semantic_runtime_fingerprint_detects_behavioral_change() {
+        let left = semantic_runtime_fingerprint(b"tun: {enable: true, device: Meta}\n").unwrap();
+        let right = semantic_runtime_fingerprint(b"tun: {enable: false, device: Meta}\n").unwrap();
+        assert_ne!(left, right);
+    }
 
     fn proxy_snapshot(node: &str, leaf: &str, protocol: &str) -> PipelineProxySnapshot {
         PipelineProxySnapshot {

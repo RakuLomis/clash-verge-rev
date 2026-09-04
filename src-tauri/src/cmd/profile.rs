@@ -22,9 +22,12 @@ use clash_verge_logging::{Type, logging};
 use scopeguard::defer;
 use smartstring::alias::String;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 static CURRENT_SWITCHING_PROFILE: AtomicBool = AtomicBool::new(false);
+const PROFILE_CORE_UPDATE_TIMEOUT: Duration = Duration::from_secs(30);
+const PROFILE_PERSIST_TIMEOUT: Duration = Duration::from_secs(10);
+const PROFILE_AUXILIARY_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn profile_import_error(err: &anyhow::Error) -> std::string::String {
     if let Some(cause) = err.chain().find(|cause| cause.to_string().contains("TLS 1.0/1.1")) {
@@ -70,6 +73,9 @@ pub async fn enhance_profiles() -> CmdResult<ValidationOutcome> {
 /// 导入配置文件
 #[tauri::command]
 pub async fn import_profile(url: std::string::String, option: Option<PrfOption>) -> CmdResult {
+    CaptureLock::global()
+        .ensure_unlocked("importing a Profile")
+        .stringify_err()?;
     logging!(info, Type::Cmd, "[导入订阅] 开始导入: {}", help::mask_url(&url));
 
     // 直接依赖 PrfItem::from_url 自身的超时/重试逻辑，不再使用 tokio::time::timeout 包裹
@@ -111,6 +117,9 @@ pub async fn import_profile(url: std::string::String, option: Option<PrfOption>)
 /// 调整profile的顺序
 #[tauri::command]
 pub async fn reorder_profile(active_id: String, over_id: String) -> CmdResult {
+    CaptureLock::global()
+        .ensure_unlocked("reordering Profiles")
+        .stringify_err()?;
     match profiles_reorder_safe(&active_id, &over_id).await {
         Ok(_) => {
             logging!(info, Type::Cmd, "重新排序配置文件");
@@ -127,6 +136,9 @@ pub async fn reorder_profile(active_id: String, over_id: String) -> CmdResult {
 /// 创建一个新的配置文件
 #[tauri::command]
 pub async fn create_profile(item: PrfItem, file_data: Option<String>) -> CmdResult {
+    CaptureLock::global()
+        .ensure_unlocked("creating a Profile")
+        .stringify_err()?;
     match profiles_append_item_with_filedata_safe(&item, file_data).await {
         Ok(_) => {
             profiles_save_file_safe().await.stringify_err()?;
@@ -159,6 +171,9 @@ pub async fn update_profile(index: String, option: Option<PrfOption>) -> CmdResu
 /// 删除配置文件
 #[tauri::command]
 pub async fn delete_profile(index: String) -> CmdResult {
+    CaptureLock::global()
+        .ensure_unlocked("deleting a Profile")
+        .stringify_err()?;
     // 使用Send-safe helper函数
     let should_update = profiles_delete_item_safe(&index).await.stringify_err()?;
     profiles_save_file_safe().await.stringify_err()?;
@@ -212,21 +227,44 @@ async fn restore_previous_profile(prev_profile: &String) -> CmdResult<()> {
     Ok(())
 }
 
-async fn handle_success(current_value: Option<&String>) -> CmdResult<ValidationOutcome> {
+async fn handle_success(current_value: Option<&String>, pipeline_owner: Option<&str>) -> CmdResult<ValidationOutcome> {
+    let started_at = Instant::now();
+    let owner = pipeline_owner.unwrap_or("manual");
+    logging!(info, Type::Cmd, "Profile activation commit started; owner={owner}");
     Config::profiles().await.apply();
+    logging!(
+        info,
+        Type::Cmd,
+        "Profile activation draft committed; owner={owner}; elapsed_ms={}",
+        started_at.elapsed().as_millis()
+    );
+
+    match tokio::time::timeout(PROFILE_PERSIST_TIMEOUT, profiles_save_file_safe()).await {
+        Ok(Ok(())) => logging!(
+            info,
+            Type::Cmd,
+            "Profile activation persisted; owner={owner}; elapsed_ms={}",
+            started_at.elapsed().as_millis()
+        ),
+        Ok(Err(error)) => {
+            logging!(
+                error,
+                Type::Cmd,
+                "Profile activation persistence failed; owner={owner}; error={error}"
+            );
+            return Err(format!("PROFILE_PERSIST_FAILED: {error}").into());
+        }
+        Err(_) => {
+            logging!(
+                error,
+                Type::Cmd,
+                "Profile activation persistence timed out; owner={owner}"
+            );
+            return Err("PROFILE_PERSIST_TIMEOUT: saving the active Profile exceeded 10 seconds".into());
+        }
+    }
+
     handle::Handle::refresh_clash();
-
-    if let Err(e) = Tray::global().update_tooltip().await {
-        logging!(warn, Type::Cmd, "Warning: 异步更新托盘提示失败: {e}");
-    }
-
-    if let Err(e) = Tray::global().update_menu().await {
-        logging!(warn, Type::Cmd, "Warning: 异步更新托盘菜单失败: {e}");
-    }
-
-    if let Err(e) = profiles_save_file_safe().await {
-        logging!(warn, Type::Cmd, "Warning: 异步保存配置文件失败: {e}");
-    }
 
     if let Some(current) = current_value
         && WindowManager::get_main_window().is_some()
@@ -235,9 +273,45 @@ async fn handle_success(current_value: Option<&String>) -> CmdResult<ValidationO
         handle::Handle::notify_profile_changed(current);
     }
 
+    let auxiliary_owner = owner.to_owned();
+    crate::process::AsyncHandler::spawn(move || async move {
+        match tokio::time::timeout(PROFILE_AUXILIARY_TIMEOUT, Tray::global().update_tooltip()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => logging!(
+                warn,
+                Type::Cmd,
+                "Profile activation tray tooltip refresh failed; owner={auxiliary_owner}; error={error}"
+            ),
+            Err(_) => logging!(
+                warn,
+                Type::Cmd,
+                "Profile activation tray tooltip refresh timed out; owner={auxiliary_owner}"
+            ),
+        }
+        match tokio::time::timeout(PROFILE_AUXILIARY_TIMEOUT, Tray::global().update_menu()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => logging!(
+                warn,
+                Type::Cmd,
+                "Profile activation tray menu refresh failed; owner={auxiliary_owner}; error={error}"
+            ),
+            Err(_) => logging!(
+                warn,
+                Type::Cmd,
+                "Profile activation tray menu refresh timed out; owner={auxiliary_owner}"
+            ),
+        }
+    });
+
+    logging!(
+        info,
+        Type::Cmd,
+        "Profile activation commit completed; owner={owner}; elapsed_ms={}",
+        started_at.elapsed().as_millis()
+    );
+
     Ok(ValidationOutcome::Valid)
 }
-
 async fn discard_and_restore(current_profile: Option<&String>) -> CmdResult<()> {
     Config::profiles().await.discard();
     if let Some(prev_profile) = current_profile {
@@ -278,15 +352,19 @@ async fn handle_timeout(current_profile: Option<&String>) -> CmdResult<Validatio
 async fn perform_config_update(
     current_value: Option<&String>,
     current_profile: Option<&String>,
+    pipeline_owner: Option<&str>,
 ) -> CmdResult<ValidationOutcome> {
     defer! {
         CURRENT_SWITCHING_PROFILE.store(false, Ordering::Release);
     }
-    let update_result =
-        tokio::time::timeout(Duration::from_secs(30), CoreManager::global().update_config_forced()).await;
+    let update_result = tokio::time::timeout(
+        PROFILE_CORE_UPDATE_TIMEOUT,
+        CoreManager::global().update_config_forced(),
+    )
+    .await;
 
     match update_result {
-        Ok(Ok(outcome)) if outcome.is_valid() => handle_success(current_value).await,
+        Ok(Ok(outcome)) if outcome.is_valid() => handle_success(current_value, pipeline_owner).await,
         Ok(Ok(outcome)) => handle_validation_failure(outcome, current_profile).await,
         Ok(Err(e)) => handle_update_error(e, current_profile).await,
         Err(_) => handle_timeout(current_profile).await,
@@ -330,7 +408,7 @@ pub(crate) async fn patch_profiles_config_for_owner(
 
     Config::profiles().await.edit_draft(|d| d.patch_config(&profiles));
 
-    perform_config_update(target_profile, previous_profile.as_ref()).await
+    perform_config_update(target_profile, previous_profile.as_ref(), pipeline_owner).await
 }
 
 /// 根据profile name修改profiles
@@ -348,6 +426,9 @@ pub async fn patch_profiles_config_by_profile_index(profile_index: String) -> Cm
 /// 修改某个profile item的
 #[tauri::command]
 pub async fn patch_profile(index: String, profile: PrfItem) -> CmdResult {
+    CaptureLock::global()
+        .ensure_unlocked("editing a Profile")
+        .stringify_err()?;
     // 保存修改前检查是否有更新 update_interval
     let profiles = Config::profiles().await;
     let should_refresh_timer = if let Ok(old_profile) = profiles.latest_arc().get_item(&index)

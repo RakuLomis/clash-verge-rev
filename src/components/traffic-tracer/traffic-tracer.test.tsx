@@ -494,7 +494,7 @@ describe('TrafficTracer Complete workspace', () => {
       targets: [{ index: 4 }, { index: 12 }],
       options: { analyze_after_capture: true },
       fail_fast: false,
-      application_retry: { enabled: false, max_retries: 1 },
+      application_retry: { enabled: true, max_retries: 1 },
     })
     expect(
       batchRequestFromDraft(
@@ -548,6 +548,17 @@ describe('TrafficTracer Complete workspace', () => {
             state: 'completed',
             session_id: 'session-one',
             error: null,
+            attempts: [
+              {
+                ordinal: 2,
+                job_id: 'retry-job',
+                state: 'completed',
+                session_id: 'session-one',
+                error: null,
+                application_outcome: { state: 'passed', reason: null },
+                automatic_retry: true,
+              },
+            ],
           },
           {
             target_index: 1,
@@ -557,6 +568,7 @@ describe('TrafficTracer Complete workspace', () => {
           },
         ],
         fail_fast: true,
+        application_retry: { enabled: true, max_retries: 1 },
         cancel_requested: false,
         resume: { attempt: 0, next_index: 1, resumed_at: null },
       },
@@ -574,6 +586,9 @@ describe('TrafficTracer Complete workspace', () => {
     )
 
     expect(screen.getByText(/Target 2\/2 · analysis/)).toBeInTheDocument()
+    expect(
+      screen.getByText('Playback retry: enabled (max 1 per target) · 1 used'),
+    ).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Analysis' }))
     expect(
       screen.getByText('Opened analysis for session-one'),

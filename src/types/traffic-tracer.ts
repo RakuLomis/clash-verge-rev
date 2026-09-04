@@ -152,6 +152,8 @@ export interface ApplicationRetryPolicy {
 export interface PipelineCandidate {
   profile_uid: string
   profile_fingerprint: string
+  profile_fingerprint_kind: 'runtime_bytes_v1' | 'runtime_semantic_v2'
+  recorded_at: string | null
   selection_group: string
   requested_node: string
 }
@@ -178,6 +180,7 @@ export type PipelineState =
 
 export type PipelineStage =
   | 'queued'
+  | 'materializing'
   | 'activating_profile'
   | 'waiting_controller'
   | 'selecting_proxy'
@@ -200,6 +203,10 @@ export interface PipelineRun {
   run_id: string
   profile_uid: string
   profile_fingerprint: string
+  profile_fingerprint_kind: 'runtime_bytes_v1' | 'runtime_semantic_v2'
+  queued_profile_fingerprint?: string
+  profile_bound_at?: string
+  profile_snapshot_changed: boolean
   selection_group: string
   requested_node: string
   state:
@@ -284,7 +291,22 @@ export interface PipelineRunVerification {
   checked_at: string
 }
 
+export interface PipelineProfileActivation {
+  source_profile_uid: string | null
+  target_profile_uid: string
+  requested_at: string
+  profile_already_active: boolean
+  resumed_from_committed_state: boolean
+  profile_committed_at: string | null
+  controller_verified_at: string | null
+  last_completed_step:
+    | 'activation_requested'
+    | 'profile_committed'
+    | 'controller_verified'
+}
+
 export interface PipelineRunEvidence {
+  profile_activation?: PipelineProfileActivation
   selection_snapshot?: PipelineProxySnapshot
   drain?: PipelineConnectionDrain
   pre_batch_snapshot?: PipelineProxySnapshot
@@ -319,7 +341,7 @@ export interface PipelineListEntry {
 }
 
 export interface PipelineManifest {
-  schema_version: 4
+  schema_version: 6
   pipeline_id: string
   state: PipelineState
   stage: PipelineStage

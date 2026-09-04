@@ -804,9 +804,9 @@ export function TrafficTracerCaptureForm({
                 color="text.secondary"
                 sx={{ display: 'block', ml: 4 }}
               >
-                Opt in to one fresh Chrome and Session attempt only for explicit
-                transient playback outcomes. Capture, analysis, protocol, and
-                unclassified failures are never retried.
+                Enabled by default: use at most one fresh Chrome and Session
+                attempt for explicit transient playback outcomes. Capture,
+                analysis, protocol, and unclassified failures are never retried.
               </Typography>
             </Box>
           )}

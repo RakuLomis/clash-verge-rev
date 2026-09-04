@@ -142,9 +142,10 @@ export function TrafficTracerPipelineQueue({
               </Typography>
             </Stack>
             <Alert severity="info">
-              Repetitions are independent full sites.yaml samples. A URL-level
-              application retry remains a separate recovery attempt inside one
-              batch.
+              Repetitions are independent full sites.yaml samples. Before the
+              first Batch, every queued candidate is activated and rebound to
+              its current semantic runtime configuration. That frozen snapshot
+              is then enforced across all repetitions.
             </Alert>
             <Stack
               direction="row"
@@ -206,8 +207,13 @@ export function TrafficTracerPipelineQueue({
                         {candidate.requested_node}
                       </Typography>
                       <Typography variant="caption" color="text.secondary">
-                        effective config{' '}
+                        {candidate.profile_fingerprint_kind ===
+                        'runtime_semantic_v2'
+                          ? 'semantic snapshot'
+                          : 'legacy snapshot · will rebind'}{' '}
                         {candidate.profile_fingerprint.slice(0, 12)}
+                        {candidate.recorded_at &&
+                          ` · ${new Date(candidate.recorded_at).toLocaleString()}`}
                       </Typography>
                     </Box>
                     <IconButton

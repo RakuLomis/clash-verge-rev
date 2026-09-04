@@ -69,6 +69,14 @@ export function TrafficTracerBatchProgress({
     ? (completed / batch.targets.length) * 100
     : 0
   const canResume = batch.state === 'failed' || batch.state === 'interrupted'
+  const retryEnabled = batch.application_retry?.enabled ?? false
+  const automaticRetries = batch.children.reduce(
+    (total, child) =>
+      total +
+      (child.attempts ?? []).filter((attempt) => attempt.automatic_retry)
+        .length,
+    0,
+  )
   return (
     <Paper
       variant="outlined"
@@ -101,6 +109,11 @@ export function TrafficTracerBatchProgress({
           />
         </Stack>
         <LinearProgress variant="determinate" value={progress} />
+        <Typography variant="caption" color="text.secondary">
+          Playback retry:{' '}
+          {retryEnabled ? 'enabled (max 1 per target)' : 'disabled'}
+          {automaticRetries > 0 ? ` · ${automaticRetries} used` : ''}
+        </Typography>
         {(batch.cancel_requested || status.job?.interrupt_requested) && (
           <Alert severity="info">
             {status.job?.interrupt_requested

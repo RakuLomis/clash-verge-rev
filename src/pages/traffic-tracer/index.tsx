@@ -631,6 +631,41 @@ const TrafficTracerPage = () => {
                   Last durable checkpoint:{' '}
                   {new Date(pipeline.updated_at).toLocaleString()}
                 </Box>
+                {displayedPipelineRun.profile_bound_at && (
+                  <Box sx={{ opacity: 0.8, overflowWrap: 'anywhere' }}>
+                    Configuration snapshot:{' '}
+                    {displayedPipelineRun.profile_fingerprint_kind.replaceAll(
+                      '_',
+                      ' ',
+                    )}{' '}
+                    · {displayedPipelineRun.profile_fingerprint.slice(0, 12)} ·{' '}
+                    {new Date(
+                      displayedPipelineRun.profile_bound_at,
+                    ).toLocaleString()}
+                    {displayedPipelineRun.profile_snapshot_changed &&
+                      ' · rebound from queued snapshot'}
+                  </Box>
+                )}
+                {displayedPipelineRun.evidence?.profile_activation && (
+                  <Box sx={{ opacity: 0.8, overflowWrap: 'anywhere' }}>
+                    Profile activation:{' '}
+                    {displayedPipelineRun.evidence.profile_activation.last_completed_step.replaceAll(
+                      '_',
+                      ' ',
+                    )}
+                    {' · '}
+                    {displayedPipelineRun.evidence.profile_activation
+                      .source_profile_uid ?? 'none'}
+                    {' → '}
+                    {
+                      displayedPipelineRun.evidence.profile_activation
+                        .target_profile_uid
+                    }
+                    {displayedPipelineRun.evidence.profile_activation
+                      .resumed_from_committed_state &&
+                      ' · resumed from committed Profile'}
+                  </Box>
+                )}
               </Stack>
             )}
             {displayedBatch && (

@@ -100,7 +100,7 @@ export const defaultCaptureFormDraft: CaptureFormDraft = {
   run_label: 'all',
   page_type: 'capture',
   playback: null,
-  application_retry_enabled: false,
+  application_retry_enabled: true,
   options: {
     capture_packets: true,
     collect_cdp: true,
