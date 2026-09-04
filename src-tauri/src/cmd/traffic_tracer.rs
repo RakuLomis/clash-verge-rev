@@ -1953,6 +1953,7 @@ impl QualityCounts {
         }
         match state {
             Some("passed" | "good") => self.passed += 1,
+            Some("not_applicable") => self.not_applicable += 1,
             Some("degraded") => self.degraded += 1,
             Some("failed" | "unavailable") => self.failed += 1,
             _ => self.indeterminate += 1,
@@ -2057,13 +2058,16 @@ fn pipeline_run_quality(output_path: &Path, effective_sessions: Option<&HashSet<
         );
         correlation.observe(value.get("quality_state").and_then(Value::as_str), true);
 
-        let scenario = value.get("scenario_outcome").filter(|item| item.is_object());
+        let scenario = value
+            .get("activity_outcome")
+            .filter(|item| item.is_object())
+            .or_else(|| value.get("scenario_outcome").filter(|item| item.is_object()));
         application.observe(
             scenario.and_then(|item| item.get("state")).and_then(Value::as_str),
             scenario.is_some(),
         );
         let scenario_state = scenario.and_then(|item| item.get("state")).and_then(Value::as_str);
-        if scenario.is_none() || scenario_state == Some("passed") {
+        if scenario.is_none() || scenario_state == Some("passed") || scenario_state == Some("not_applicable") {
             continue;
         }
 
@@ -2080,7 +2084,12 @@ fn pipeline_run_quality(output_path: &Path, effective_sessions: Option<&HashSet<
         application_issues.push(PipelineApplicationIssue {
             session_id: string_at(&value, "/session_id").unwrap_or_default(),
             target_url: string_at(&context, "/target/url").unwrap_or_default(),
-            final_url: string_at(&value, "/playback/diagnostics/last_observation/href"),
+            final_url: string_at(&value, "/activity_outcome/final_url")
+                .or_else(|| string_at(&value, "/playback/diagnostics/last_observation/href")),
+            final_status: value
+                .pointer("/activity_outcome/final_status")
+                .and_then(Value::as_u64)
+                .and_then(|status| u16::try_from(status).ok()),
             state: scenario_state.unwrap_or("indeterminate").to_owned(),
             reason: scenario
                 .and_then(|item| item.get("reason"))
@@ -3825,6 +3834,18 @@ pub struct SessionSummary {
     #[serde(default)]
     pub scenario_outcome_state: Option<String>,
     #[serde(default)]
+    pub navigation_outcome_state: Option<String>,
+    #[serde(default)]
+    pub navigation_outcome_reason: Option<String>,
+    #[serde(default)]
+    pub navigation_final_url: Option<String>,
+    #[serde(default)]
+    pub navigation_final_status: Option<u16>,
+    #[serde(default)]
+    pub resource_health_state: Option<String>,
+    #[serde(default)]
+    pub activity_outcome_state: Option<String>,
+    #[serde(default)]
     pub coverage: Option<Value>,
     #[serde(default)]
     pub packet_split: Value,
@@ -4911,7 +4932,10 @@ mod capture_tests {
             serde_json::json!({
                 "session_id": "session-example",
                 "quality_state": "passed",
-                "analysis_integrity": {"page_attributed": {"state": "passed"}}
+                "analysis_integrity": {"page_attributed": {"state": "passed"}},
+                "activity_outcome": {
+                    "state": "not_applicable"
+                }
             }),
             "https://example.com/",
         );
@@ -4941,6 +4965,48 @@ mod capture_tests {
         assert_eq!(retried.application.state, "passed");
         assert!(retried.application_issues.is_empty());
         assert!(!run_quality_requires_attention(&retried));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn pipeline_quality_surfaces_generic_navigation_failure() {
+        let root = std::env::temp_dir().join(format!("traffictracer-navigation-quality-{}", std::process::id()));
+        let session = root.join("github-404");
+        fs::create_dir_all(session.join("analysis")).unwrap();
+        fs::create_dir_all(session.join("raw")).unwrap();
+        fs::write(
+            session.join("analysis/summary.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "session_id": "session-github",
+                "quality_state": "passed",
+                "analysis_integrity": {"page_attributed": {"state": "passed"}},
+                "activity_outcome": {
+                    "kind": "page_load",
+                    "state": "failed",
+                    "reason": "MAIN_DOCUMENT_HTTP_ERROR",
+                    "final_url": "https://github.com/private/repository",
+                    "final_status": 404
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            session.join("raw/capture-context.json"),
+            br#"{"target":{"url":"https://github.com/private/repository"}}"#,
+        )
+        .unwrap();
+
+        let quality = pipeline_run_quality(&root, None);
+
+        assert_eq!(quality.capture_integrity.state, "passed");
+        assert_eq!(quality.application.state, "failed");
+        assert_eq!(quality.application_issues.len(), 1);
+        assert_eq!(quality.application_issues[0].final_status, Some(404));
+        assert_eq!(
+            quality.application_issues[0].reason.as_deref(),
+            Some("MAIN_DOCUMENT_HTTP_ERROR")
+        );
         let _ = fs::remove_dir_all(root);
     }
 

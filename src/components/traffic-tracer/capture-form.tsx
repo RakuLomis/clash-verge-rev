@@ -789,7 +789,7 @@ export function TrafficTracerCaptureForm({
           {draft.target_mode === 'config' && targetConfig && (
             <Box>
               <FormControlLabel
-                label="Retry classified playback failure once"
+                label="Retry classified activity failure once"
                 control={
                   <Checkbox
                     checked={draft.application_retry_enabled}
@@ -805,8 +805,9 @@ export function TrafficTracerCaptureForm({
                 sx={{ display: 'block', ml: 4 }}
               >
                 Enabled by default: use at most one fresh Chrome and Session
-                attempt for explicit transient playback outcomes. Capture,
-                analysis, protocol, and unclassified failures are never retried.
+                attempt for explicit transient page-load, critical-resource, or
+                playback outcomes. Deterministic HTTP 4xx, capture, analysis,
+                protocol, and unclassified failures are never retried.
               </Typography>
             </Box>
           )}

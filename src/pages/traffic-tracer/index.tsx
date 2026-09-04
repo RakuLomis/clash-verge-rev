@@ -786,6 +786,11 @@ const TrafficTracerPage = () => {
                 {issue.primary_content_millis !== null &&
                   issue.desired_primary_seconds !== null &&
                   ` · ${(issue.primary_content_millis / 1000).toFixed(3)}/${issue.desired_primary_seconds}s primary content`}
+                {issue.final_status != null && (
+                  <Box sx={{ opacity: 0.7 }}>
+                    Final HTTP status: {issue.final_status}
+                  </Box>
+                )}
                 {issue.final_url && issue.final_url !== issue.target_url && (
                   <Box sx={{ opacity: 0.7 }}>Final URL: {issue.final_url}</Box>
                 )}

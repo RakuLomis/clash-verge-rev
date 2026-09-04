@@ -130,18 +130,30 @@ export function TrafficTracerSessionCard({
               )}
             />
           )}
-          {session.scenario_outcome_state &&
-            session.scenario_outcome_state !== 'passed' && (
+          {(session.activity_outcome_state ?? session.scenario_outcome_state) &&
+            (session.activity_outcome_state ??
+              session.scenario_outcome_state) !== 'passed' && (
               <Chip
                 size="small"
                 color={
-                  session.scenario_outcome_state === 'degraded'
+                  (session.activity_outcome_state ??
+                    session.scenario_outcome_state) === 'degraded'
                     ? 'warning'
-                    : session.scenario_outcome_state === 'failed'
+                    : (session.activity_outcome_state ??
+                          session.scenario_outcome_state) === 'failed'
                       ? 'error'
                       : 'default'
                 }
-                label={`Playback: ${session.scenario_outcome_state}`}
+                label={`Activity: ${session.activity_outcome_state ?? session.scenario_outcome_state}${
+                  session.navigation_final_status
+                    ? ` (HTTP ${session.navigation_final_status})`
+                    : ''
+                }`}
+                title={
+                  session.navigation_outcome_reason ??
+                  session.navigation_final_url ??
+                  undefined
+                }
               />
             )}
           {session.warning_count > 0 && (

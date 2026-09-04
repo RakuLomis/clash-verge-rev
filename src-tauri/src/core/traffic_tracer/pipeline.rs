@@ -117,6 +117,8 @@ pub struct PipelineApplicationIssue {
     pub session_id: String,
     pub target_url: String,
     pub final_url: Option<String>,
+    #[serde(default)]
+    pub final_status: Option<u16>,
     pub state: String,
     pub reason: Option<String>,
     pub primary_content_millis: Option<u64>,

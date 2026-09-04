@@ -246,6 +246,7 @@ export interface PipelineApplicationIssue {
   session_id: string
   target_url: string
   final_url: string | null
+  final_status?: number | null
   state: 'degraded' | 'failed' | 'indeterminate'
   reason: string | null
   primary_content_millis: number | null
@@ -522,6 +523,12 @@ export interface SessionSummary {
   analysis_integrity_state?: string | null
   network_outcome_state?: string | null
   scenario_outcome_state?: string | null
+  navigation_outcome_state?: string | null
+  navigation_outcome_reason?: string | null
+  navigation_final_url?: string | null
+  navigation_final_status?: number | null
+  resource_health_state?: string | null
+  activity_outcome_state?: string | null
   coverage: Record<string, unknown> | null
   packet_split?: PacketSplitInspection
   error?: SessionError | null
