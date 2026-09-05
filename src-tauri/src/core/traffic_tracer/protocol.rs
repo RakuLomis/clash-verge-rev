@@ -58,6 +58,8 @@ pub enum RequestMethod {
     FlowQuery,
     #[serde(rename = "batch.start")]
     BatchStart,
+    #[serde(rename = "batch.validate")]
+    BatchValidate,
     #[serde(rename = "batch.status")]
     BatchStatus,
     #[serde(rename = "batch.interrupt")]
@@ -231,6 +233,8 @@ mod tests {
         assert_eq!(value, serde_json::json!("batch.interrupt"));
         let generic = serde_json::to_value(RequestMethod::JobInterrupt).unwrap();
         assert_eq!(generic, serde_json::json!("job.interrupt"));
+        let validate = serde_json::to_value(RequestMethod::BatchValidate).unwrap();
+        assert_eq!(validate, serde_json::json!("batch.validate"));
     }
 
     #[test]

@@ -36,6 +36,7 @@ use crate::{
                 PipelineRunVerification, PipelineSelection, PipelineStage, PipelineState, PipelineTarget, RestoreState,
             },
             protocol::{JOB_SCHEMA_VERSION, RequestMethod},
+            schedule::{PipelineCandidateOrderPolicy, PipelineSchedule, PipelineScheduleMode},
         },
     },
     feat,
@@ -50,9 +51,7 @@ const PIPELINE_CONTROLLER_TIMEOUT: Duration = Duration::from_secs(15);
 const PIPELINE_PROFILE_ACTIVATION_TIMEOUT: Duration = Duration::from_secs(75);
 const PIPELINE_SELECTION_TIMEOUT: Duration = Duration::from_secs(8);
 const PIPELINE_END_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(3);
-const PIPELINE_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 const PIPELINE_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const PIPELINE_MIN_QUIET: Duration = Duration::from_millis(750);
 const PIPELINE_OWNER_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 const PIPELINE_OWNER_HEARTBEAT_FRESH_MS: u64 = 15_000;
 const PIPELINE_OWNER_FILE: &str = "pipeline-owner.json";
@@ -1042,6 +1041,15 @@ struct PipelineOrchestration {
     pipeline_id: String,
     run_id: String,
     run_ordinal: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repetition_index: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    candidate_ordinal: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    candidate_position: Option<usize>,
+    application_retry_attempt: u8,
     profile_uid: String,
     selection_group: String,
     requested_node: String,
@@ -1071,6 +1079,98 @@ struct BatchJobSpec {
     orchestration: Option<PipelineOrchestration>,
 }
 
+async fn validate_pipeline_batch_contract(
+    manifest: &PipelineManifest,
+    batch_template: &BatchStartRequest,
+) -> CmdResult {
+    let manager = WorkerManager::global();
+    let client = manager.client().stringify_err()?;
+    let secret = Config::clash()
+        .await
+        .latest_arc()
+        .get_client_info()
+        .secret
+        .unwrap_or_default();
+
+    let mut validated_targets = HashSet::new();
+    for run in &manifest.runs {
+        let target_index = run.target_index.ok_or_else(|| {
+            smartstring::alias::String::from("PIPELINE_TARGET_SNAPSHOT_MISSING: matrix run has no target")
+        })?;
+        if !validated_targets.insert(target_index) {
+            continue;
+        }
+        let target = batch_template
+            .targets
+            .iter()
+            .find(|target| target.index == target_index)
+            .cloned()
+            .ok_or_else(|| {
+                smartstring::alias::String::from("PIPELINE_TARGET_SNAPSHOT_MISSING: matrix target is absent")
+            })?;
+        let mut options = batch_template.options.clone();
+        options.analyze_after_capture = false;
+        options.proxy_selection_group = run.selection_group.clone();
+        options.expected_proxy_protocol.clear();
+        let candidate_position = manifest
+            .schedule
+            .repetition_candidate_orders
+            .get(usize::from(run.repetition_index.saturating_sub(1)))
+            .and_then(|order| order.iter().position(|ordinal| *ordinal == run.candidate_ordinal))
+            .map(|position| position + 1);
+        let job_id = new_job_id()?;
+        let result = client
+            .request::<_, Value>(
+                RequestMethod::BatchValidate,
+                BatchJobParams {
+                    job: BatchJobSpec {
+                        schema_version: JOB_SCHEMA_VERSION,
+                        kind: "batch",
+                        job_id,
+                        config_path: batch_template.config_path.clone(),
+                        config_sha256: batch_template.config_sha256.clone(),
+                        targets: vec![target],
+                        interfaces: CaptureInterfaces {
+                            tun: batch_template.tun_interface.clone(),
+                            physical: batch_template.physical_interface.clone(),
+                        },
+                        output_root: batch_template.output_root.clone(),
+                        chrome_binary: batch_template.chrome_binary.clone(),
+                        controller: CaptureController {
+                            endpoint: local_controller_endpoint(),
+                            secret: secret.clone(),
+                        },
+                        options,
+                        fail_fast: batch_template.fail_fast,
+                        application_retry: ApplicationRetryPolicy {
+                            enabled: false,
+                            max_retries: 1,
+                        },
+                        orchestration: Some(PipelineOrchestration {
+                            pipeline_id: manifest.pipeline_id.clone(),
+                            run_id: run.run_id.clone(),
+                            run_ordinal: run.ordinal,
+                            repetition_index: Some(run.repetition_index),
+                            target_index: run.target_index,
+                            candidate_ordinal: Some(run.candidate_ordinal),
+                            candidate_position,
+                            application_retry_attempt: run.application_retry_attempt,
+                            profile_uid: run.profile_uid.clone(),
+                            selection_group: run.selection_group.clone(),
+                            requested_node: run.requested_node.clone(),
+                        }),
+                    },
+                },
+            )
+            .await
+            .map_err(|error| format!("PIPELINE_BATCH_PREFLIGHT_FAILED: {error}"))?;
+        if result.get("valid").and_then(Value::as_bool) != Some(true) {
+            return Err("PIPELINE_BATCH_PREFLIGHT_FAILED: Worker rejected validation without an explicit error".into());
+        }
+    }
+    Ok(())
+}
+
 #[derive(Serialize)]
 struct BatchIdParams {
     batch_id: String,
@@ -1093,7 +1193,7 @@ async fn tt_batch_start_for_owner(
     pipeline_owner: Option<&str>,
     orchestration: Option<PipelineOrchestration>,
 ) -> CmdResult<JobSnapshot> {
-    validate_batch_start_request(&request)?;
+    validate_batch_start_request_for_owner(&request, pipeline_owner.is_some())?;
     let preview = tt_target_config_load(request.config_path.clone()).await?;
     validate_batch_selection(&preview, &request)?;
     let selected_indexes = request
@@ -1182,10 +1282,14 @@ async fn tt_batch_start_for_owner(
 }
 
 fn validate_batch_start_request(request: &BatchStartRequest) -> CmdResult {
+    validate_batch_start_request_for_owner(request, false)
+}
+
+fn validate_batch_start_request_for_owner(request: &BatchStartRequest, allow_deferred_analysis: bool) -> CmdResult {
     if request.targets.is_empty() {
         return Err("batch targets must not be empty".into());
     }
-    if !request.options.analyze_after_capture {
+    if !request.options.analyze_after_capture && !allow_deferred_analysis {
         return Err("batch requires analysis after every capture".into());
     }
     if request.application_retry.max_retries != 1 {
@@ -1326,6 +1430,9 @@ fn pipeline_default_continue() -> bool {
 fn pipeline_default_repetitions() -> u16 {
     1
 }
+fn pipeline_default_order_policy() -> PipelineCandidateOrderPolicy {
+    PipelineCandidateOrderPolicy::BalancedSeeded
+}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1336,6 +1443,10 @@ pub struct PipelineStartRequest {
     pub repetitions_per_candidate: u16,
     #[serde(default = "pipeline_default_continue")]
     pub continue_on_run_failure: bool,
+    #[serde(default = "pipeline_default_order_policy")]
+    pub candidate_order_policy: PipelineCandidateOrderPolicy,
+    #[serde(default)]
+    pub random_seed: Option<u64>,
 }
 
 fn pipeline_execution_snapshot(batch: &BatchStartRequest) -> Value {
@@ -1673,96 +1784,29 @@ fn requested_pipeline_stop(interrupt: &AtomicBool, cancel: &AtomicBool) -> Optio
     }
 }
 
-async fn drain_pipeline_connections() -> PipelineConnectionDrain {
-    let initial = handle::Handle::mihomo().await.get_connections().await;
-    let old_connection_ids = match initial {
-        Ok(value) => value
-            .connections
-            .unwrap_or_default()
-            .into_iter()
-            .map(|connection| connection.id)
-            .collect::<std::collections::HashSet<_>>(),
-        Err(error) => {
-            let _ = handle::Handle::mihomo().await.close_all_connections().await;
-            return PipelineConnectionDrain {
-                state: "controller_unavailable".into(),
-                initial_connections: None,
-                final_connections: None,
-                polls: 0,
+async fn observe_pipeline_connections() -> PipelineConnectionDrain {
+    match handle::Handle::mihomo().await.get_connections().await {
+        Ok(value) => {
+            let count = value.connections.unwrap_or_default().len();
+            PipelineConnectionDrain {
+                state: "preserved".into(),
+                initial_connections: Some(count),
+                final_connections: Some(count),
+                polls: 1,
                 quiet_millis: 0,
-                error: Some(error.to_string()),
+                error: None,
                 completed_at: Utc::now(),
-            };
+            }
         }
-    };
-    let initial_connections = Some(old_connection_ids.len());
-    if let Err(error) = handle::Handle::mihomo().await.close_all_connections().await {
-        return PipelineConnectionDrain {
-            state: "close_failed".into(),
-            initial_connections,
-            final_connections: initial_connections,
-            polls: 0,
+        Err(error) => PipelineConnectionDrain {
+            state: "controller_unavailable".into(),
+            initial_connections: None,
+            final_connections: None,
+            polls: 1,
             quiet_millis: 0,
             error: Some(error.to_string()),
             completed_at: Utc::now(),
-        };
-    }
-
-    let deadline = tokio::time::Instant::now() + PIPELINE_DRAIN_TIMEOUT;
-    let mut quiet_started = None;
-    let mut polls = 0;
-    let mut final_connections = None;
-    loop {
-        polls += 1;
-        let poll_error = match handle::Handle::mihomo().await.get_connections().await {
-            Ok(value) => {
-                let count = value
-                    .connections
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|connection| old_connection_ids.contains(&connection.id))
-                    .count();
-                final_connections = Some(count);
-                if count == 0 {
-                    let started = *quiet_started.get_or_insert_with(tokio::time::Instant::now);
-                    if started.elapsed() >= PIPELINE_MIN_QUIET {
-                        return PipelineConnectionDrain {
-                            state: "drained".into(),
-                            initial_connections,
-                            final_connections,
-                            polls,
-                            quiet_millis: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
-                            error: None,
-                            completed_at: Utc::now(),
-                        };
-                    }
-                } else {
-                    quiet_started = None;
-                }
-                None
-            }
-            Err(error) => {
-                quiet_started = None;
-                Some(error.to_string())
-            }
-        };
-        if tokio::time::Instant::now() >= deadline {
-            return PipelineConnectionDrain {
-                state: if final_connections.is_some() {
-                    "timeout"
-                } else {
-                    "controller_unavailable"
-                }
-                .into(),
-                initial_connections,
-                final_connections,
-                polls,
-                quiet_millis: 0,
-                error: poll_error,
-                completed_at: Utc::now(),
-            };
-        }
-        tokio::time::sleep(PIPELINE_POLL_INTERVAL).await;
+        },
     }
 }
 
@@ -2352,18 +2396,25 @@ pub async fn tt_pipeline_start(
             })
         })
         .collect();
-    let candidates = request
-        .candidates
-        .iter()
-        .cloned()
-        .map(|candidate| {
-            let run_ids = (0..request.repetitions_per_candidate)
-                .map(|_| new_job_id())
-                .collect::<CmdResult<Vec<_>>>()?;
-            Ok((candidate, run_ids))
-        })
+    let random_seed = match request.candidate_order_policy {
+        PipelineCandidateOrderPolicy::BalancedSeeded => Some(request.random_seed.unwrap_or_else(unix_time_ms)),
+        PipelineCandidateOrderPolicy::Fixed => None,
+    };
+    let schedule = PipelineSchedule::matrix(
+        request.repetitions_per_candidate,
+        request.candidates.len(),
+        request.candidate_order_policy,
+        random_seed,
+    )
+    .stringify_err()?;
+    let planned_run_count = usize::from(request.repetitions_per_candidate)
+        .checked_mul(request.batch.targets.len())
+        .and_then(|value| value.checked_mul(request.candidates.len()))
+        .ok_or_else(|| smartstring::alias::String::from("pipeline matrix size overflow"))?;
+    let run_ids = (0..planned_run_count)
+        .map(|_| new_job_id())
         .collect::<CmdResult<Vec<_>>>()?;
-    let manifest = PipelineManifest::create(
+    let manifest = PipelineManifest::create_matrix(
         pipeline_id.clone(),
         output_root,
         PipelineConfigSnapshot {
@@ -2372,7 +2423,8 @@ pub async fn tt_pipeline_start(
         },
         request.batch.targets.iter().map(pipeline_target).collect(),
         pipeline_execution_snapshot(&request.batch),
-        candidates,
+        request.candidates.clone(),
+        run_ids,
         request.repetitions_per_candidate,
         PipelinePolicy {
             continue_on_run_failure: request.continue_on_run_failure,
@@ -2387,6 +2439,7 @@ pub async fn tt_pipeline_start(
             state: RestoreState::Pending,
             error: None,
         },
+        schedule,
     )
     .stringify_err()?;
 
@@ -2419,6 +2472,10 @@ pub async fn tt_pipeline_start(
     if environment.level == CompleteEnvironmentLevel::Blocking {
         let _ = CaptureLock::global().release(&pipeline_id);
         return Err("TrafficTracer pipeline preflight has blocking diagnostics".into());
+    }
+    if let Err(error) = validate_pipeline_batch_contract(&manifest, &request.batch).await {
+        let _ = CaptureLock::global().release(&pipeline_id);
+        return Err(error);
     }
     if let Err(error) = manifest.persist() {
         let _ = CaptureLock::global().release(&pipeline_id);
@@ -2605,7 +2662,7 @@ async fn execute_pipeline_run(
     }
 
     pipeline_checkpoint(manifest, PipelineStage::DrainingConnections)?;
-    let drain = drain_pipeline_connections().await;
+    let drain = observe_pipeline_connections().await;
     let drain_state = drain.state.clone();
     let drain_error = drain.error.clone();
     manifest.runs[index]
@@ -2613,10 +2670,10 @@ async fn execute_pipeline_run(
         .get_or_insert_with(PipelineRunEvidence::default)
         .drain = Some(drain);
     manifest.persist().map_err(|error| error.to_string())?;
-    if drain_state != "drained" {
+    if drain_state != "preserved" {
         return Err(format!(
-            "CONNECTION_DRAIN_FAILED: state={drain_state}; {}",
-            drain_error.unwrap_or_else(|| "connections did not remain at zero before the deadline".into())
+            "CONNECTION_OBSERVATION_FAILED: state={drain_state}; {}",
+            drain_error.unwrap_or_else(|| "controller connection inventory was unavailable".into())
         ));
     }
     if let Some(state) = requested_pipeline_stop(interrupt, cancel) {
@@ -2628,6 +2685,16 @@ async fn execute_pipeline_run(
     batch.output_root = run.output_path.to_string_lossy().into_owned();
     batch.options.proxy_selection_group = run.selection_group.clone();
     batch.options.expected_proxy_protocol.clear();
+    if let Some(target_index) = run.target_index {
+        batch.targets.retain(|target| target.index == target_index);
+        if batch.targets.len() != 1 {
+            return Err("PIPELINE_TARGET_SNAPSHOT_MISSING: matrix cell target is absent".into());
+        }
+        batch.options.analyze_after_capture = false;
+        batch.application_retry.enabled = false;
+        batch.application_retry.max_retries = 1;
+    }
+
     let environment = tt_get_environment_for_owner(
         app_handle.clone(),
         EnvironmentRequest {
@@ -2663,7 +2730,7 @@ async fn execute_pipeline_run(
         .pre_batch_snapshot = Some(pre_batch_snapshot);
     manifest.persist().map_err(|error| error.to_string())?;
     if !pre_batch_matches {
-        return Err("PRE_BATCH_NODE_DRIFT: selector chain changed after the connection drain".into());
+        return Err("PRE_BATCH_NODE_DRIFT: selector chain changed after connection observation".into());
     }
     if let Some(state) = requested_pipeline_stop(interrupt, cancel) {
         return Ok(state);
@@ -2679,6 +2746,16 @@ async fn execute_pipeline_run(
                 pipeline_id: pipeline_id.to_owned(),
                 run_id: run.run_id.clone(),
                 run_ordinal: run.ordinal,
+                repetition_index: run.target_index.map(|_| run.repetition_index),
+                target_index: run.target_index,
+                candidate_ordinal: run.target_index.map(|_| run.candidate_ordinal),
+                candidate_position: manifest
+                    .schedule
+                    .repetition_candidate_orders
+                    .get(usize::from(run.repetition_index.saturating_sub(1)))
+                    .and_then(|order| order.iter().position(|ordinal| *ordinal == run.candidate_ordinal))
+                    .map(|position| position + 1),
+                application_retry_attempt: run.application_retry_attempt,
                 profile_uid: run.profile_uid.clone(),
                 selection_group: run.selection_group.clone(),
                 requested_node: run.requested_node.clone(),
@@ -2874,10 +2951,23 @@ async fn execute_pipeline_run(
                 .get_or_insert_with(PipelineRunEvidence::default);
             evidence.end_snapshot = end_snapshot;
             evidence.verification = Some(verification);
-            let effective_sessions = run
+            let effective_sessions = manifest.runs[index]
                 .batch_id
                 .as_deref()
-                .and_then(|batch_id| batch_effective_sessions(&manifest.output_root, batch_id));
+                .and_then(|batch_id| batch_effective_sessions(&run.output_path, batch_id));
+            if run.target_index.is_some() {
+                return Ok(match state {
+                    "completed" if effective_sessions.is_some() => PipelineRunState::Captured,
+                    "completed" => {
+                        return Err(
+                            "PIPELINE_CAPTURE_SESSION_MISSING: capture completed without an effective Session".into(),
+                        );
+                    }
+                    "cancelled" => PipelineRunState::Cancelled,
+                    "interrupted" => PipelineRunState::Interrupted,
+                    _ => PipelineRunState::Failed,
+                });
+            }
             let quality = pipeline_run_quality(&run.output_path, effective_sessions.as_ref());
             let quality_requires_attention = run_quality_requires_attention(&quality);
             manifest.runs[index].quality = Some(quality);
@@ -3255,6 +3345,343 @@ fn non_retryable_candidate_error(code: &str) -> bool {
     )
 }
 
+fn systemic_pipeline_error(error: &PipelineError) -> bool {
+    if matches!(
+        error.code.as_str(),
+        "PIPELINE_BATCH_PREFLIGHT_FAILED" | "PROTOCOL_VERSION_MISMATCH" | "METHOD_NOT_FOUND"
+    ) {
+        return true;
+    }
+    let message = error.message.to_ascii_uppercase();
+    [
+        "CONTRACT_VALIDATION_FAILED",
+        "WORKER RETURNED INVALIDPARAMS",
+        "PROTOCOL_VERSION_MISMATCH",
+        "METHOD_NOT_FOUND",
+        "WORKER METHOD IS NOT SUPPORTED",
+        "FROZEN SCHEDULE",
+        "MATRIX RUN ORDER DOES NOT MATCH",
+    ]
+    .iter()
+    .any(|marker| message.contains(marker))
+}
+
+async fn execute_pipeline_analysis(
+    app_handle: &AppHandle,
+    pipeline_id: &str,
+    manifest: &mut PipelineManifest,
+    index: usize,
+    batch_template: &BatchStartRequest,
+    interrupt: &AtomicBool,
+    cancel: &AtomicBool,
+) -> Result<PipelineRunState, String> {
+    let run = manifest.runs[index].clone();
+    if run.session_ids.is_empty() {
+        return Err("PIPELINE_ANALYSIS_SESSION_MISSING: captured cell has no Session identity".into());
+    }
+    let environment = tt_get_environment_for_owner(
+        app_handle.clone(),
+        EnvironmentRequest {
+            tun_interface: batch_template.tun_interface.clone(),
+            physical_interface: batch_template.physical_interface.clone(),
+            chrome_binary: batch_template.chrome_binary.clone(),
+            output_root: run.output_path.to_string_lossy().into_owned(),
+            min_free_bytes: None,
+        },
+        Some(pipeline_id),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    if environment.level == CompleteEnvironmentLevel::Blocking {
+        return Err("TrafficTracer deferred-analysis environment has blocking diagnostics".into());
+    }
+
+    for session_id in &run.session_ids {
+        if let Some(requested) = requested_pipeline_stop(interrupt, cancel) {
+            return Ok(requested);
+        }
+        let snapshot = tt_analysis_start(
+            session_id.clone(),
+            Some(AnalysisOptions {
+                split_pcaps: batch_template.options.capture_packets
+                    && batch_template.options.pcap_split_mode == "unique_connections",
+                pcap_split_mode: if batch_template.options.capture_packets {
+                    batch_template.options.pcap_split_mode.clone()
+                } else {
+                    "none".into()
+                },
+                write_flow_index: true,
+                overwrite: true,
+            }),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        manifest.runs[index].analysis_job_id = Some(snapshot.job_id.clone());
+        manifest.runs[index].stage = PipelineStage::AnalysisWave;
+        manifest.stage = PipelineStage::AnalysisWave;
+        manifest.updated_at = Utc::now();
+        manifest.persist().map_err(|error| error.to_string())?;
+
+        let job_id = snapshot.job_id;
+        let mut stop_requested = false;
+        loop {
+            if !stop_requested {
+                if cancel.load(Ordering::Acquire) {
+                    let _ = tt_capture_cancel(job_id.clone(), Some("Pipeline cancelled during analysis".into())).await;
+                    stop_requested = true;
+                } else if interrupt.load(Ordering::Acquire) {
+                    if let Ok(client) = WorkerManager::global().client() {
+                        let _ = client
+                            .request::<_, JobSnapshot>(
+                                RequestMethod::JobInterrupt,
+                                CancelJobParams {
+                                    job_id: job_id.clone(),
+                                    reason: "Pipeline interrupted during analysis".into(),
+                                },
+                            )
+                            .await;
+                    }
+                    stop_requested = true;
+                }
+            }
+            let status = tt_capture_get(job_id.clone())
+                .await
+                .map_err(|error| format!("PIPELINE_ANALYSIS_STATUS_FAILED: {error}"))?;
+            if status.state.terminal() {
+                match status.state {
+                    JobState::Completed => break,
+                    JobState::Cancelled => return Ok(PipelineRunState::Cancelled),
+                    JobState::Interrupted => return Ok(PipelineRunState::Interrupted),
+                    JobState::Failed => {
+                        return Err(format!(
+                            "PIPELINE_ANALYSIS_FAILED: {}",
+                            status.error.map_or_else(|| status.message, |error| error.to_string(),)
+                        ));
+                    }
+                    _ => unreachable!("terminal analysis state"),
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
+
+    let effective_sessions = run.session_ids.iter().cloned().collect::<HashSet<_>>();
+    let quality = pipeline_run_quality(&run.output_path, Some(&effective_sessions));
+    let degraded = run_quality_requires_attention(&quality)
+        || manifest.runs[index]
+            .evidence
+            .as_ref()
+            .and_then(|evidence| evidence.verification.as_ref())
+            .is_some_and(verification_requires_attention);
+    manifest.runs[index].quality = Some(quality);
+    Ok(if degraded {
+        PipelineRunState::Degraded
+    } else {
+        PipelineRunState::Completed
+    })
+}
+
+fn matrix_application_retry_required(run: &crate::core::traffic_tracer::pipeline::PipelineRun) -> bool {
+    const REASONS: &[&str] = &[
+        "CRITICAL_RESOURCE_FAILURE_BURST",
+        "MAIN_DOCUMENT_NETWORK_ERROR",
+        "MAIN_DOCUMENT_NOT_OBSERVED",
+        "MAIN_DOCUMENT_RESPONSE_UNKNOWN",
+        "MAIN_DOCUMENT_SERVER_ERROR",
+        "MAIN_DOCUMENT_TRANSIENT_HTTP_ERROR",
+        "NAVIGATION_COMPLETION_UNCERTAIN",
+        "PLAYBACK_STATE_UNKNOWN",
+        "PLAYER_NOT_CREATED",
+        "VIDEO_ELEMENT_NOT_CREATED",
+        "MEDIA_NOT_READY",
+        "MEDIA_NOT_ADVANCING",
+        "PRIMARY_CONTENT_NOT_OBSERVED",
+    ];
+    run.quality.as_ref().is_some_and(|quality| {
+        quality.application_issues.iter().any(|issue| {
+            let eligible_state = matches!(issue.state.as_str(), "failed" | "indeterminate")
+                || (issue.state == "degraded" && issue.reason.as_deref() == Some("CRITICAL_RESOURCE_FAILURE_BURST"));
+            eligible_state && issue.reason.as_deref().is_some_and(|reason| REASONS.contains(&reason))
+        })
+    })
+}
+
+async fn run_matrix_pipeline(
+    app_handle: &AppHandle,
+    pipeline_id: &str,
+    manifest: &mut PipelineManifest,
+    batch: &BatchStartRequest,
+    interrupt: &AtomicBool,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    for repetition_index in 1..=manifest.repetitions_per_candidate {
+        loop {
+            loop {
+                if cancel.load(Ordering::Acquire) || interrupt.load(Ordering::Acquire) {
+                    manifest.state = if cancel.load(Ordering::Acquire) {
+                        PipelineState::Cancelled
+                    } else {
+                        PipelineState::Interrupted
+                    };
+                    manifest.stage = PipelineStage::Finished;
+                    manifest.updated_at = Utc::now();
+                    manifest.persist().map_err(|error| error.to_string())?;
+                    return Ok(());
+                }
+                let Some(index) = manifest
+                    .begin_next_capture(repetition_index)
+                    .map_err(|error| error.to_string())?
+                else {
+                    break;
+                };
+                manifest.persist().map_err(|error| error.to_string())?;
+                match execute_pipeline_run(app_handle, pipeline_id, manifest, index, batch, interrupt, cancel).await {
+                    Ok(PipelineRunState::Captured) => {
+                        let mut session_ids = manifest.runs[index]
+                            .batch_id
+                            .as_deref()
+                            .and_then(|batch_id| batch_effective_sessions(&manifest.runs[index].output_path, batch_id))
+                            .unwrap_or_default()
+                            .into_iter()
+                            .collect::<Vec<_>>();
+                        session_ids.sort();
+                        manifest
+                            .finish_capture(session_ids)
+                            .map_err(|error| error.to_string())?;
+                    }
+                    Ok(PipelineRunState::Interrupted) => {
+                        manifest
+                            .finish_run(PipelineRunState::Interrupted, None)
+                            .map_err(|error| error.to_string())?;
+                        manifest.state = PipelineState::Interrupted;
+                    }
+                    Ok(PipelineRunState::Cancelled) => {
+                        manifest
+                            .finish_run(PipelineRunState::Cancelled, None)
+                            .map_err(|error| error.to_string())?;
+                        manifest.state = PipelineState::Cancelled;
+                    }
+                    Ok(state) => {
+                        manifest.finish_run(state, None).map_err(|error| error.to_string())?;
+                    }
+                    Err(message) => {
+                        let candidate_ordinal = manifest.runs[index].candidate_ordinal;
+                        let error = pipeline_run_error(message);
+                        let stop_candidate = non_retryable_candidate_error(&error.code);
+                        let systemic = systemic_pipeline_error(&error);
+                        manifest
+                            .finish_run(PipelineRunState::Failed, Some(error.clone()))
+                            .map_err(|failure| failure.to_string())?;
+                        if systemic {
+                            manifest.skip_remaining_runs(&error);
+                            manifest.state = PipelineState::Failed;
+                        } else if stop_candidate {
+                            manifest.skip_remaining_candidate_runs(candidate_ordinal, &error);
+                        }
+                        if !systemic && !manifest.policy.continue_on_run_failure {
+                            manifest.state = PipelineState::Failed;
+                        }
+                    }
+                }
+                manifest.persist().map_err(|error| error.to_string())?;
+                if matches!(
+                    manifest.state,
+                    PipelineState::Interrupted | PipelineState::Cancelled | PipelineState::Failed
+                ) {
+                    return Ok(());
+                }
+            }
+
+            manifest.stage = PipelineStage::AnalysisWave;
+            manifest.updated_at = Utc::now();
+            manifest.persist().map_err(|error| error.to_string())?;
+            loop {
+                if cancel.load(Ordering::Acquire) || interrupt.load(Ordering::Acquire) {
+                    manifest.state = if cancel.load(Ordering::Acquire) {
+                        PipelineState::Cancelled
+                    } else {
+                        PipelineState::Interrupted
+                    };
+                    manifest.stage = PipelineStage::Finished;
+                    manifest.updated_at = Utc::now();
+                    manifest.persist().map_err(|error| error.to_string())?;
+                    return Ok(());
+                }
+                let Some(index) = manifest
+                    .begin_next_analysis(repetition_index)
+                    .map_err(|error| error.to_string())?
+                else {
+                    break;
+                };
+                manifest.persist().map_err(|error| error.to_string())?;
+                match execute_pipeline_analysis(app_handle, pipeline_id, manifest, index, batch, interrupt, cancel)
+                    .await
+                {
+                    Ok(PipelineRunState::Interrupted) => {
+                        manifest.runs[index].state = PipelineRunState::Captured;
+                        manifest.runs[index].stage = PipelineStage::Checkpoint;
+                        manifest.current_run_index = None;
+                        manifest.state = PipelineState::Interrupted;
+                        manifest.stage = PipelineStage::Finished;
+                        manifest.updated_at = Utc::now();
+                    }
+                    Ok(PipelineRunState::Cancelled) => {
+                        manifest
+                            .finish_analysis(PipelineRunState::Cancelled, None)
+                            .map_err(|error| error.to_string())?;
+                        manifest.state = PipelineState::Cancelled;
+                    }
+                    Ok(state)
+                        if matches!(state, PipelineRunState::Completed | PipelineRunState::Degraded)
+                            && batch.application_retry.enabled
+                            && manifest.runs[index].application_retry_attempt < batch.application_retry.max_retries
+                            && matrix_application_retry_required(&manifest.runs[index]) =>
+                    {
+                        manifest
+                            .schedule_application_retry(batch.application_retry.max_retries)
+                            .map_err(|error| error.to_string())?;
+                    }
+                    Ok(state) => {
+                        manifest
+                            .finish_analysis(state, None)
+                            .map_err(|error| error.to_string())?;
+                    }
+                    Err(message) => {
+                        let error = pipeline_run_error(message);
+                        let systemic = systemic_pipeline_error(&error);
+                        manifest
+                            .finish_analysis(PipelineRunState::Failed, Some(error.clone()))
+                            .map_err(|failure| failure.to_string())?;
+                        if systemic {
+                            manifest.skip_remaining_runs(&error);
+                            manifest.state = PipelineState::Failed;
+                        } else if !manifest.policy.continue_on_run_failure {
+                            manifest.state = PipelineState::Failed;
+                        }
+                    }
+                }
+                manifest.persist().map_err(|error| error.to_string())?;
+                if matches!(
+                    manifest.state,
+                    PipelineState::Interrupted | PipelineState::Cancelled | PipelineState::Failed
+                ) {
+                    return Ok(());
+                }
+            }
+            if !manifest
+                .runs
+                .iter()
+                .any(|run| run.repetition_index == repetition_index && run.state == PipelineRunState::RetryPending)
+            {
+                break;
+            }
+        }
+    }
+    manifest.finalize_matrix().map_err(|error| error.to_string())?;
+    manifest.persist().map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 async fn run_pipeline(
     app_handle: AppHandle,
     manifest_path: PathBuf,
@@ -3265,6 +3692,12 @@ async fn run_pipeline(
     let mut manifest = PipelineManifest::load(&manifest_path).map_err(|error| error.to_string())?;
     let pipeline_id = manifest.pipeline_id.clone();
     materialize_pipeline_candidates(&mut manifest, &pipeline_id).await?;
+    if manifest.schedule.mode == PipelineScheduleMode::RepetitionTargetCandidate {
+        run_matrix_pipeline(&app_handle, &pipeline_id, &mut manifest, &batch, &interrupt, &cancel).await?;
+        restore_pipeline(&mut manifest, &pipeline_id).await;
+        return Ok(());
+    }
+
     loop {
         if cancel.load(Ordering::Acquire) || interrupt.load(Ordering::Acquire) {
             manifest.state = if cancel.load(Ordering::Acquire) {
@@ -3311,13 +3744,17 @@ async fn run_pipeline(
                 let candidate_ordinal = manifest.runs[index].candidate_ordinal;
                 let error = pipeline_run_error(message);
                 let stop_candidate = non_retryable_candidate_error(&error.code);
+                let systemic = systemic_pipeline_error(&error);
                 manifest
                     .finish_run(PipelineRunState::Failed, Some(error.clone()))
                     .map_err(|failure| failure.to_string())?;
-                if stop_candidate {
+                if systemic {
+                    manifest.skip_remaining_runs(&error);
+                    manifest.state = PipelineState::Failed;
+                } else if stop_candidate {
                     manifest.skip_remaining_candidate_runs(candidate_ordinal, &error);
                 }
-                if !manifest.policy.continue_on_run_failure {
+                if !systemic && !manifest.policy.continue_on_run_failure {
                     manifest.state = PipelineState::Failed;
                 }
             }
@@ -4872,6 +5309,19 @@ mod capture_tests {
         assert_eq!(error.code, "CONNECTION_DRAIN_FAILED");
         let fallback = pipeline_run_error("unstructured controller error".into());
         assert_eq!(fallback.code, "PIPELINE_RUN_FAILED");
+    }
+
+    #[test]
+    fn classifies_shared_contract_failures_as_systemic() {
+        let contract = pipeline_run_error("Worker returned InvalidParams: CONTRACT_VALIDATION_FAILED: job/kind".into());
+        assert!(systemic_pipeline_error(&contract));
+        assert!(systemic_pipeline_error(&PipelineError {
+            code: "PIPELINE_BATCH_PREFLIGHT_FAILED".into(),
+            message: "Worker method mismatch".into(),
+        }));
+        assert!(!systemic_pipeline_error(&pipeline_run_error(
+            "MAIN_DOCUMENT_NETWORK_ERROR: target failed".into(),
+        )));
     }
 
     #[test]

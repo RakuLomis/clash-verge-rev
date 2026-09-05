@@ -193,9 +193,26 @@ const TrafficTracerPage = () => {
   const displayedBatchIndex =
     displayedBatch?.current_index ?? displayedBatch?.resume.next_index ?? null
   const displayedTarget =
-    displayedBatchIndex !== null && displayedBatchIndex !== undefined
+    (displayedBatchIndex !== null && displayedBatchIndex !== undefined
       ? displayedBatch?.targets[displayedBatchIndex]
-      : null
+      : null) ??
+    pipeline?.targets.find(
+      (target) => target.index === displayedPipelineRun?.target_index,
+    ) ??
+    null
+  const capturedCellCount =
+    pipeline?.runs.filter(
+      (run) =>
+        run.session_ids.length > 0 ||
+        run.prior_session_ids.length > 0 ||
+        ['captured', 'analyzing', 'completed', 'degraded'].includes(run.state),
+    ).length ?? 0
+  const analyzedCellCount =
+    pipeline?.runs.filter(
+      (run) =>
+        ['completed', 'degraded'].includes(run.state) ||
+        (run.state === 'failed' && Boolean(run.analysis_job_id)),
+    ).length ?? 0
   const pipelineElapsedSeconds = displayedPipelineRun?.started_at
     ? Math.max(
         0,
@@ -342,6 +359,7 @@ const TrafficTracerPage = () => {
         candidates: pipelineCandidates,
         repetitions_per_candidate: pipelineRepetitions,
         continue_on_run_failure: true,
+        candidate_order_policy: 'balanced_seeded',
       })
       const locator = {
         pipeline_id: started.pipeline_id,
@@ -454,6 +472,24 @@ const TrafficTracerPage = () => {
     batches.viewedBatchId,
     recordStartFailure,
   ])
+
+  useEffect(() => {
+    if (!pipeline || !['failed', 'restore_failed'].includes(pipeline.state))
+      return
+    const failedRun = [...pipeline.runs].reverse().find((run) => run.error)
+    const error = failedRun?.error ??
+      pipeline.restore.error ?? {
+        code: 'PIPELINE_FAILED',
+        message: 'The capture pipeline terminated before completion.',
+      }
+    const message = failureMessage(error)
+    if (
+      startFailure?.stage === 'pipeline.runtime' &&
+      startFailure.message === message
+    )
+      return
+    recordStartFailure(error, 'pipeline.runtime')
+  }, [pipeline, recordStartFailure, startFailure])
 
   return (
     <BasePage title={t('layout.components.navigation.tabs.trafficTracer')}>
@@ -603,6 +639,20 @@ const TrafficTracerPage = () => {
               {(pipeline.current_run_index ?? pipeline.runs.length - 1) + 1}/
               {pipeline.runs.length}
             </Box>
+            <Box sx={{ opacity: 0.8 }}>
+              Captured {capturedCellCount}/{pipeline.runs.length} cells ·
+              analyzed {analyzedCellCount}/{pipeline.runs.length}
+            </Box>
+            {pipeline.schedule.mode === 'repetition_target_candidate' && (
+              <Box sx={{ opacity: 0.65 }}>
+                Candidate order: balanced seeded · seed{' '}
+                {pipeline.schedule.random_seed ?? 'none'} · current repetition{' '}
+                {displayedPipelineRun?.repetition_index ?? 1}:{' '}
+                {pipeline.schedule.repetition_candidate_orders[
+                  (displayedPipelineRun?.repetition_index ?? 1) - 1
+                ]?.join(' → ') ?? 'unavailable'}
+              </Box>
+            )}
             <Box sx={{ opacity: 0.65, overflowWrap: 'anywhere' }}>
               {pipelineLocator?.output_root}
             </Box>

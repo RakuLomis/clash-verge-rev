@@ -8,7 +8,9 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-pub const PIPELINE_SCHEMA_VERSION: u32 = 6;
+use super::schedule::PipelineSchedule;
+
+pub const PIPELINE_SCHEMA_VERSION: u32 = 7;
 const PIPELINE_MIN_SCHEMA_VERSION: u32 = 1;
 pub const PIPELINE_MANIFEST_NAME: &str = "pipeline-manifest.json";
 pub const PIPELINE_AGGREGATE_NAME: &str = "pipeline-aggregate.json";
@@ -70,6 +72,8 @@ pub enum PipelineStage {
     FinalizingBatch,
     VerifyingProtocol,
     Checkpoint,
+    CaptureWave,
+    AnalysisWave,
     Restoring,
     Finished,
 }
@@ -79,6 +83,9 @@ pub enum PipelineStage {
 pub enum PipelineRunState {
     Pending,
     Running,
+    Captured,
+    Analyzing,
+    RetryPending,
     Completed,
     Degraded,
     Failed,
@@ -89,7 +96,10 @@ pub enum PipelineRunState {
 
 impl PipelineRunState {
     pub fn terminal(self) -> bool {
-        !matches!(self, Self::Pending | Self::Running)
+        !matches!(
+            self,
+            Self::Pending | Self::Running | Self::Captured | Self::Analyzing | Self::RetryPending
+        )
     }
 }
 
@@ -164,6 +174,8 @@ pub struct PipelineCandidateAggregate {
     pub requested_node: String,
     pub repetitions_planned: u16,
     pub repetitions_terminal: usize,
+    pub cells_planned: usize,
+    pub cells_terminal: usize,
     pub completed: usize,
     pub degraded: usize,
     pub failed: usize,
@@ -182,6 +194,9 @@ pub struct PipelineAggregate {
     pub pipeline_id: String,
     pub updated_at: DateTime<Utc>,
     pub repetitions_per_candidate: u16,
+    pub targets_planned: usize,
+    pub planned_cells: usize,
+    pub terminal_cells: usize,
     pub planned_runs: usize,
     pub terminal_runs: usize,
     pub candidates: Vec<PipelineCandidateAggregate>,
@@ -378,6 +393,8 @@ pub struct PipelineRun {
     pub repetition_index: u16,
     #[serde(default = "default_repetitions")]
     pub repetition_total: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_index: Option<usize>,
     pub run_id: String,
     pub profile_uid: String,
     pub profile_fingerprint: String,
@@ -399,6 +416,14 @@ pub struct PipelineRun {
     pub observed_protocol: String,
     pub batch_id: Option<String>,
     pub output_path: PathBuf,
+    #[serde(default)]
+    pub session_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_job_id: Option<String>,
+    #[serde(default)]
+    pub application_retry_attempt: u8,
+    #[serde(default)]
+    pub prior_session_ids: Vec<String>,
     pub error: Option<PipelineError>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality: Option<PipelineRunQuality>,
@@ -430,6 +455,8 @@ pub struct PipelineManifest {
     pub targets: Vec<PipelineTarget>,
     pub execution: serde_json::Value,
     pub policy: PipelinePolicy,
+    #[serde(default)]
+    pub schedule: PipelineSchedule,
     #[serde(default = "default_repetitions")]
     pub repetitions_per_candidate: u16,
     pub current_run_index: Option<usize>,
@@ -487,6 +514,7 @@ impl PipelineManifest {
                     repetition_total: repetitions_per_candidate,
                     run_id: run_id.clone(),
                     profile_uid: candidate.profile_uid.clone(),
+                    target_index: None,
                     profile_fingerprint: candidate.profile_fingerprint.clone(),
                     profile_fingerprint_kind: candidate.profile_fingerprint_kind.clone(),
                     queued_profile_fingerprint: Some(candidate.profile_fingerprint.clone()),
@@ -508,6 +536,10 @@ impl PipelineManifest {
                         repetition_index + 1,
                         &run_id[..12.min(run_id.len())]
                     )),
+                    session_ids: Vec::new(),
+                    analysis_job_id: None,
+                    application_retry_attempt: 0,
+                    prior_session_ids: Vec::new(),
                     error: None,
                     quality: None,
                     evidence: None,
@@ -530,6 +562,7 @@ impl PipelineManifest {
             targets,
             execution,
             policy,
+            schedule: PipelineSchedule::default(),
             repetitions_per_candidate,
             current_run_index: None,
             runs,
@@ -537,6 +570,129 @@ impl PipelineManifest {
         })
     }
 
+    pub fn create_matrix(
+        pipeline_id: String,
+        output_root: PathBuf,
+        config: PipelineConfigSnapshot,
+        targets: Vec<PipelineTarget>,
+        execution: serde_json::Value,
+        candidates: Vec<PipelineCandidate>,
+        run_ids: Vec<String>,
+        repetitions_per_candidate: u16,
+        policy: PipelinePolicy,
+        restore: PipelineRestore,
+        schedule: PipelineSchedule,
+    ) -> Result<Self> {
+        if targets.is_empty() || candidates.is_empty() {
+            bail!("pipeline requires at least one target and candidate");
+        }
+        if !(1..=PIPELINE_MAX_REPETITIONS).contains(&repetitions_per_candidate) {
+            bail!("pipeline repetitions_per_candidate must be between 1 and {PIPELINE_MAX_REPETITIONS}");
+        }
+        if !output_root.is_absolute() || !config.path.is_absolute() {
+            bail!("pipeline paths must be absolute");
+        }
+        if config.sha256.len() != 64 || !config.sha256.chars().all(|value| value.is_ascii_hexdigit()) {
+            bail!("pipeline config sha256 must be SHA-256");
+        }
+        schedule.validate(repetitions_per_candidate, candidates.len())?;
+        let expected_runs = usize::from(repetitions_per_candidate)
+            .checked_mul(targets.len())
+            .and_then(|value| value.checked_mul(candidates.len()))
+            .context("pipeline matrix size overflow")?;
+        if run_ids.len() != expected_runs {
+            bail!("pipeline matrix run-id count does not match repetitions, targets and candidates");
+        }
+
+        let mut identities = HashSet::new();
+        for candidate in &candidates {
+            candidate.validate()?;
+            let identity = (
+                candidate.profile_uid.clone(),
+                candidate.selection_group.clone(),
+                candidate.requested_node.clone(),
+            );
+            if !identities.insert(identity) {
+                bail!("pipeline candidates must be unique by profile, selector and node");
+            }
+        }
+
+        let mut ids = run_ids.into_iter();
+        let mut runs = Vec::with_capacity(expected_runs);
+        for (repetition_offset, candidate_order) in schedule.repetition_candidate_orders.iter().enumerate() {
+            for target in &targets {
+                for candidate_ordinal in candidate_order {
+                    let candidate_index = usize::from(*candidate_ordinal - 1);
+                    let candidate = &candidates[candidate_index];
+                    let run_id = ids.next().context("pipeline matrix run-id is missing")?;
+                    let ordinal = runs.len() + 1;
+                    let repetition_index =
+                        u16::try_from(repetition_offset + 1).context("pipeline repetition index overflow")?;
+                    runs.push(PipelineRun {
+                        ordinal,
+                        candidate_ordinal: *candidate_ordinal,
+                        repetition_index,
+                        repetition_total: repetitions_per_candidate,
+                        target_index: Some(target.index),
+                        run_id: run_id.clone(),
+                        profile_uid: candidate.profile_uid.clone(),
+                        profile_fingerprint: candidate.profile_fingerprint.clone(),
+                        profile_fingerprint_kind: candidate.profile_fingerprint_kind.clone(),
+                        queued_profile_fingerprint: Some(candidate.profile_fingerprint.clone()),
+                        profile_bound_at: None,
+                        profile_snapshot_changed: false,
+                        selection_group: candidate.selection_group.clone(),
+                        requested_node: candidate.requested_node.clone(),
+                        state: PipelineRunState::Pending,
+                        stage: PipelineStage::Queued,
+                        resolved_chain: Vec::new(),
+                        resolved_leaf: None,
+                        expected_protocol: String::new(),
+                        observed_protocol: String::new(),
+                        batch_id: None,
+                        session_ids: Vec::new(),
+                        analysis_job_id: None,
+                        application_retry_attempt: 0,
+                        prior_session_ids: Vec::new(),
+                        output_path: output_root.join("runs").join(format!(
+                            "{:04}_repeat-{:02}_target-{:03}_candidate-{:02}_{}",
+                            ordinal,
+                            repetition_index,
+                            target.index,
+                            candidate_ordinal,
+                            &run_id[..12.min(run_id.len())]
+                        )),
+                        error: None,
+                        quality: None,
+                        evidence: None,
+                        resume_attempt: 0,
+                        started_at: None,
+                        completed_at: None,
+                    });
+                }
+            }
+        }
+
+        let now = Utc::now();
+        Ok(Self {
+            schema_version: PIPELINE_SCHEMA_VERSION,
+            pipeline_id,
+            state: PipelineState::Created,
+            stage: PipelineStage::Queued,
+            created_at: now,
+            updated_at: now,
+            output_root,
+            config,
+            targets,
+            execution,
+            policy,
+            schedule,
+            repetitions_per_candidate,
+            current_run_index: None,
+            runs,
+            restore,
+        })
+    }
     pub fn aggregate(&self) -> PipelineAggregate {
         let mut candidates = Vec::new();
         for candidate_ordinal in 1..=self.runs.iter().map(|run| run.candidate_ordinal).max().unwrap_or(0) {
@@ -546,13 +702,24 @@ impl PipelineManifest {
                 .filter(|run| run.candidate_ordinal == candidate_ordinal)
                 .collect::<Vec<_>>();
             let Some(first) = candidate_runs.first() else { continue };
+            let repetitions_terminal = (1..=self.repetitions_per_candidate)
+                .filter(|repetition| {
+                    let cells = candidate_runs
+                        .iter()
+                        .filter(|run| run.repetition_index == *repetition)
+                        .collect::<Vec<_>>();
+                    !cells.is_empty() && cells.iter().all(|run| run.state.terminal())
+                })
+                .count();
             let mut aggregate = PipelineCandidateAggregate {
                 candidate_ordinal,
                 profile_uid: first.profile_uid.clone(),
                 selection_group: first.selection_group.clone(),
                 requested_node: first.requested_node.clone(),
                 repetitions_planned: self.repetitions_per_candidate,
-                repetitions_terminal: 0,
+                repetitions_terminal,
+                cells_planned: candidate_runs.len(),
+                cells_terminal: candidate_runs.iter().filter(|run| run.state.terminal()).count(),
                 completed: 0,
                 degraded: 0,
                 failed: 0,
@@ -564,14 +731,17 @@ impl PipelineManifest {
                 application: PipelineAggregateQuality::default(),
             };
             for run in candidate_runs {
-                aggregate.repetitions_terminal += usize::from(run.state.terminal());
                 match run.state {
                     PipelineRunState::Completed => aggregate.completed += 1,
                     PipelineRunState::Degraded => aggregate.degraded += 1,
                     PipelineRunState::Failed | PipelineRunState::Skipped => aggregate.failed += 1,
                     PipelineRunState::Interrupted => aggregate.interrupted += 1,
                     PipelineRunState::Cancelled => aggregate.cancelled += 1,
-                    PipelineRunState::Pending | PipelineRunState::Running => {}
+                    PipelineRunState::Pending
+                    | PipelineRunState::Running
+                    | PipelineRunState::Captured
+                    | PipelineRunState::Analyzing
+                    | PipelineRunState::RetryPending => {}
                 }
                 if let Some(quality) = &run.quality {
                     aggregate.sessions_total += quality.sessions_total;
@@ -583,10 +753,13 @@ impl PipelineManifest {
             candidates.push(aggregate);
         }
         PipelineAggregate {
-            schema_version: 1,
+            schema_version: 2,
             pipeline_id: self.pipeline_id.clone(),
             updated_at: self.updated_at,
             repetitions_per_candidate: self.repetitions_per_candidate,
+            targets_planned: self.targets.len(),
+            planned_cells: self.runs.len(),
+            terminal_cells: self.runs.iter().filter(|run| run.state.terminal()).count(),
             planned_runs: self.runs.len(),
             terminal_runs: self.runs.iter().filter(|run| run.state.terminal()).count(),
             candidates,
@@ -638,6 +811,40 @@ impl PipelineManifest {
             }
             manifest.restore.profile_fingerprint = None;
         }
+        if loaded_schema_version < 7 {
+            manifest.schedule = PipelineSchedule::default();
+        }
+        let candidate_count = manifest.runs.iter().map(|run| run.candidate_ordinal).max().unwrap_or(0);
+        manifest
+            .schedule
+            .validate(manifest.repetitions_per_candidate, usize::from(candidate_count))?;
+        if manifest.schedule.mode == super::schedule::PipelineScheduleMode::RepetitionTargetCandidate {
+            let expected = usize::from(manifest.repetitions_per_candidate)
+                .checked_mul(manifest.targets.len())
+                .and_then(|value| value.checked_mul(usize::from(candidate_count)))
+                .context("pipeline matrix size overflow")?;
+            if manifest.runs.len() != expected {
+                bail!("pipeline matrix run count does not match its frozen schedule");
+            }
+            let mut position = 0;
+            for (repetition_offset, order) in manifest.schedule.repetition_candidate_orders.iter().enumerate() {
+                for target in &manifest.targets {
+                    for candidate_ordinal in order {
+                        let run = &manifest.runs[position];
+                        let repetition_index =
+                            u16::try_from(repetition_offset + 1).context("pipeline repetition index overflow")?;
+                        if run.ordinal != position + 1
+                            || run.repetition_index != repetition_index
+                            || run.target_index != Some(target.index)
+                            || run.candidate_ordinal != *candidate_ordinal
+                        {
+                            bail!("pipeline matrix run order does not match its frozen schedule");
+                        }
+                        position += 1;
+                    }
+                }
+            }
+        }
         manifest.schema_version = PIPELINE_SCHEMA_VERSION;
         Ok(manifest)
     }
@@ -649,14 +856,26 @@ impl PipelineManifest {
         ) {
             return Ok(false);
         }
-        if self.current_run_index.is_some() {
-            self.finish_run(
-                PipelineRunState::Interrupted,
-                Some(PipelineError {
-                    code: "PIPELINE_SUPERVISOR_RESTARTED".into(),
-                    message: "The application stopped while this pipeline run was active; resume can continue its Batch checkpoint.".into(),
-                }),
-            )?;
+        if let Some(index) = self.current_run_index {
+            if self.schedule.mode == super::schedule::PipelineScheduleMode::RepetitionTargetCandidate
+                && self.runs[index].state == PipelineRunState::Analyzing
+            {
+                self.runs[index].state = PipelineRunState::Captured;
+                self.runs[index].stage = PipelineStage::Checkpoint;
+                self.runs[index].error = Some(PipelineError {
+                    code: "PIPELINE_ANALYSIS_SUPERVISOR_RESTARTED".into(),
+                    message: "The application stopped during deferred analysis; resume will analyze the existing raw Session without recapturing it.".into(),
+                });
+                self.current_run_index = None;
+            } else {
+                self.finish_run(
+                    PipelineRunState::Interrupted,
+                    Some(PipelineError {
+                        code: "PIPELINE_SUPERVISOR_RESTARTED".into(),
+                        message: "The application stopped while this pipeline capture was active; resume can continue its Batch checkpoint.".into(),
+                    }),
+                )?;
+            }
         }
         self.state = PipelineState::Interrupted;
         self.stage = PipelineStage::Finished;
@@ -714,6 +933,154 @@ impl PipelineManifest {
         Ok(Some(index))
     }
 
+    pub fn begin_next_capture(&mut self, repetition_index: u16) -> Result<Option<usize>> {
+        if self.current_run_index.is_some() {
+            bail!("pipeline already has an active run");
+        }
+        let Some(index) = self.runs.iter().position(|run| {
+            run.repetition_index == repetition_index
+                && matches!(
+                    run.state,
+                    PipelineRunState::Pending | PipelineRunState::Interrupted | PipelineRunState::RetryPending
+                )
+        }) else {
+            return Ok(None);
+        };
+        let run = &mut self.runs[index];
+        let resuming = run.state == PipelineRunState::Interrupted;
+        if resuming {
+            run.resume_attempt += 1;
+        }
+        run.state = PipelineRunState::Running;
+        run.stage = PipelineStage::ActivatingProfile;
+        run.error = None;
+        run.quality = None;
+        if !resuming {
+            run.evidence = None;
+            run.session_ids.clear();
+            run.analysis_job_id = None;
+        }
+        run.started_at.get_or_insert_with(Utc::now);
+        self.state = PipelineState::Running;
+        self.stage = PipelineStage::CaptureWave;
+        self.current_run_index = Some(index);
+        self.updated_at = Utc::now();
+        Ok(Some(index))
+    }
+
+    pub fn finish_capture(&mut self, session_ids: Vec<String>) -> Result<()> {
+        let Some(index) = self.current_run_index.take() else {
+            bail!("pipeline has no active run");
+        };
+        if self.runs[index].state != PipelineRunState::Running {
+            bail!("pipeline capture is not active");
+        }
+        if session_ids.is_empty() {
+            bail!("pipeline capture did not produce a Session");
+        }
+        self.runs[index].state = PipelineRunState::Captured;
+        self.runs[index].stage = PipelineStage::Checkpoint;
+        self.runs[index].session_ids = session_ids;
+        self.runs[index].error = None;
+        self.stage = PipelineStage::CaptureWave;
+        self.updated_at = Utc::now();
+        Ok(())
+    }
+
+    pub fn begin_next_analysis(&mut self, repetition_index: u16) -> Result<Option<usize>> {
+        if self.current_run_index.is_some() {
+            bail!("pipeline already has an active run");
+        }
+        if self.runs.iter().any(|run| {
+            run.repetition_index == repetition_index
+                && matches!(
+                    run.state,
+                    PipelineRunState::Pending | PipelineRunState::Running | PipelineRunState::Interrupted
+                )
+        }) {
+            bail!("pipeline analysis barrier requires the repetition capture wave to finish");
+        }
+        let Some(index) = self
+            .runs
+            .iter()
+            .position(|run| run.repetition_index == repetition_index && run.state == PipelineRunState::Captured)
+        else {
+            return Ok(None);
+        };
+        self.runs[index].state = PipelineRunState::Analyzing;
+        self.runs[index].stage = PipelineStage::AnalysisWave;
+        self.runs[index].error = None;
+        self.state = PipelineState::Running;
+        self.stage = PipelineStage::AnalysisWave;
+        self.current_run_index = Some(index);
+        self.updated_at = Utc::now();
+        Ok(Some(index))
+    }
+
+    pub fn finish_analysis(&mut self, state: PipelineRunState, error: Option<PipelineError>) -> Result<()> {
+        if !state.terminal() {
+            bail!("pipeline analysis finish state must be terminal");
+        }
+        let Some(index) = self.current_run_index.take() else {
+            bail!("pipeline has no active run");
+        };
+        if self.runs[index].state != PipelineRunState::Analyzing {
+            bail!("pipeline analysis is not active");
+        }
+        self.runs[index].state = state;
+        self.runs[index].stage = PipelineStage::Finished;
+        self.runs[index].error = error;
+        self.runs[index].completed_at = Some(Utc::now());
+        self.stage = PipelineStage::Checkpoint;
+        self.updated_at = Utc::now();
+        Ok(())
+    }
+
+    pub fn schedule_application_retry(&mut self, max_retries: u8) -> Result<()> {
+        let Some(index) = self.current_run_index.take() else {
+            bail!("pipeline has no active analysis");
+        };
+        let run = &mut self.runs[index];
+        if run.state != PipelineRunState::Analyzing {
+            bail!("pipeline application retry requires active analysis");
+        }
+        if max_retries == 0 || run.application_retry_attempt >= max_retries {
+            bail!("pipeline application retry budget is exhausted");
+        }
+        run.prior_session_ids.append(&mut run.session_ids);
+        run.application_retry_attempt += 1;
+        run.state = PipelineRunState::RetryPending;
+        run.stage = PipelineStage::CaptureWave;
+        run.batch_id = None;
+        run.analysis_job_id = None;
+        run.error = None;
+        run.completed_at = None;
+        self.stage = PipelineStage::CaptureWave;
+        self.updated_at = Utc::now();
+        Ok(())
+    }
+
+    pub fn finalize_matrix(&mut self) -> Result<()> {
+        if self.current_run_index.is_some() || self.runs.iter().any(|run| !run.state.terminal()) {
+            bail!("pipeline matrix cannot finish while cells remain nonterminal");
+        }
+        self.state = if self
+            .runs
+            .iter()
+            .any(|run| matches!(run.state, PipelineRunState::Failed | PipelineRunState::Skipped))
+        {
+            PipelineState::CompletedWithErrors
+        } else if self.runs.iter().any(|run| run.state == PipelineRunState::Degraded) {
+            PipelineState::CompletedWithDegraded
+        } else if self.runs.iter().any(|run| run.state == PipelineRunState::Cancelled) {
+            PipelineState::Cancelled
+        } else {
+            PipelineState::Completed
+        };
+        self.stage = PipelineStage::Finished;
+        self.updated_at = Utc::now();
+        Ok(())
+    }
     pub fn checkpoint_run(&mut self, stage: PipelineStage) -> Result<()> {
         let Some(index) = self.current_run_index else {
             bail!("pipeline has no active run");
@@ -830,6 +1197,37 @@ impl PipelineManifest {
                 ),
             });
             run.started_at = Some(now);
+            run.completed_at = Some(now);
+            skipped += 1;
+        }
+        if skipped > 0 {
+            self.updated_at = now;
+        }
+        skipped
+    }
+
+    pub fn skip_remaining_runs(&mut self, cause: &PipelineError) -> usize {
+        let now = Utc::now();
+        let mut skipped = 0;
+        for run in self.runs.iter_mut().filter(|run| {
+            matches!(
+                run.state,
+                PipelineRunState::Pending
+                    | PipelineRunState::Interrupted
+                    | PipelineRunState::RetryPending
+                    | PipelineRunState::Captured
+            )
+        }) {
+            run.state = PipelineRunState::Skipped;
+            run.stage = PipelineStage::Finished;
+            run.error = Some(PipelineError {
+                code: "PIPELINE_SYSTEMIC_FAILURE".into(),
+                message: format!(
+                    "Skipped because the shared capture/analysis infrastructure failed: {}: {}",
+                    cause.code, cause.message
+                ),
+            });
+            run.started_at.get_or_insert(now);
             run.completed_at = Some(now);
             skipped += 1;
         }
@@ -1299,6 +1697,48 @@ mod tests {
     }
 
     #[test]
+    fn systemic_failure_skips_every_remaining_run() {
+        let mut manifest = PipelineManifest::create(
+            "6ea29d49-4f0e-4f9b-8a88-0ad095c50b78".into(),
+            PathBuf::from("/tmp/pipeline"),
+            PipelineConfigSnapshot {
+                path: PathBuf::from("/tmp/sites.yaml"),
+                sha256: "b".repeat(64),
+            },
+            vec![target()],
+            serde_json::json!({}),
+            vec![(candidate("one"), vec!["one-r1".into(), "one-r2".into()])],
+            2,
+            PipelinePolicy {
+                continue_on_run_failure: true,
+                restore_original_state: true,
+            },
+            PipelineRestore {
+                profile_uid: None,
+                profile_fingerprint: None,
+                terminal_state: None,
+                selections: vec![],
+                checks: vec![],
+                state: RestoreState::Pending,
+                error: None,
+            },
+        )
+        .unwrap();
+        let skipped = manifest.skip_remaining_runs(&PipelineError {
+            code: "PIPELINE_RUN_FAILED".into(),
+            message: "CONTRACT_VALIDATION_FAILED: shared schema mismatch".into(),
+        });
+        assert_eq!(skipped, 2);
+        assert!(manifest.runs.iter().all(|run| run.state == PipelineRunState::Skipped));
+        assert!(
+            manifest
+                .runs
+                .iter()
+                .all(|run| run.error.as_ref().unwrap().code == "PIPELINE_SYSTEMIC_FAILURE")
+        );
+    }
+
+    #[test]
     fn loads_schema_four_evidence_without_profile_activation() {
         let manifest = PipelineManifest::create(
             "6ea29d49-4f0e-4f9b-8a88-0ad095c50b78".into(),
@@ -1337,5 +1777,141 @@ mod tests {
                 .as_ref()
                 .is_some_and(|evidence| evidence.profile_activation.is_none())
         );
+    }
+    #[test]
+    fn matrix_runs_follow_repetition_target_candidate_order_and_enforce_barrier() {
+        let mut second_target = target();
+        second_target.index = 7;
+        second_target.url = "https://example.com/second".into();
+        second_target.run_label = "second".into();
+        let schedule = PipelineSchedule::matrix(
+            2,
+            2,
+            crate::core::traffic_tracer::schedule::PipelineCandidateOrderPolicy::Fixed,
+            None,
+        )
+        .unwrap();
+        let mut manifest = PipelineManifest::create_matrix(
+            "6ea29d49-4f0e-4f9b-8a88-0ad095c50b78".into(),
+            PathBuf::from("/tmp/pipeline"),
+            PipelineConfigSnapshot {
+                path: PathBuf::from("/tmp/sites.yaml"),
+                sha256: "b".repeat(64),
+            },
+            vec![target(), second_target],
+            serde_json::json!({}),
+            vec![candidate("one"), candidate("two")],
+            (1..=8).map(|ordinal| format!("matrix-{ordinal}")).collect(),
+            2,
+            PipelinePolicy {
+                continue_on_run_failure: true,
+                restore_original_state: true,
+            },
+            PipelineRestore {
+                profile_uid: None,
+                profile_fingerprint: None,
+                terminal_state: None,
+                selections: vec![],
+                checks: vec![],
+                state: RestoreState::Pending,
+                error: None,
+            },
+            schedule,
+        )
+        .unwrap();
+
+        assert_eq!(
+            manifest
+                .runs
+                .iter()
+                .map(|run| (run.repetition_index, run.target_index, run.candidate_ordinal,))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, Some(0), 1),
+                (1, Some(0), 2),
+                (1, Some(7), 1),
+                (1, Some(7), 2),
+                (2, Some(0), 1),
+                (2, Some(0), 2),
+                (2, Some(7), 1),
+                (2, Some(7), 2),
+            ]
+        );
+        assert!(manifest.begin_next_analysis(1).is_err());
+
+        for expected in 0..4 {
+            assert_eq!(manifest.begin_next_capture(1).unwrap(), Some(expected));
+            manifest.finish_capture(vec![format!("session-{expected}")]).unwrap();
+        }
+        assert_eq!(manifest.begin_next_capture(1).unwrap(), None);
+        for expected in 0..4 {
+            assert_eq!(manifest.begin_next_analysis(1).unwrap(), Some(expected));
+            manifest.finish_analysis(PipelineRunState::Completed, None).unwrap();
+        }
+        assert_eq!(manifest.begin_next_analysis(1).unwrap(), None);
+        for expected in 4..8 {
+            assert_eq!(manifest.begin_next_capture(2).unwrap(), Some(expected));
+            manifest.finish_capture(vec![format!("session-{expected}")]).unwrap();
+        }
+        assert_eq!(manifest.begin_next_analysis(2).unwrap(), Some(4));
+        manifest.schedule_application_retry(1).unwrap();
+        assert_eq!(manifest.runs[4].state, PipelineRunState::RetryPending);
+        assert_eq!(manifest.runs[4].prior_session_ids, vec!["session-4"]);
+        for expected in 5..8 {
+            assert_eq!(manifest.begin_next_analysis(2).unwrap(), Some(expected));
+            manifest.finish_analysis(PipelineRunState::Completed, None).unwrap();
+        }
+        assert_eq!(manifest.begin_next_analysis(2).unwrap(), None);
+        assert_eq!(manifest.begin_next_capture(2).unwrap(), Some(4));
+        manifest.finish_capture(vec!["session-4-retry".into()]).unwrap();
+        assert_eq!(manifest.runs[4].application_retry_attempt, 1);
+        assert_eq!(manifest.runs[4].session_ids, vec!["session-4-retry"]);
+    }
+
+    #[test]
+    fn recovery_during_matrix_analysis_preserves_capture_for_resume() {
+        let schedule = PipelineSchedule::matrix(
+            1,
+            1,
+            crate::core::traffic_tracer::schedule::PipelineCandidateOrderPolicy::Fixed,
+            None,
+        )
+        .unwrap();
+        let mut manifest = PipelineManifest::create_matrix(
+            "6ea29d49-4f0e-4f9b-8a88-0ad095c50b78".into(),
+            PathBuf::from("/tmp/pipeline"),
+            PipelineConfigSnapshot {
+                path: PathBuf::from("/tmp/sites.yaml"),
+                sha256: "b".repeat(64),
+            },
+            vec![target()],
+            serde_json::json!({}),
+            vec![candidate("one")],
+            vec!["matrix-one".into()],
+            1,
+            PipelinePolicy {
+                continue_on_run_failure: true,
+                restore_original_state: true,
+            },
+            PipelineRestore {
+                profile_uid: None,
+                profile_fingerprint: None,
+                terminal_state: None,
+                selections: vec![],
+                checks: vec![],
+                state: RestoreState::Pending,
+                error: None,
+            },
+            schedule,
+        )
+        .unwrap();
+        manifest.begin_next_capture(1).unwrap();
+        manifest.finish_capture(vec!["session-one".into()]).unwrap();
+        manifest.begin_next_analysis(1).unwrap();
+
+        assert!(manifest.recover_interrupted_supervisor().unwrap());
+        assert_eq!(manifest.runs[0].state, PipelineRunState::Captured);
+        assert_eq!(manifest.current_run_index, None);
+        assert_eq!(manifest.state, PipelineState::Interrupted);
     }
 }

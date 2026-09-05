@@ -103,9 +103,9 @@ export function TrafficTracerPipelineQueue({
           label="Profile / node pipeline"
         />
         <Typography variant="body2" color="text.secondary">
-          Queue the effective Profile, selector and concrete node currently
-          active in Mihomo. Each entry runs the selected sites serially; entries
-          run in the order shown.
+          Queue effective Profile and node pairs. Each repetition captures in
+          target order; every target uses one frozen candidate order. Analysis
+          starts only after that repetition's entire capture wave finishes.
         </Typography>
         {enabled && (
           <>
@@ -136,16 +136,15 @@ export function TrafficTracerPipelineQueue({
                 sx={{ width: 190 }}
               />
               <Typography variant="body2" color="text.secondary">
-                {candidates.length * repetitions} batches ·{' '}
-                {candidates.length * repetitions * targetCount} baseline
-                Sessions · strict serial order
+                {candidates.length * repetitions * targetCount} capture cells ·
+                repetition → target → candidate · capture wave, then analysis
               </Typography>
             </Stack>
             <Alert severity="info">
-              Repetitions are independent full sites.yaml samples. Before the
-              first Batch, every queued candidate is activated and rebound to
-              its current semantic runtime configuration. That frozen snapshot
-              is then enforced across all repetitions.
+              The candidate order is balanced and reproducibly frozen in the
+              pipeline manifest. It stays identical for all targets in one
+              repetition and rotates between repetitions. Every candidate is
+              rebound to its semantic runtime configuration before capture.
             </Alert>
             <Stack
               direction="row"

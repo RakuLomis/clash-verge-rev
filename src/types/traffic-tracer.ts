@@ -163,6 +163,8 @@ export interface PipelineStartRequest {
   candidates: PipelineCandidate[]
   repetitions_per_candidate: number
   continue_on_run_failure: boolean
+  candidate_order_policy?: 'fixed' | 'balanced_seeded'
+  random_seed?: number | null
 }
 
 export type PipelineState =
@@ -188,6 +190,8 @@ export type PipelineStage =
   | 'preflight'
   | 'starting_batch'
   | 'running_batch'
+  | 'capture_wave'
+  | 'analysis_wave'
   | 'reconciling_batch'
   | 'finalizing_batch'
   | 'verifying_protocol'
@@ -201,6 +205,7 @@ export interface PipelineRun {
   repetition_index: number
   repetition_total: number
   run_id: string
+  target_index?: number
   profile_uid: string
   profile_fingerprint: string
   profile_fingerprint_kind: 'runtime_bytes_v1' | 'runtime_semantic_v2'
@@ -215,6 +220,9 @@ export interface PipelineRun {
     | 'completed'
     | 'degraded'
     | 'failed'
+    | 'captured'
+    | 'analyzing'
+    | 'retry_pending'
     | 'interrupted'
     | 'skipped'
     | 'cancelled'
@@ -227,7 +235,11 @@ export interface PipelineRun {
   output_path: string
   error: { code: string; message: string } | null
   quality?: PipelineRunQuality
+  session_ids: string[]
+  analysis_job_id?: string
   evidence?: PipelineRunEvidence
+  application_retry_attempt: number
+  prior_session_ids: string[]
   resume_attempt: number
   started_at: string | null
   completed_at: string | null
@@ -342,7 +354,7 @@ export interface PipelineListEntry {
 }
 
 export interface PipelineManifest {
-  schema_version: 6
+  schema_version: 6 | 7
   pipeline_id: string
   state: PipelineState
   stage: PipelineStage
@@ -358,6 +370,13 @@ export interface PipelineManifest {
   }
   repetitions_per_candidate: number
   current_run_index: number | null
+  schedule: {
+    mode: 'candidate_major' | 'repetition_target_candidate'
+    candidate_order_policy: 'fixed' | 'balanced_seeded'
+    random_seed: number | null
+    algorithm_version: number
+    repetition_candidate_orders: number[][]
+  }
   runs: PipelineRun[]
   restore: {
     profile_uid: string | null
