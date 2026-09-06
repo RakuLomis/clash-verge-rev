@@ -40,6 +40,10 @@ impl Handle {
         Self::send_event(FrontendEvent::RefreshClash);
     }
 
+    pub fn queue_profile_refresh(profile: Option<String>) {
+        NotificationSystem::queue_profile_refresh(profile);
+    }
+
     pub fn refresh_verge() {
         Self::send_event(FrontendEvent::RefreshVerge);
     }

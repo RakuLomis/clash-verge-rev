@@ -1,7 +1,6 @@
 use super::CmdResult;
 use super::StringifyErr as _;
 use crate::cmd::validate::{ValidationNoticeTarget, handle_validation_notice};
-use crate::utils::window_manager::WindowManager;
 use crate::{
     config::{
         Config, IProfiles, PrfItem, PrfOption,
@@ -264,13 +263,16 @@ async fn handle_success(current_value: Option<&String>, pipeline_owner: Option<&
         }
     }
 
-    handle::Handle::refresh_clash();
+    handle::Handle::queue_profile_refresh(current_value.cloned());
 
-    if let Some(current) = current_value
-        && WindowManager::get_main_window().is_some()
-    {
-        logging!(info, Type::Cmd, "向前端发送配置变更事件: {}", current);
-        handle::Handle::notify_profile_changed(current);
+    // Pipeline commits must not depend on WebView or native tray responsiveness.
+    if pipeline_owner.is_some() {
+        logging!(
+            info,
+            Type::Cmd,
+            "Profile activation commit completed; owner={owner}; UI refresh queued"
+        );
+        return Ok(ValidationOutcome::Valid);
     }
 
     let auxiliary_owner = owner.to_owned();

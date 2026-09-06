@@ -133,8 +133,14 @@ export const AppDataProvider = ({
     let lastUpdateTime = 0
     const refreshThrottle = 800
     const cleanupFns: Array<() => void> = []
+    let disposed = false
+    const register = (unlisten: () => void) => {
+      if (disposed) unlisten()
+      else cleanupFns.push(unlisten)
+    }
 
     const handleProfileChanged = (event: { payload: string }) => {
+      if (disposed) return
       const newProfileId = event.payload
       const now = Date.now()
       if (
@@ -151,6 +157,7 @@ export const AppDataProvider = ({
     }
 
     const handleRefreshProxy = () => {
+      if (disposed) return
       const now = Date.now()
       if (now - lastUpdateTime <= refreshThrottle) return
       lastUpdateTime = now
@@ -163,7 +170,7 @@ export const AppDataProvider = ({
           'profile-changed',
           handleProfileChanged,
         )
-        cleanupFns.push(unlistenProfile)
+        register(unlistenProfile)
       } catch (error) {
         console.error('[AppDataProvider] 监听 Profile 事件失败:', error)
       }
@@ -173,7 +180,7 @@ export const AppDataProvider = ({
           'verge://refresh-proxy-config',
           handleRefreshProxy,
         )
-        cleanupFns.push(unlistenProxy)
+        register(unlistenProxy)
       } catch (error) {
         console.warn('[AppDataProvider] 设置 Tauri 事件监听器失败:', error)
       }
@@ -182,6 +189,7 @@ export const AppDataProvider = ({
     void initializeListeners()
 
     return () => {
+      disposed = true
       cleanupFns.forEach((fn) => {
         try {
           fn()

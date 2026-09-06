@@ -2264,10 +2264,12 @@ fn launch_pipeline_supervisor(
     let heartbeat_manifest = manifest_path.clone();
     let heartbeat_pipeline = pipeline_id.clone();
     let heartbeat_stop = Arc::clone(&heartbeat_done);
+    let stalled_interrupt = Arc::clone(&interrupt);
     let _ = write_pipeline_owner_record(&manifest_path, &pipeline_id, "supervising");
-    tauri::async_runtime::spawn(async move {
+    std::thread::spawn(move || {
+        let mut warned = false;
         while !heartbeat_stop.load(Ordering::Acquire) {
-            tokio::time::sleep(PIPELINE_OWNER_HEARTBEAT_INTERVAL).await;
+            std::thread::sleep(PIPELINE_OWNER_HEARTBEAT_INTERVAL);
             if heartbeat_stop.load(Ordering::Acquire) {
                 break;
             }
@@ -2277,6 +2279,37 @@ fn launch_pipeline_supervisor(
                     Type::System,
                     "TrafficTracer pipeline owner heartbeat failed: {error}"
                 );
+            }
+            if let Ok(snapshot) = PipelineManifest::load(&heartbeat_manifest) {
+                let stalled = snapshot
+                    .current_run_index
+                    .and_then(|index| snapshot.runs.get(index))
+                    .is_some_and(|run| run.stage == PipelineStage::ActivatingProfile)
+                    && Utc::now().signed_duration_since(snapshot.updated_at).num_seconds() > 90;
+                if stalled && !warned {
+                    warned = true;
+                    stalled_interrupt.store(true, Ordering::Release);
+                    logging!(
+                        error,
+                        Type::System,
+                        "PROFILE_ACTIVATION_STALLED: no checkpoint for 90 seconds; interrupt requested; current core preserved"
+                    );
+                    // Only the supervisor writes the manifest. A stalled native call
+                    // cannot safely be cancelled or replaced by another activation.
+                    if let Some(root) = heartbeat_manifest.parent() {
+                        let health = serde_json::json!({
+                            "code": "PROFILE_ACTIVATION_STALLED",
+                            "pipeline_id": heartbeat_pipeline,
+                            "run_index": snapshot.current_run_index,
+                            "last_progress_at": snapshot.updated_at,
+                            "detected_at": Utc::now(),
+                            "interrupt_requested": true
+                        });
+                        if let Err(error) = fs::write(root.join("pipeline-stall.json"), health.to_string()) {
+                            logging!(warn, Type::System, "Could not persist pipeline stall: {error}");
+                        }
+                    }
+                }
             }
         }
     });

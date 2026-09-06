@@ -634,14 +634,35 @@ const TrafficTracerPage = () => {
             sx={{ mb: 2 }}
           >
             <AlertTitle>Profile / node pipeline</AlertTitle>
+            {pipelineActive &&
+              displayedPipelineRun?.stage === 'activating_profile' &&
+              pipelineNow - Date.parse(pipeline.updated_at) > 90000 && (
+                <Alert severity="error" sx={{ mb: 1 }}>
+                  PROFILE_ACTIVATION_STALLED: no durable checkpoint for over 90
+                  seconds. The supervisor requests interruption without starting
+                  another capture or switching another node. Preserve this
+                  capture group for recovery.
+                </Alert>
+              )}
             <Box>
               {pipeline.state} · {pipeline.stage.replaceAll('_', ' ')} · run{' '}
-              {(pipeline.current_run_index ?? pipeline.runs.length - 1) + 1}/
-              {pipeline.runs.length}
+              {pipeline.current_run_index !== null
+                ? pipeline.current_run_index + 1
+                : (displayedPipelineRun?.ordinal ?? 0)}
+              /{pipeline.runs.length}
             </Box>
             <Box sx={{ opacity: 0.8 }}>
               Captured {capturedCellCount}/{pipeline.runs.length} cells ·
               analyzed {analyzedCellCount}/{pipeline.runs.length}
+              {' · '}awaiting analysis{' '}
+              {pipeline.runs.filter((run) => run.state === 'captured').length}
+              {' · '}pending{' '}
+              {pipeline.runs.filter((run) => run.state === 'pending').length}
+              {' · '}interrupted{' '}
+              {
+                pipeline.runs.filter((run) => run.state === 'interrupted')
+                  .length
+              }
             </Box>
             {pipeline.schedule.mode === 'repetition_target_candidate' && (
               <Box sx={{ opacity: 0.65 }}>

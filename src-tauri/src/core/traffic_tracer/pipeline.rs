@@ -731,6 +731,7 @@ impl PipelineManifest {
                 application: PipelineAggregateQuality::default(),
             };
             for run in candidate_runs {
+                aggregate.sessions_total += run.session_ids.len();
                 match run.state {
                     PipelineRunState::Completed => aggregate.completed += 1,
                     PipelineRunState::Degraded => aggregate.degraded += 1,
@@ -744,7 +745,6 @@ impl PipelineManifest {
                     | PipelineRunState::RetryPending => {}
                 }
                 if let Some(quality) = &run.quality {
-                    aggregate.sessions_total += quality.sessions_total;
                     aggregate.capture_integrity.add(&quality.capture_integrity);
                     aggregate.correlation.add(&quality.correlation);
                     aggregate.application.add(&quality.application);
@@ -1913,5 +1913,91 @@ mod tests {
         assert_eq!(manifest.runs[0].state, PipelineRunState::Captured);
         assert_eq!(manifest.current_run_index, None);
         assert_eq!(manifest.state, PipelineState::Interrupted);
+    }
+
+    #[test]
+    fn detailed_270_cells_resume_after_35_captures_without_recapture() {
+        let schedule = PipelineSchedule::matrix(
+            5,
+            3,
+            crate::core::traffic_tracer::schedule::PipelineCandidateOrderPolicy::Fixed,
+            None,
+        )
+        .unwrap();
+        let targets = (0..18)
+            .map(|index| {
+                let mut item = target();
+                item.index = index;
+                item
+            })
+            .collect();
+        let mut manifest = PipelineManifest::create_matrix(
+            "6ea29d49-4f0e-4f9b-8a88-0ad095c50b78".into(),
+            PathBuf::from("/tmp/pipeline"),
+            PipelineConfigSnapshot {
+                path: PathBuf::from("/tmp/sites.yaml"),
+                sha256: "b".repeat(64),
+            },
+            targets,
+            serde_json::json!({}),
+            vec![candidate("one"), candidate("two"), candidate("three")],
+            (0..270).map(|index| format!("cell-{index}")).collect(),
+            5,
+            PipelinePolicy {
+                continue_on_run_failure: true,
+                restore_original_state: true,
+            },
+            PipelineRestore {
+                profile_uid: None,
+                profile_fingerprint: None,
+                terminal_state: None,
+                selections: vec![],
+                checks: vec![],
+                state: RestoreState::Pending,
+                error: None,
+            },
+            schedule,
+        )
+        .unwrap();
+        for index in 0..35 {
+            assert_eq!(manifest.begin_next_capture(1).unwrap(), Some(index));
+            manifest.finish_capture(vec![format!("session-{index}")]).unwrap();
+        }
+        assert_eq!(
+            manifest
+                .aggregate()
+                .candidates
+                .iter()
+                .map(|c| c.sessions_total)
+                .sum::<usize>(),
+            35
+        );
+        assert_eq!(manifest.begin_next_capture(1).unwrap(), Some(35));
+        assert!(manifest.runs[35].batch_id.is_none());
+        assert!(manifest.recover_interrupted_supervisor().unwrap());
+        assert_eq!(manifest.begin_next_capture(1).unwrap(), Some(35));
+        manifest.finish_capture(vec!["session-35".into()]).unwrap();
+        for repetition in 1..=5 {
+            let start = if repetition == 1 {
+                36
+            } else {
+                (usize::from(repetition) - 1) * 54
+            };
+            let end = usize::from(repetition) * 54;
+            for index in start..end {
+                assert_eq!(manifest.begin_next_capture(repetition).unwrap(), Some(index));
+                assert!(manifest.begin_next_analysis(repetition).is_err());
+                manifest.finish_capture(vec![format!("session-{index}")]).unwrap();
+            }
+            assert_eq!(manifest.begin_next_capture(repetition).unwrap(), None);
+            for index in (usize::from(repetition) - 1) * 54..end {
+                assert_eq!(manifest.begin_next_analysis(repetition).unwrap(), Some(index));
+                manifest.finish_analysis(PipelineRunState::Completed, None).unwrap();
+            }
+        }
+        assert_eq!(manifest.aggregate().terminal_cells, 270);
+        for (index, run) in manifest.runs.iter().enumerate() {
+            assert_eq!(run.session_ids, vec![format!("session-{index}")]);
+        }
     }
 }
