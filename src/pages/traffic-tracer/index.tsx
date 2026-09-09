@@ -10,7 +10,7 @@ import {
   Typography,
 } from '@mui/material'
 import { invoke } from '@tauri-apps/api/core'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { BasePage } from '@/components/base'
@@ -48,6 +48,9 @@ import type {
   PipelineListEntry,
   PipelineManifest,
 } from '@/types/traffic-tracer'
+import { announceDesktopRecovery } from '@/utils/traffic-tracer-desktop-recovery'
+import { RECOVERY_CONFIRMATION_RETRY_EVENT } from '@/utils/traffic-tracer-recovery-snapshots'
+import { startVisibleSnapshotPoll } from '@/utils/traffic-tracer-visible-poll'
 
 const START_FAILURE_STORAGE_KEY = 'traffictracer.lastStartFailure'
 const ENVIRONMENT_REQUEST_STORAGE_KEY = 'traffictracer.environmentRequest.v1'
@@ -112,13 +115,6 @@ const TrafficTracerPage = () => {
     localStorage.removeItem(START_FAILURE_STORAGE_KEY)
     setStartFailure(null)
   }, [])
-  const handleDiagnose = useCallback((request: EnvironmentRequest) => {
-    localStorage.setItem(
-      ENVIRONMENT_REQUEST_STORAGE_KEY,
-      JSON.stringify(request),
-    )
-    setDiagnosticRequest(request)
-  }, [])
   const {
     job,
     jobStartedAt,
@@ -160,6 +156,14 @@ const TrafficTracerPage = () => {
     }
   })
   const [pipelineActionPending, setPipelineActionPending] = useState(false)
+  const pipelineRequestFenceRef = useRef({ revision: 0, pending: false })
+  const updatePipelineActionPending = useCallback((pending: boolean) => {
+    // Invalidate reads issued before either edge of a lifecycle operation.
+    // The ref changes synchronously, before React commits the pending state.
+    pipelineRequestFenceRef.current.revision += 1
+    pipelineRequestFenceRef.current.pending = pending
+    setPipelineActionPending(pending)
+  }, [])
   const [pipelineHistory, setPipelineHistory] = useState<PipelineListEntry[]>(
     [],
   )
@@ -221,17 +225,38 @@ const TrafficTracerPage = () => {
         ),
       )
     : null
-  const { environment, environmentQuery, captureLock, workerActivity } =
-    useTrafficTracerWorker(
-      diagnosticRequest,
-      true,
-      pipelineActionPending || pipelineActive,
+  const {
+    environment,
+    environmentQuery,
+    captureLock,
+    workerActivity,
+    checkEnvironment,
+  } = useTrafficTracerWorker(
+    diagnosticRequest,
+    true,
+    pipelineActionPending || pipelineActive,
+  )
+
+  const handleDiagnose = (request: EnvironmentRequest) => {
+    localStorage.setItem(
+      ENVIRONMENT_REQUEST_STORAGE_KEY,
+      JSON.stringify(request),
     )
+    setDiagnosticRequest(request)
+    void checkEnvironment(request).catch((error: unknown) =>
+      recordStartFailure(error, 'environment_check'),
+    )
+  }
 
   useEffect(() => {
     if (!pipelineLocator) return
     let disposed = false
+    let inFlight = false
     const refresh = async () => {
+      if (disposed || inFlight || pipelineRequestFenceRef.current.pending)
+        return false
+      inFlight = true
+      const revision = pipelineRequestFenceRef.current.revision
       try {
         const current = await getTrafficTracerPipeline(
           pipelineLocator.output_root,
@@ -243,46 +268,67 @@ const TrafficTracerPage = () => {
                 .reverse()
                 .find((item) => item.state !== 'pending')
         let batchStatus: BatchStatusResult | null = null
+        let batchReadSucceeded = true
         if (run?.batch_id) {
           try {
             batchStatus = await getTrafficTracerBatch(run.batch_id)
           } catch {
             batchStatus = null
+            batchReadSucceeded = false
           }
         }
-        if (!disposed) {
+        if (
+          !disposed &&
+          revision === pipelineRequestFenceRef.current.revision
+        ) {
           setPipeline(current)
           setPipelineBatchStatus(batchStatus)
           setPipelineNow(Date.now())
+          return batchReadSucceeded
         }
       } catch (error) {
-        if (!disposed) recordStartFailure(error, 'pipeline.status')
+        if (
+          !disposed &&
+          revision === pipelineRequestFenceRef.current.revision
+        ) {
+          recordStartFailure(error, 'pipeline.status')
+        }
+      } finally {
+        inFlight = false
       }
+      return false
     }
-    void refresh()
-    const interval = window.setInterval(() => void refresh(), 1000)
+    const stopPolling = startVisibleSnapshotPoll(refresh, 1000)
     return () => {
       disposed = true
-      window.clearInterval(interval)
+      stopPolling()
     }
   }, [pipelineLocator, recordStartFailure])
   useEffect(() => {
     const outputRoot = diagnosticRequest?.output_root
     if (!outputRoot) return
     let disposed = false
+    let inFlight = false
     const refresh = async () => {
+      if (disposed || inFlight) return false
+      inFlight = true
       try {
         const entries = await listTrafficTracerPipelines(outputRoot)
-        if (!disposed) setPipelineHistory(entries)
+        if (!disposed) {
+          setPipelineHistory(entries)
+          return true
+        }
       } catch {
         if (!disposed) setPipelineHistory([])
+      } finally {
+        inFlight = false
       }
+      return false
     }
-    void refresh()
-    const interval = window.setInterval(() => void refresh(), 5000)
+    const stopPolling = startVisibleSnapshotPoll(refresh, 5000)
     return () => {
       disposed = true
-      window.clearInterval(interval)
+      stopPolling()
     }
   }, [diagnosticRequest?.output_root, pipelineLocator])
 
@@ -304,9 +350,26 @@ const TrafficTracerPage = () => {
 
   useEffect(() => {
     let mounted = true
+    let pending = false
+    const observeDesktop = (value: unknown) => {
+      window.dispatchEvent(new Event(RECOVERY_CONFIRMATION_RETRY_EVENT))
+      if (!value || typeof value !== 'object') return
+      const snapshot = value as Record<string, unknown>
+      if (snapshot.session_lock === 'unlocked')
+        announceDesktopRecovery(snapshot.unlock_generation)
+    }
     const heartbeat = () => {
+      if (pending) return
       const active = mounted && document.visibilityState === 'visible'
-      void invoke('tt_ui_heartbeat', { active }).catch(() => undefined)
+      pending = true
+      void invoke('tt_ui_heartbeat', { active })
+        .then((snapshot) => {
+          if (mounted) observeDesktop(snapshot)
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          pending = false
+        })
     }
     heartbeat()
     const interval = window.setInterval(heartbeat, 2000)
@@ -352,7 +415,8 @@ const TrafficTracerPage = () => {
   }
 
   const handleStartPipeline = async (batch: BatchStartRequest) => {
-    setPipelineActionPending(true)
+    if (pipelineRequestFenceRef.current.pending) return
+    updatePipelineActionPending(true)
     try {
       const started = await startTrafficTracerPipeline({
         batch,
@@ -376,13 +440,13 @@ const TrafficTracerPage = () => {
       recordStartFailure(error, 'pipeline.start')
       showNotice.error(error)
     } finally {
-      setPipelineActionPending(false)
+      updatePipelineActionPending(false)
     }
   }
 
   const handleResumePipeline = async () => {
-    if (!pipelineLocator) return
-    setPipelineActionPending(true)
+    if (!pipelineLocator || pipelineRequestFenceRef.current.pending) return
+    updatePipelineActionPending(true)
     try {
       const resumed = await resumeTrafficTracerPipeline(
         pipelineLocator.output_root,
@@ -394,13 +458,13 @@ const TrafficTracerPage = () => {
       recordStartFailure(error, 'pipeline.resume')
       showNotice.error(error)
     } finally {
-      setPipelineActionPending(false)
+      updatePipelineActionPending(false)
     }
   }
 
   const handleRetryPipelineRestore = async () => {
-    if (!pipelineLocator) return
-    setPipelineActionPending(true)
+    if (!pipelineLocator || pipelineRequestFenceRef.current.pending) return
+    updatePipelineActionPending(true)
     try {
       const restored = await retryTrafficTracerPipelineRestore(
         pipelineLocator.output_root,
@@ -421,22 +485,27 @@ const TrafficTracerPage = () => {
       recordStartFailure(error, 'pipeline.restore')
       showNotice.error(error)
     } finally {
-      setPipelineActionPending(false)
+      updatePipelineActionPending(false)
     }
   }
 
   const handlePipelineStop = async (cancel: boolean) => {
-    if (!pipeline) return
-    setPipelineActionPending(true)
+    if (!pipeline || pipelineRequestFenceRef.current.pending) return
+    updatePipelineActionPending(true)
     try {
       const updated = cancel
         ? await cancelTrafficTracerPipeline(pipeline.pipeline_id)
         : await interruptTrafficTracerPipeline(pipeline.pipeline_id)
       setPipeline(updated)
+      clearStartFailure()
     } catch (error) {
+      recordStartFailure(
+        error,
+        cancel ? 'pipeline.cancel' : 'pipeline.interrupt',
+      )
       showNotice.error(error)
     } finally {
-      setPipelineActionPending(false)
+      updatePipelineActionPending(false)
     }
   }
   useEffect(() => {
@@ -512,7 +581,13 @@ const TrafficTracerPage = () => {
         )}
         {startFailure && (
           <Alert severity="error" onClose={clearStartFailure} sx={{ mb: 2 }}>
-            <AlertTitle>Capture did not start or terminated early</AlertTitle>
+            <AlertTitle>
+              {['pipeline.interrupt', 'pipeline.cancel'].includes(
+                startFailure.stage,
+              )
+                ? 'Pipeline control request failed'
+                : 'Capture did not start or terminated early'}
+            </AlertTitle>
             {startFailure.message}
             <Box
               component="span"
@@ -593,6 +668,7 @@ const TrafficTracerPage = () => {
               fullWidth
               size="small"
               label="Profile / node pipeline history"
+              disabled={pipelineActionPending}
               value={pipelineLocator?.output_root ?? ''}
               onChange={(event) => {
                 const selected = pipelineHistory.find(
@@ -867,6 +943,19 @@ const TrafficTracerPage = () => {
                 )}
               </Box>
             ))}
+            {pipeline.cleanup && pipeline.cleanup.state !== 'completed' && (
+              <Alert
+                severity={
+                  pipeline.cleanup.state === 'warning' ? 'warning' : 'info'
+                }
+              >
+                {pipeline.cleanup.message ??
+                  'Analysis results are saved. Finishing Worker cleanup…'}
+                {pipeline.cleanup.state === 'warning' &&
+                  pipeline.cleanup.capture_lock_retained &&
+                  ' Capture remains locked because Worker cleanup or process exit has not been confirmed.'}
+              </Alert>
+            )}
             {pipelineError && (
               <Box
                 sx={{
@@ -976,7 +1065,9 @@ const TrafficTracerPage = () => {
             pipelineActionPending
           }
           onDiagnose={handleDiagnose}
-          onRetryDiagnostics={() => void environmentQuery.refetch()}
+          onRetryDiagnostics={() => {
+            if (diagnosticRequest) handleDiagnose(diagnosticRequest)
+          }}
           onSubmit={handleStartCapture}
           onSubmitBatch={handleStartBatch}
           pipelineEnabled={pipelineEnabled}

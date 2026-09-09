@@ -462,6 +462,16 @@ pub struct PipelineManifest {
     pub current_run_index: Option<usize>,
     pub runs: Vec<PipelineRun>,
     pub restore: PipelineRestore,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup: Option<PipelineCleanup>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PipelineCleanup {
+    pub state: String,
+    pub updated_at: DateTime<Utc>,
+    pub message: Option<String>,
+    pub capture_lock_retained: bool,
 }
 
 impl PipelineManifest {
@@ -567,6 +577,7 @@ impl PipelineManifest {
             current_run_index: None,
             runs,
             restore,
+            cleanup: None,
         })
     }
 
@@ -691,6 +702,7 @@ impl PipelineManifest {
             current_run_index: None,
             runs,
             restore,
+            cleanup: None,
         })
     }
     pub fn aggregate(&self) -> PipelineAggregate {
@@ -1996,8 +2008,113 @@ mod tests {
             }
         }
         assert_eq!(manifest.aggregate().terminal_cells, 270);
+        let saved_runs = manifest.runs.clone();
+        manifest.cleanup = Some(PipelineCleanup {
+            state: "warning".into(),
+            updated_at: Utc::now(),
+            message: Some("simulated cleanup timeout".into()),
+            capture_lock_retained: true,
+        });
+        let restored: PipelineManifest = serde_json::from_value(serde_json::to_value(&manifest).unwrap()).unwrap();
+        assert_eq!(
+            restored.runs, saved_runs,
+            "cleanup warning must not rewrite analysis outcomes"
+        );
+        assert_eq!(restored.aggregate().terminal_cells, 270);
+        let mut legacy = serde_json::to_value(&manifest).unwrap();
+        legacy.as_object_mut().unwrap().remove("cleanup");
+        assert!(
+            serde_json::from_value::<PipelineManifest>(legacy)
+                .unwrap()
+                .cleanup
+                .is_none()
+        );
         for (index, run) in manifest.runs.iter().enumerate() {
             assert_eq!(run.session_ids, vec![format!("session-{index}")]);
         }
+    }
+
+    #[test]
+    fn september_192_cells_preserve_184_final_five_retries_three_captured() {
+        let mut manifest = PipelineManifest::create_matrix(
+            "6ea29d49-4f0e-4f9b-8a88-0ad095c50b78".into(),
+            PathBuf::from("/tmp/pipeline"),
+            PipelineConfigSnapshot {
+                path: PathBuf::from("/tmp/sites.yaml"),
+                sha256: "b".repeat(64),
+            },
+            (0..64)
+                .map(|index| {
+                    let mut item = target();
+                    item.index = index;
+                    item
+                })
+                .collect(),
+            serde_json::json!({}),
+            vec![candidate("one"), candidate("two"), candidate("three")],
+            (0..192).map(|index| format!("cell-{index}")).collect(),
+            1,
+            PipelinePolicy {
+                continue_on_run_failure: true,
+                restore_original_state: true,
+            },
+            PipelineRestore {
+                profile_uid: None,
+                profile_fingerprint: None,
+                terminal_state: None,
+                selections: vec![],
+                checks: vec![],
+                state: RestoreState::Pending,
+                error: None,
+            },
+            PipelineSchedule::matrix(
+                1,
+                3,
+                crate::core::traffic_tracer::schedule::PipelineCandidateOrderPolicy::Fixed,
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for index in 0..192 {
+            assert_eq!(manifest.begin_next_capture(1).unwrap(), Some(index));
+            manifest.finish_capture(vec![format!("session-{index}")]).unwrap();
+        }
+        let retries = [112, 142, 152, 153, 155];
+        for index in 0..189 {
+            assert_eq!(manifest.begin_next_analysis(1).unwrap(), Some(index));
+            if retries.contains(&index) {
+                manifest.schedule_application_retry(1).unwrap();
+            } else {
+                let state = if index < 15 {
+                    PipelineRunState::Degraded
+                } else {
+                    PipelineRunState::Completed
+                };
+                manifest.finish_analysis(state, None).unwrap();
+            }
+        }
+        // Recovery after an idle boundary, followed by serialization/reload.
+        manifest.recover_interrupted_supervisor().unwrap();
+        let mut restored: PipelineManifest = serde_json::from_value(serde_json::to_value(&manifest).unwrap()).unwrap();
+        assert_eq!(restored.runs.iter().filter(|run| run.state.terminal()).count(), 184);
+        for index in 189..192 {
+            assert_eq!(restored.begin_next_analysis(1).unwrap(), Some(index));
+            assert_eq!(restored.runs[index].session_ids, vec![format!("session-{index}")]);
+            restored.finish_analysis(PipelineRunState::Completed, None).unwrap();
+        }
+        assert_eq!(restored.begin_next_analysis(1).unwrap(), None);
+        for index in retries {
+            assert_eq!(restored.begin_next_capture(1).unwrap(), Some(index));
+            assert_eq!(restored.runs[index].prior_session_ids, vec![format!("session-{index}")]);
+            restored.finish_capture(vec![format!("retry-{index}")]).unwrap();
+        }
+        assert_eq!(restored.begin_next_capture(1).unwrap(), None);
+        for index in retries {
+            assert_eq!(restored.begin_next_analysis(1).unwrap(), Some(index));
+            restored.finish_analysis(PipelineRunState::Completed, None).unwrap();
+        }
+        restored.finalize_matrix().unwrap();
+        assert_eq!(restored.state, PipelineState::CompletedWithDegraded);
     }
 }

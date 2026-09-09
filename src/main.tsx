@@ -25,6 +25,36 @@ import {
   UpdateStateProvider,
 } from './services/states'
 import { disableWebViewShortcuts } from './utils/disable-webview-shortcuts'
+import { installNativeDesktopRecovery } from './utils/traffic-tracer-native-recovery'
+import { installNotificationAcknowledgement } from './utils/traffic-tracer-notification-ack'
+import { installProgressAcknowledgement } from './utils/traffic-tracer-progress-ack'
+
+void installNotificationAcknowledgement()
+  .then((dispose) => {
+    if (import.meta.hot) import.meta.hot.dispose(dispose)
+  })
+  .catch((error) =>
+    console.error(
+      '[TrafficTracer] Notification ACK registration failed:',
+      error,
+    ),
+  )
+
+void installNativeDesktopRecovery()
+  .then((dispose) => {
+    if (import.meta.hot) import.meta.hot.dispose(dispose)
+  })
+  .catch((error) =>
+    console.error('[TrafficTracer] Recovery registration failed:', error),
+  )
+
+void installProgressAcknowledgement()
+  .then((dispose) => {
+    if (import.meta.hot) import.meta.hot.dispose(dispose)
+  })
+  .catch((error) =>
+    console.error('[TrafficTracer] Progress ACK registration failed:', error),
+  )
 
 if (!window.ResizeObserver) {
   window.ResizeObserver = ResizeObserver

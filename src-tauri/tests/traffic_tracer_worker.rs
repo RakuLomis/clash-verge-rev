@@ -23,6 +23,33 @@ struct Harness {
     probe: FakeWorkerProbe,
 }
 
+#[tokio::test]
+async fn traffic_tracer_repeated_lifecycle_and_request_soak() {
+    // Accelerated churn, not a substitute for a multi-hour native UI soak.
+    for cycle in 0..128 {
+        let harness = Harness::new();
+        harness.client.hello().await.unwrap();
+        for request in 0..32 {
+            let job_id = format!("soak-{cycle}-{request}");
+            let reply: JobResult = harness
+                .client
+                .request(RequestMethod::JobCancel, serde_json::json!({"job_id": job_id}))
+                .await
+                .unwrap();
+            assert_eq!(reply.job_id, job_id);
+            assert_eq!(reply.state, "cancelled");
+        }
+        let reply: Value = harness
+            .client
+            .request(RequestMethod::WorkerShutdown, EmptyParams::default())
+            .await
+            .unwrap();
+        assert_eq!(reply["shutdown"], true);
+        wait_until_stopped(&harness.process).await;
+        assert_eq!(harness.probe.kill_count(), 0);
+    }
+}
+
 impl Harness {
     fn new() -> Self {
         let process = Arc::new(WorkerProcess::new());

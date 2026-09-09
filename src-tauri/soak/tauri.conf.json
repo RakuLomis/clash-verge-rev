@@ -1,0 +1,29 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "TrafficTracer Isolated Soak",
+  "version": "0.0.0",
+  "identifier": "local.traffictracer.isolated-soak",
+  "build": { "frontendDist": "../../tests/ui-soak/dist" },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "soak",
+        "title": "TrafficTracer isolated event-bridge test",
+        "width": 800,
+        "height": 500
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'",
+      "capabilities": [
+        {
+          "identifier": "soak-events",
+          "windows": ["soak"],
+          "permissions": ["core:event:default"]
+        }
+      ]
+    }
+  },
+  "bundle": { "active": false, "icon": ["../icons/32x32.png"] }
+}

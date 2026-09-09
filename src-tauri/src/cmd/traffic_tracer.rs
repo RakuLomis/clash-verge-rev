@@ -16,7 +16,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Url};
+use tauri::{AppHandle, Emitter as _, Url};
 use tauri_plugin_mihomo::models::Proxies;
 
 use super::{CmdResult, StringifyErr as _};
@@ -25,12 +25,13 @@ use crate::{
     core::{
         controller, handle, service,
         traffic_tracer::{
+            desktop_session::{self, DesktopSnapshot, DesktopState},
             lock::{CaptureLock, CaptureLockSnapshot},
             manager::{WorkerManager, WorkerManagerState, WorkerRecoveryReport, WorkerRecoveryStatus},
             pipeline::{
                 PIPELINE_FINGERPRINT_SEMANTIC_V2, PIPELINE_MANIFEST_NAME, PIPELINE_MAX_REPETITIONS,
-                PipelineApplicationIssue, PipelineCandidate, PipelineConfigSnapshot, PipelineConnectionDrain,
-                PipelineError, PipelineManifest, PipelinePolicy, PipelineProfileActivation,
+                PipelineApplicationIssue, PipelineCandidate, PipelineCleanup, PipelineConfigSnapshot,
+                PipelineConnectionDrain, PipelineError, PipelineManifest, PipelinePolicy, PipelineProfileActivation,
                 PipelineProfileActivationStep, PipelineProxySnapshot, PipelineQualityPlane, PipelineRestore,
                 PipelineRestoreCheck, PipelineRunEvidence, PipelineRunQuality, PipelineRunState,
                 PipelineRunVerification, PipelineSelection, PipelineStage, PipelineState, PipelineTarget, RestoreState,
@@ -57,6 +58,7 @@ const PIPELINE_OWNER_HEARTBEAT_FRESH_MS: u64 = 15_000;
 const PIPELINE_OWNER_FILE: &str = "pipeline-owner.json";
 
 struct UiHeartbeatState {
+    desktop: Mutex<DesktopState>,
     active: AtomicBool,
     last_seen_ms: AtomicU64,
     warned: AtomicBool,
@@ -178,6 +180,7 @@ static UI_HEARTBEAT: OnceLock<UiHeartbeatState> = OnceLock::new();
 
 fn ui_heartbeat_state() -> &'static UiHeartbeatState {
     UI_HEARTBEAT.get_or_init(|| UiHeartbeatState {
+        desktop: Mutex::new(DesktopState::default()),
         active: AtomicBool::new(false),
         last_seen_ms: AtomicU64::new(0),
         warned: AtomicBool::new(false),
@@ -194,13 +197,45 @@ fn unix_time_ms() -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-fn start_ui_heartbeat_monitor(state: &'static UiHeartbeatState) {
+fn start_ui_heartbeat_monitor(state: &'static UiHeartbeatState, app_handle: AppHandle) {
     if state.monitor_started.swap(true, Ordering::AcqRel) {
         return;
     }
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(3)).await;
+            // Sequential, bounded native observation; no frontend timer needed.
+            let observation = desktop_session::observe().await;
+            let snapshot = {
+                let mut desktop = state.desktop.lock();
+                desktop.update(observation, std::time::Instant::now());
+                desktop.snapshot(std::time::Instant::now())
+            };
+            let generation = {
+                let mut delivery = crate::core::traffic_tracer::recovery_delivery::global().lock();
+                delivery.observe(snapshot.unlock_generation);
+                delivery.take(snapshot.session_lock == "unlocked")
+            };
+            if let Some(generation) = generation {
+                let handle = app_handle.clone();
+                // A stuck native loop can hold at most one queued notification.
+                // The delivery mutex is never held across native emit.
+                if let Err(error) = app_handle.run_on_main_thread(move || {
+                    if let Err(error) = handle.emit("traffictracer://desktop-recovery", generation) {
+                        crate::core::traffic_tracer::recovery_delivery::global().lock().dispatch_failed(generation);
+                        logging!(warn, Type::System, "TrafficTracer recovery notification failed: {error}");
+                    }
+                }) {
+                    crate::core::traffic_tracer::recovery_delivery::global().lock().dispatch_failed(generation);
+                    logging!(warn, Type::System, "TrafficTracer recovery dispatch failed: {error}");
+                }
+            }
+            if snapshot.session_lock == "locked" {
+                // A lock is not proof of Worker or native-loop health. Only
+                // suppress this frontend-timer warning; do not touch jobs.
+                state.warned.store(false, Ordering::Release);
+                continue;
+            }
             if !state.active.load(Ordering::Acquire) {
                 state.warned.store(false, Ordering::Release);
                 continue;
@@ -223,16 +258,40 @@ fn start_ui_heartbeat_monitor(state: &'static UiHeartbeatState) {
 }
 
 #[tauri::command]
-pub async fn tt_ui_heartbeat(active: bool) -> CmdResult<()> {
+pub async fn tt_ui_heartbeat(active: bool, app_handle: AppHandle) -> CmdResult<DesktopSnapshot> {
     let state = ui_heartbeat_state();
     state.active.store(active, Ordering::Release);
     if active {
         state.last_seen_ms.store(unix_time_ms(), Ordering::Release);
-        start_ui_heartbeat_monitor(state);
+        start_ui_heartbeat_monitor(state, app_handle);
     } else {
         state.warned.store(false, Ordering::Release);
     }
-    Ok(())
+    Ok(state.desktop.lock().snapshot(std::time::Instant::now()))
+}
+
+pub fn ui_desktop_snapshot() -> DesktopSnapshot {
+    ui_heartbeat_state().desktop.lock().snapshot(std::time::Instant::now())
+}
+
+#[tauri::command]
+pub fn tt_progress_ack(sequence: u64) {
+    crate::core::traffic_tracer::progress_delivery::global().lock().acknowledge(sequence);
+}
+
+#[tauri::command]
+pub fn tt_notification_ack(sequence: u64) {
+    crate::core::traffic_tracer::notification_delivery::global().lock().acknowledge(sequence);
+}
+
+#[tauri::command]
+pub fn tt_desktop_recovery_ack(generation: u64) {
+    crate::core::traffic_tracer::recovery_delivery::global().lock().acknowledge(generation);
+}
+
+#[tauri::command]
+pub fn tt_desktop_recovery_snapshot(report: crate::core::traffic_tracer::recovery_delivery::SnapshotReport) {
+    crate::core::traffic_tracer::recovery_delivery::global().lock().snapshot_report(report);
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -2234,6 +2293,67 @@ fn effective_runtime_fingerprint() -> CmdResult<String> {
     semantic_runtime_fingerprint(&fs::read(path).stringify_err()?).map_err(Into::into)
 }
 
+// Diagnostic only: retain category hashes, never proxy configuration values.
+fn runtime_section_hashes(runtime: &[u8]) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let value: serde_yaml_ng::Value =
+        serde_yaml_ng::from_slice(runtime).map_err(|_| "runtime YAML cannot be decoded")?;
+    let mapping = value.as_mapping().ok_or("runtime YAML is not a mapping")?;
+    let mut sections = std::collections::BTreeMap::<String, serde_yaml_ng::Mapping>::new();
+    for (key, value) in mapping {
+        let category = match key.as_str().unwrap_or("") {
+            "proxies" | "proxy-providers" | "proxy-groups" => "proxy_definitions",
+            "rules" | "rule-providers" => "routing",
+            "dns" => "dns",
+            "tun" => "tun",
+            _ => "other_runtime_settings",
+        };
+        sections
+            .entry(category.into())
+            .or_default()
+            .insert(key.clone(), value.clone());
+    }
+    sections
+        .into_iter()
+        .map(|(category, mapping)| {
+            let mut canonical = Vec::new();
+            canonical_yaml_bytes(&serde_yaml_ng::Value::Mapping(mapping), &mut canonical)?;
+            Ok((category, format!("{:x}", Sha256::digest(canonical))))
+        })
+        .collect()
+}
+
+fn runtime_diagnostic_snapshot() -> Result<serde_json::Value, String> {
+    let path = crate::utils::dirs::app_home_dir()
+        .map_err(|_| "runtime directory unavailable")?
+        .join(crate::constants::files::RUNTIME_CONFIG);
+    let bytes = fs::read(path).map_err(|_| "runtime configuration unreadable")?;
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "fingerprint": semantic_runtime_fingerprint(&bytes).map_err(|_| "runtime fingerprint unavailable")?,
+        "sections": runtime_section_hashes(&bytes)?,
+    }))
+}
+
+fn candidate_drift_details(root: &Path, ordinal: u16, expected: &str, observed: &str) -> String {
+    let previous = fs::read(root.join(format!("candidate-{ordinal}-runtime-diagnostic.json")))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    let Some(previous) = previous.filter(|snapshot| snapshot["fingerprint"].as_str() == Some(expected)) else {
+        return "Historical category snapshot unavailable; the changed settings cannot be reconstructed".into();
+    };
+    let Ok(current) = runtime_diagnostic_snapshot() else {
+        return "Current category snapshot unavailable".into();
+    };
+    if current["fingerprint"].as_str() != Some(observed) {
+        return "Runtime changed again during diagnostics; category comparison unavailable".into();
+    }
+    let changed: Vec<_> = ["proxy_definitions", "routing", "dns", "tun", "other_runtime_settings"]
+        .into_iter()
+        .filter(|category| previous["sections"][*category] != current["sections"][*category])
+        .collect();
+    format!("Changed configuration categories: {}", changed.join(", "))
+}
+
 fn pipeline_directory(workspace_root: &str, pipeline_id: &str) -> CmdResult<PathBuf> {
     let root = PathBuf::from(workspace_root);
     if !root.is_absolute() {
@@ -2252,6 +2372,17 @@ fn launch_pipeline_supervisor(
     pipeline_id: String,
     batch: BatchStartRequest,
 ) {
+    // Cleanup belongs to the previous supervisor attempt, not a resumed run.
+    if let Ok(mut manifest) = PipelineManifest::load(&manifest_path)
+        && manifest.cleanup.take().is_some()
+        && let Err(error) = manifest.persist()
+    {
+        logging!(
+            warn,
+            Type::System,
+            "Could not clear previous pipeline cleanup status: {error}"
+        );
+    }
     let interrupt = Arc::new(AtomicBool::new(false));
     let cancel = Arc::new(AtomicBool::new(false));
     *pipeline_runtime().active.lock() = Some(ActivePipeline {
@@ -2333,14 +2464,85 @@ fn launch_pipeline_supervisor(
                 restore_pipeline(&mut failed, &pipeline_id).await;
             }
         }
-        let _ = CaptureLock::global().release(&pipeline_id);
+        let retain_lock = finish_pipeline_worker(
+            &manifest_path,
+            &pipeline_id,
+            WorkerManager::global(),
+            CaptureLock::global(),
+            Duration::from_secs(20),
+        )
+        .await;
         heartbeat_done.store(true, Ordering::Release);
-        let _ = write_pipeline_owner_record(&manifest_path, &pipeline_id, "released");
+        let _ = write_pipeline_owner_record(
+            &manifest_path,
+            &pipeline_id,
+            if retain_lock { "cleanup_blocked" } else { "released" },
+        );
         let mut active = pipeline_runtime().active.lock();
         if active.as_ref().is_some_and(|item| item.pipeline_id == pipeline_id) {
             *active = None;
         }
     });
+}
+
+// Shared by the real supervisor and isolated failure-injection tests.
+pub(crate) async fn finish_pipeline_worker(
+    manifest_path: &Path,
+    pipeline_id: &str,
+    manager: &WorkerManager,
+    capture_lock: &CaptureLock,
+    timeout: Duration,
+) -> bool {
+    let mut manifest = PipelineManifest::load(manifest_path).ok();
+    if let Some(manifest) = manifest.as_mut() {
+        manifest.cleanup = Some(PipelineCleanup {
+            state: "running".into(),
+            updated_at: Utc::now(),
+            message: None,
+            capture_lock_retained: true,
+        });
+        if let Err(error) = manifest.persist() {
+            logging!(warn, Type::System, "Could not persist pipeline cleanup start: {error}");
+        }
+    }
+    let outcome = if manager.active_job_id().is_none()
+        && matches!(manager.state(), WorkerManagerState::Ready | WorkerManagerState::Stopped)
+    {
+        Ok(Ok(true)) // Keep a healthy idle Worker for Session browsing.
+    } else {
+        tokio::time::timeout(timeout, manager.graceful_stop()).await
+    };
+    let uncertain = !matches!(&outcome, Ok(Ok(_)));
+    let message = match outcome {
+        Ok(Ok(true)) => None,
+        Ok(Ok(false)) => Some("Worker exit confirmed without clean acknowledgement; analysis results preserved".into()),
+        Ok(Err(error)) => Some(format!("Worker cleanup failed: {error}; analysis results preserved")),
+        Err(_) => Some(format!(
+            "Worker cleanup exceeded {} ms; analysis results preserved",
+            timeout.as_millis()
+        )),
+    };
+    // An absent job ID alone is not proof of process exit after a failed stop.
+    let retain_lock = uncertain || manager.active_job_id().is_some();
+    if let Some(manifest) = manifest.as_mut() {
+        manifest.cleanup = Some(PipelineCleanup {
+            state: if message.is_some() { "warning" } else { "completed" }.into(),
+            updated_at: Utc::now(),
+            message,
+            capture_lock_retained: retain_lock,
+        });
+        if let Err(error) = manifest.persist() {
+            logging!(
+                warn,
+                Type::System,
+                "Could not persist pipeline cleanup outcome: {error}"
+            );
+        }
+    }
+    if !retain_lock {
+        let _ = capture_lock.release(pipeline_id);
+    }
+    retain_lock
 }
 
 #[tauri::command]
@@ -2598,7 +2800,9 @@ async fn execute_pipeline_run(
     }
 
     let committed_profile_uid = Config::profiles().await.latest_arc().current.clone().map(String::from);
-    let committed_fingerprint = effective_runtime_fingerprint().ok();
+    let committed_fingerprint = effective_runtime_fingerprint().map_err(|_| {
+        "PROFILE_FINGERPRINT_UNAVAILABLE: committed runtime configuration could not be read or decoded".to_string()
+    })?;
     if committed_profile_uid.as_deref() != Some(run.profile_uid.as_str()) {
         return Err(format!(
             "PROFILE_COMMIT_READBACK_MISMATCH: expected Profile {}; observed Profile {}",
@@ -2606,13 +2810,16 @@ async fn execute_pipeline_run(
             committed_profile_uid.as_deref().unwrap_or("none")
         ));
     }
-    if committed_fingerprint.as_deref() != Some(run.profile_fingerprint.as_str()) {
+    if committed_fingerprint != run.profile_fingerprint {
+        let details = candidate_drift_details(
+            &manifest.output_root,
+            run.candidate_ordinal,
+            &run.profile_fingerprint,
+            &committed_fingerprint,
+        );
         return Err(format!(
-            "CANDIDATE_CONFIG_DRIFT: Profile {} was bound to fingerprint {}; observed {} before repetition {}",
-            run.profile_uid,
-            run.profile_fingerprint,
-            committed_fingerprint.as_deref().unwrap_or("unavailable"),
-            run.repetition_index
+            "CANDIDATE_CONFIG_DRIFT: Profile {} was bound to fingerprint {}; observed {} before repetition {}. {}",
+            run.profile_uid, run.profile_fingerprint, committed_fingerprint, run.repetition_index, details
         ));
     }
     if let Some(activation) = manifest.runs[index]
@@ -3299,6 +3506,17 @@ async fn materialize_pipeline_candidate(
     .await
     .map_err(|error| error.render())?;
     let bound_at = Utc::now();
+    if let Ok(diagnostic) = runtime_diagnostic_snapshot()
+        && diagnostic["fingerprint"].as_str() == Some(fingerprint.as_str())
+    {
+        // Best effort; missing diagnostics must not loosen the existing invariant.
+        let _ = fs::write(
+            manifest
+                .output_root
+                .join(format!("candidate-{candidate_ordinal}-runtime-diagnostic.json")),
+            diagnostic.to_string(),
+        );
+    }
     let changed = manifest
         .bind_candidate_profile(candidate_ordinal, fingerprint, bound_at)
         .map_err(|error| error.to_string())?;
@@ -3482,7 +3700,17 @@ async fn execute_pipeline_analysis(
                 .map_err(|error| format!("PIPELINE_ANALYSIS_STATUS_FAILED: {error}"))?;
             if status.state.terminal() {
                 match status.state {
-                    JobState::Completed => break,
+                    JobState::Completed => {
+                        let session = fetch_session(session_id).await.map_err(|error| error.to_string())?;
+                        if session.session_id != *session_id {
+                            return Err("PIPELINE_ANALYSIS_OUTPUTS_INVALID: Session identity mismatch".into());
+                        }
+                        let root = run.output_path.clone();
+                        tauri::async_runtime::spawn_blocking(move || verify_analysis_outputs(&root, &session))
+                            .await
+                            .map_err(|error| error.to_string())??;
+                        break;
+                    }
                     JobState::Cancelled => return Ok(PipelineRunState::Cancelled),
                     JobState::Interrupted => return Ok(PipelineRunState::Interrupted),
                     JobState::Failed => {
@@ -4731,6 +4959,36 @@ fn resolve_artifact_path(
     Ok(target)
 }
 
+fn verify_analysis_outputs(root: &Path, manifest: &SessionManifest) -> Result<(), String> {
+    let mut generation = None;
+    for role in ["coverage_summary", "connection_index", "request_index"] {
+        let artifact = manifest
+            .artifacts
+            .iter()
+            .rev()
+            .find(|artifact| artifact.role.as_deref() == Some(role))
+            .ok_or_else(|| format!("PIPELINE_ANALYSIS_OUTPUTS_INVALID: missing {role} artifact"))?;
+        let path = resolve_artifact_path(root, manifest, artifact)
+            .map_err(|_| format!("PIPELINE_ANALYSIS_OUTPUTS_INVALID: missing or unsafe {role} path"))?;
+        let size = path
+            .metadata()
+            .map_err(|_| format!("PIPELINE_ANALYSIS_OUTPUTS_INVALID: unreadable {role}"))?
+            .len();
+        if size == 0 || size != artifact.size_bytes {
+            return Err(format!(
+                "PIPELINE_ANALYSIS_OUTPUTS_INVALID: {role} size disagrees with manifest"
+            ));
+        }
+        if let Some(id) = &artifact.generation_id {
+            if generation.as_ref().is_some_and(|previous| previous != id) {
+                return Err("PIPELINE_ANALYSIS_OUTPUTS_INVALID: mixed artifact generations".into());
+            }
+            generation = Some(id.clone());
+        }
+    }
+    Ok(())
+}
+
 fn resolve_session_dir(session_root: &Path, manifest: &SessionManifest) -> CmdResult<PathBuf> {
     let root = fs::canonicalize(session_root).stringify_err()?;
     let session_dir = fs::canonicalize(&manifest.session_dir).stringify_err()?;
@@ -5162,6 +5420,46 @@ mod session_tests {
 
         let error = resolve_artifact_path(Path::new("/tmp/sessions"), &manifest, &artifact).unwrap_err();
         assert!(error.contains("normalized relative path"));
+    }
+
+    #[test]
+    fn completed_analysis_requires_present_consistent_artifacts() {
+        let root = std::env::temp_dir().join(format!(
+            "tt-output-gate-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let session = root.join("20260908-120000-000/example.com/page");
+        fs::create_dir_all(session.join("analysis")).unwrap();
+        fs::write(session.join("manifest.json"), "{}").unwrap();
+        let mut snapshot = manifest(session.to_str().unwrap());
+        assert!(verify_analysis_outputs(&root, &snapshot).is_err());
+        for role in ["coverage_summary", "connection_index", "request_index"] {
+            let path = format!("analysis/{role}.json");
+            fs::write(session.join(&path), "{}").unwrap();
+            snapshot.artifacts.push(SessionArtifact {
+                name: role.into(),
+                kind: None,
+                artifact_id: None,
+                phase: Some("analysis".into()),
+                role: Some(role.into()),
+                generation_id: Some("one".into()),
+                path,
+                media_type: "application/json".into(),
+                size_bytes: 2,
+                sha256: None,
+                created_at: None,
+            });
+        }
+        verify_analysis_outputs(&root, &snapshot).unwrap();
+        snapshot.artifacts[2].generation_id = Some("two".into());
+        assert!(verify_analysis_outputs(&root, &snapshot).unwrap_err().contains("mixed"));
+        snapshot.artifacts[2].generation_id = Some("one".into());
+        fs::write(session.join("analysis/request_index.json"), "").unwrap();
+        assert!(verify_analysis_outputs(&root, &snapshot).unwrap_err().contains("size"));
+        fs::remove_file(session.join("analysis/request_index.json")).unwrap();
+        assert!(verify_analysis_outputs(&root, &snapshot).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -5880,6 +6178,35 @@ mod capture_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_diagnostics_are_semantic_and_do_not_export_values() {
+        let first = runtime_section_hashes(
+            b"tun: {enable: true}\ndns: {enable: true}\nproxies: [{name: private-node, password: private-password}]\n",
+        )
+        .unwrap();
+        let reordered = runtime_section_hashes(
+            b"proxies: [{password: private-password, name: private-node}]\ndns: {enable: true}\ntun: {enable: true}\n",
+        )
+        .unwrap();
+        assert_eq!(first, reordered);
+        let changed = runtime_section_hashes(
+            b"tun: {enable: false}\ndns: {enable: true}\nproxies: [{name: private-node, password: private-password}]\n",
+        )
+        .unwrap();
+        assert_ne!(first["tun"], changed["tun"]);
+        assert_eq!(first["dns"], changed["dns"]);
+        assert_eq!(first["proxy_definitions"], changed["proxy_definitions"]);
+        let serialized = serde_json::to_string(&first).unwrap();
+        assert!(!serialized.contains("private-node"));
+        assert!(!serialized.contains("private-password"));
+    }
+
+    #[test]
+    fn legacy_pipeline_drift_does_not_invent_a_category_diff() {
+        let details = candidate_drift_details(Path::new("/nonexistent-traffictracer-test"), 1, "expected", "observed");
+        assert!(details.contains("cannot be reconstructed"));
+    }
 
     fn integration(core: &str, tun_enabled: bool, service_available: bool) -> CompleteIntegrationStatus {
         CompleteIntegrationStatus {

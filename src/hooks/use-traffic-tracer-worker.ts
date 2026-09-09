@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { listen } from '@tauri-apps/api/event'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -11,8 +11,8 @@ import type {
   CaptureLockSnapshot,
   EnvironmentRequest,
   WorkerLogEvent,
-  WorkerReadyEvent,
 } from '@/types/traffic-tracer'
+import { ownTrafficTracerSubscriptions } from '@/utils/traffic-tracer-subscriptions'
 
 export const trafficTracerCaptureLockKey = [
   'trafficTracer',
@@ -106,69 +106,67 @@ export function useTrafficTracerWorker(
         throw new Error('TrafficTracer environment request is missing')
       return getTrafficTracerEnvironment(request)
     },
-    enabled:
-      enabled && request !== null && !diagnosticsPaused && !workspaceLocked,
-    retry: 1,
+    // This command can switch/start a Worker. It is not a passive status read.
+    enabled: false,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
   })
+
+  const checkEnvironment = async (nextRequest: EnvironmentRequest) => {
+    if (!enabled || diagnosticsPaused || workspaceLocked)
+      throw new Error(
+        'Environment checks are unavailable while capture is active.',
+      )
+    return queryClient.fetchQuery({
+      queryKey: trafficTracerEnvironmentKey(nextRequest),
+      queryFn: () => getTrafficTracerEnvironment(nextRequest),
+      staleTime: 0,
+      retry: false,
+    })
+  }
 
   useEffect(() => {
     if (!enabled) return
 
     let disposed = false
-    let unlisteners: UnlistenFn[] = []
-    const invalidate = () => {
-      void queryClient.invalidateQueries({
-        queryKey: ['trafficTracer', 'environment'],
-      })
-    }
-
-    Promise.all([
-      listen<WorkerReadyEvent>('traffictracer://worker-ready', invalidate),
-      listen<WorkerLogEvent>('traffictracer://worker-log', ({ payload }) => {
-        if (payload.timing) {
-          const activity = {
-            at: new Date().toISOString(),
-            code: payload.code ?? 'WORKER_ACTIVITY',
-            message: payload.message,
-            timing: payload.timing,
+    const disposeSubscriptions = ownTrafficTracerSubscriptions(
+      [
+        listen<WorkerLogEvent>('traffictracer://worker-log', ({ payload }) => {
+          if (disposed) return
+          if (payload.timing) {
+            const activity = {
+              at: new Date().toISOString(),
+              code: payload.code ?? 'WORKER_ACTIVITY',
+              message: payload.message,
+              timing: payload.timing,
+            }
+            localStorage.setItem(
+              WORKER_ACTIVITY_STORAGE_KEY,
+              JSON.stringify(activity),
+            )
+            setWorkerActivity(activity)
           }
-          localStorage.setItem(
-            WORKER_ACTIVITY_STORAGE_KEY,
-            JSON.stringify(activity),
-          )
-          setWorkerActivity(activity)
-        }
-        if (payload.code?.startsWith('RECOVERY_')) invalidate()
-      }),
-    ])
-      .then((registered) => {
-        if (disposed) {
-          registered.forEach((unlisten) => {
-            unlisten()
-          })
-        } else {
-          unlisteners = registered
-        }
-      })
-      .catch((error) =>
+        }),
+      ],
+      (error) =>
         console.error(
           '[TrafficTracer] Worker event registration failed:',
           error,
         ),
-      )
+    )
 
     return () => {
       disposed = true
-      unlisteners.forEach((unlisten) => {
-        unlisten()
-      })
-      unlisteners = []
+      disposeSubscriptions()
     }
   }, [enabled, queryClient])
 
   return {
     environment: environmentQuery.data,
     environmentQuery,
+    checkEnvironment,
     workerActivity,
     ...captureLockState,
   }

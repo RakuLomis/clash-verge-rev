@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Isolated TrafficTracer React soak</title>
+<body><div id="root"></div><script>
+// Installed before module evaluation, including errors thrown by imports.
+function reportBootError(message) {
+  window.__TAURI__.core.invoke('soak_heartbeat', {
+    received: 0, latest: 0, remounts: 0, errors: 1, rendered: 0,
+    pageMetrics: { mode: 'boot_error', bootError: String(message) }
+  }).catch(() => {});
+}
+window.addEventListener('error', event => reportBootError(event.message));
+window.addEventListener('unhandledrejection', event => reportBootError(event.reason));
+</script><script type="module" src="/main.tsx"></script></body></html>

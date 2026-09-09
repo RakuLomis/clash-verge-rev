@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { listen } from '@tauri-apps/api/event'
 import { useEffect } from 'react'
 
 import { trafficTracerJobKey } from '@/hooks/use-capture-job'
@@ -15,6 +15,7 @@ import type {
   SessionListResult,
   SessionSummary,
 } from '@/types/traffic-tracer'
+import { ownTrafficTracerSubscriptions } from '@/utils/traffic-tracer-subscriptions'
 
 export const trafficTracerSessionsKey = ['trafficTracer', 'sessions'] as const
 
@@ -128,8 +129,8 @@ export function useTrafficTracerSessions(
     if (!enabled) return
 
     let disposed = false
-    let unlisteners: UnlistenFn[] = []
     const refreshSessions = (_event: { payload: JobSnapshot }) => {
+      if (disposed) return
       void queryClient.invalidateQueries({ queryKey: trafficTracerSessionsKey })
       void queryClient.invalidateQueries({
         queryKey: trafficTracerSessionDetailsKey,
@@ -137,29 +138,22 @@ export function useTrafficTracerSessions(
       void queryClient.invalidateQueries({ queryKey: trafficTracerFlowsKey })
     }
 
-    Promise.all([
-      listen<JobSnapshot>('traffictracer://job-completed', refreshSessions),
-      listen<JobSnapshot>('traffictracer://job-failed', refreshSessions),
-      listen<JobSnapshot>('traffictracer://job-cancelled', refreshSessions),
-    ])
-      .then((registered) => {
-        if (disposed) {
-          registered.forEach((unlisten) => unlisten())
-        } else {
-          unlisteners = registered
-        }
-      })
-      .catch((error) =>
+    const disposeSubscriptions = ownTrafficTracerSubscriptions(
+      [
+        listen<JobSnapshot>('traffictracer://job-completed', refreshSessions),
+        listen<JobSnapshot>('traffictracer://job-failed', refreshSessions),
+        listen<JobSnapshot>('traffictracer://job-cancelled', refreshSessions),
+      ],
+      (error) =>
         console.error(
           '[TrafficTracer] Session event registration failed:',
           error,
         ),
-      )
+    )
 
     return () => {
       disposed = true
-      unlisteners.forEach((unlisten) => unlisten())
-      unlisteners = []
+      disposeSubscriptions()
     }
   }, [enabled, queryClient, workspaceRoot])
 
@@ -209,8 +203,8 @@ export function useTrafficTracerScopedSessions(
     if (!enabled || !scopeId) return
 
     let disposed = false
-    let unlisteners: UnlistenFn[] = []
     const refreshSessions = () => {
+      if (disposed) return
       void queryClient.invalidateQueries({
         queryKey: trafficTracerScopedSessionsKey(workspaceRoot, scopeId),
       })
@@ -220,26 +214,22 @@ export function useTrafficTracerScopedSessions(
       void queryClient.invalidateQueries({ queryKey: trafficTracerFlowsKey })
     }
 
-    Promise.all([
-      listen<JobSnapshot>('traffictracer://job-completed', refreshSessions),
-      listen<JobSnapshot>('traffictracer://job-failed', refreshSessions),
-      listen<JobSnapshot>('traffictracer://job-cancelled', refreshSessions),
-    ])
-      .then((registered) => {
-        if (disposed) registered.forEach((unlisten) => unlisten())
-        else unlisteners = registered
-      })
-      .catch((error) =>
+    const disposeSubscriptions = ownTrafficTracerSubscriptions(
+      [
+        listen<JobSnapshot>('traffictracer://job-completed', refreshSessions),
+        listen<JobSnapshot>('traffictracer://job-failed', refreshSessions),
+        listen<JobSnapshot>('traffictracer://job-cancelled', refreshSessions),
+      ],
+      (error) =>
         console.error(
           '[TrafficTracer] Scoped Session event registration failed:',
           error,
         ),
-      )
+    )
 
     return () => {
       disposed = true
-      unlisteners.forEach((unlisten) => unlisten())
-      unlisteners = []
+      disposeSubscriptions()
     }
   }, [enabled, queryClient, scopeId, workspaceRoot])
 

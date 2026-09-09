@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { listen } from '@tauri-apps/api/event'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { trafficTracerCaptureLockKey } from '@/hooks/use-traffic-tracer-worker'
@@ -13,6 +13,7 @@ import type {
   JobProgressEvent,
   JobSnapshot,
 } from '@/types/traffic-tracer'
+import { ownTrafficTracerSubscriptions } from '@/utils/traffic-tracer-subscriptions'
 
 const ACTIVE_JOB_STORAGE_KEY = 'traffictracer.activeJobId'
 const JOB_STARTED_STORAGE_KEY = 'traffictracer.activeJobStartedAt'
@@ -68,7 +69,12 @@ export function mergeTrafficTracerProgress(
   snapshot: JobSnapshot | undefined,
   progress: JobProgressEvent,
 ): JobSnapshot | undefined {
-  if (!snapshot || snapshot.job_id !== progress.job_id) return snapshot
+  if (
+    !snapshot ||
+    snapshot.job_id !== progress.job_id ||
+    TERMINAL_STATES.has(snapshot.state)
+  )
+    return snapshot
   return {
     ...snapshot,
     state: progress.state,
@@ -125,10 +131,17 @@ export function useCaptureJob(initialJobId?: string | null) {
     if (!jobId) return
 
     let disposed = false
-    let unlisteners: UnlistenFn[] = []
     const updateSnapshot = (snapshot: JobSnapshot) => {
-      if (snapshot.job_id !== jobId) return
-      queryClient.setQueryData(trafficTracerJobKey(jobId), snapshot)
+      if (disposed || snapshot.job_id !== jobId) return
+      queryClient.setQueryData<JobSnapshot>(
+        trafficTracerJobKey(jobId),
+        (previous) =>
+          previous &&
+          TERMINAL_STATES.has(previous.state) &&
+          !TERMINAL_STATES.has(snapshot.state)
+            ? previous
+            : snapshot,
+      )
       if (TERMINAL_STATES.has(snapshot.state)) {
         void queryClient.invalidateQueries({
           queryKey: trafficTracerCaptureLockKey,
@@ -136,7 +149,7 @@ export function useCaptureJob(initialJobId?: string | null) {
       }
     }
     const updateProgress = (progress: JobProgressEvent) => {
-      if (progress.job_id !== jobId) return
+      if (disposed || progress.job_id !== jobId) return
       setProgressEvents((events) => {
         const previous = events.at(-1)
         if (
@@ -156,7 +169,7 @@ export function useCaptureJob(initialJobId?: string | null) {
       )
     }
 
-    Promise.all(
+    const disposeSubscriptions = ownTrafficTracerSubscriptions(
       JOB_EVENTS.map((eventName) =>
         eventName === 'traffictracer://job-progress'
           ? listen<JobProgressEvent>(eventName, ({ payload }) =>
@@ -166,22 +179,13 @@ export function useCaptureJob(initialJobId?: string | null) {
               updateSnapshot(payload),
             ),
       ),
-    )
-      .then((registered) => {
-        if (disposed) {
-          registered.forEach((unlisten) => unlisten())
-        } else {
-          unlisteners = registered
-        }
-      })
-      .catch((error) =>
+      (error) =>
         console.error('[TrafficTracer] Job event registration failed:', error),
-      )
+    )
 
     return () => {
       disposed = true
-      unlisteners.forEach((unlisten) => unlisten())
-      unlisteners = []
+      disposeSubscriptions()
     }
   }, [jobId, queryClient])
 

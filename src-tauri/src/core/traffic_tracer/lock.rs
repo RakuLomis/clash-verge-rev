@@ -27,7 +27,7 @@ pub struct CaptureLock {
 }
 
 impl CaptureLock {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             active: Mutex::new(None),
         }

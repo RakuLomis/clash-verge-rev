@@ -166,28 +166,98 @@ impl TauriEventBridge {
         }
     }
 
-    pub fn handle_line(&self, line: &str) {
-        match self.mapper.lock().map_line(line, Instant::now()) {
+    pub fn handle_line(&self, line: &str, journaled: bool) {
+        // Never retain the mapper mutex while calling into the native UI.
+        let mapped = self.mapper.lock().map_line(line, Instant::now());
+        match mapped {
             Ok(Some(event)) => {
-                if let Err(error) = self.app_handle.emit(event.name, event.payload) {
+                if event.name == EVENT_JOB_PROGRESS {
+                    super::progress_delivery::global().lock().offer(event.payload);
+                    self.flush_progress();
+                    return;
+                }
+                if matches!(event.name, EVENT_JOB_COMPLETED | EVENT_JOB_FAILED | EVENT_JOB_CANCELLED) {
+                    if let Some(job) = event.payload["job_id"].as_str() {
+                        super::progress_delivery::global().lock().clear_job(job);
+                    }
+                }
+                if journaled {
+                    super::notification_delivery::global().lock().offer(event);
+                    self.flush_notifications();
+                } else {
+                    // Never silently coalesce a notification without a saved copy.
+                    self.emit_event(event);
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                logging!(warn, Type::Frontend, "TrafficTracer Worker notification dropped: {}", error);
+            }
+        }
+    }
+
+    pub fn flush_progress(&self) {
+        self.flush_notifications();
+        if super::recovery_delivery::global().lock().blocks_progress() { return; }
+        let locked = crate::cmd::traffic_tracer::ui_desktop_snapshot().session_lock == "locked";
+        let payload = super::progress_delivery::global().lock().take(locked, Instant::now());
+        if let Some(payload) = payload {
+            let sequence = payload["delivery_sequence"].as_u64().unwrap_or(0);
+            if !self.emit_event(FrontendWorkerEvent { name: EVENT_JOB_PROGRESS, payload: payload.clone() }) {
+                super::progress_delivery::global().lock().dispatch_failed(sequence, payload);
+            }
+        }
+    }
+
+    fn flush_notifications(&self) {
+        let paused = crate::cmd::traffic_tracer::ui_desktop_snapshot().session_lock == "locked"
+            || super::recovery_delivery::global().lock().blocks_progress();
+        let next = super::notification_delivery::global().lock().take(paused, Instant::now());
+        if let Some((sequence, event)) = next {
+            // Receipt is emitted only after the original event was submitted.
+            // At most this original event plus its receipt can be in WebKit.
+            let saved = event.clone();
+            if !self.emit_event(event) || !self.emit_event(FrontendWorkerEvent {
+                name: "traffictracer://notification-receipt", payload: sequence.into(),
+            }) {
+                super::notification_delivery::global().lock().dispatch_failed(sequence, saved);
+            }
+        }
+    }
+
+    fn emit_event(&self, event: FrontendWorkerEvent) -> bool {
+                // Tauri holds its JS listener registry while evaluating emitted
+                // JS. Emitting off-main can invert that lock against main-thread
+                // listen/unlisten IPC. Dispatch the entire emit on main instead.
+                // Called only by the bounded blocking bridge worker: wait for
+                // completion there, never on an async or native UI thread.
+                let handle = self.app_handle.clone();
+                let (completed, receipt) = std::sync::mpsc::sync_channel(1);
+                if let Err(error) = self.app_handle.run_on_main_thread(move || {
+                    let result = handle.emit(event.name, event.payload);
+                    let _ = completed.send(result);
+                }) {
+                    logging!(
+                        warn,
+                        Type::Frontend,
+                        "TrafficTracer frontend event dispatch failed: {}",
+                        error
+                    );
+                    false
+                } else if let Ok(result) = receipt.recv() {
+                    if let Err(error) = result {
                     logging!(
                         warn,
                         Type::Frontend,
                         "TrafficTracer frontend event emit failed: {}",
                         error
                     );
+                        false
+                    } else { true }
+                } else {
+                    // No completion evidence: retain the slot, never blindly retry.
+                    true
                 }
-            }
-            Ok(None) => {}
-            Err(error) => {
-                logging!(
-                    warn,
-                    Type::Frontend,
-                    "TrafficTracer Worker notification dropped: {}",
-                    error
-                );
-            }
-        }
     }
 }
 

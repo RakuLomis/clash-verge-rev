@@ -18,6 +18,12 @@ pub mod utils;
 /// making the complete internal module tree public.
 #[doc(hidden)]
 pub mod traffic_tracer_test_support {
+    pub use crate::cmd::traffic_tracer::tt_notification_ack;
+    pub use crate::core::traffic_tracer::notification_delivery;
+    pub use crate::cmd::traffic_tracer::{tt_ui_heartbeat, ui_desktop_snapshot, tt_progress_ack, tt_desktop_recovery_ack, tt_desktop_recovery_snapshot};
+    pub use crate::core::traffic_tracer::recovery_delivery;
+    pub use crate::core::traffic_tracer::progress_delivery;
+    pub use crate::core::traffic_tracer::desktop_session::DesktopSnapshot;
     pub use crate::core::traffic_tracer::{
         client::{ClientError, HandshakeState, HelloResult, WorkerClient},
         events::{EVENT_JOB_PROGRESS, FrontendWorkerEvent, NotificationMapper},
@@ -179,6 +185,10 @@ mod app_init {
             cmd::patch_clash_config,
             cmd::list_available_cores,
             cmd::tt_ui_heartbeat,
+            cmd::tt_progress_ack,
+            cmd::tt_notification_ack,
+            cmd::tt_desktop_recovery_ack,
+            cmd::tt_desktop_recovery_snapshot,
             cmd::tt_get_environment,
             cmd::tt_target_config_load,
             cmd::tt_pipeline_current_candidate,

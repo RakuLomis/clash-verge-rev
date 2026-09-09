@@ -144,6 +144,7 @@ export function TrafficTracerSessionDetail({
                 Connection-centric analysis
               </Typography>
               <TrafficTracerConnectionResults
+                key={sessionId}
                 summary={analysis.summary}
                 requests={analysis.requests}
                 connections={analysis.connections}

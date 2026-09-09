@@ -354,6 +354,12 @@ export interface PipelineListEntry {
 }
 
 export interface PipelineManifest {
+  cleanup?: {
+    state: 'running' | 'completed' | 'warning'
+    updated_at: string
+    message: string | null
+    capture_lock_retained: boolean
+  }
   schema_version: 6 | 7
   pipeline_id: string
   state: PipelineState

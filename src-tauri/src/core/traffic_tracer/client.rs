@@ -11,7 +11,7 @@ use std::{
 use parking_lot::Mutex;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{Semaphore, broadcast, oneshot};
 
 use super::{
     protocol::{
@@ -25,6 +25,17 @@ const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
 type PendingResult = Result<Value, ClientError>;
 type PendingSender = oneshot::Sender<PendingResult>;
+
+struct PendingRegistration {
+    pending: Arc<Mutex<HashMap<RequestId, PendingSender>>>,
+    id: RequestId,
+}
+
+impl Drop for PendingRegistration {
+    fn drop(&mut self) {
+        self.pending.lock().remove(&self.id);
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ClientError {
@@ -100,6 +111,7 @@ pub struct WorkerClient {
     request_timeout: Duration,
     handshake: Arc<Mutex<HandshakeState>>,
     router: tauri::async_runtime::JoinHandle<()>,
+    writer: Arc<Semaphore>,
 }
 
 impl WorkerClient {
@@ -115,6 +127,7 @@ impl WorkerClient {
             request_timeout,
             handshake,
             router,
+            writer: Arc::new(Semaphore::new(1)),
         }
     }
 
@@ -182,19 +195,35 @@ impl WorkerClient {
 
         let (sender, receiver) = oneshot::channel();
         self.register_pending(id.clone(), sender)?;
-        if let Err(error) = self.process.write(&encoded) {
-            self.pending.lock().remove(&id);
-            return Err(ClientError::Transport(error.to_string()));
-        }
-
-        let result = match tokio::time::timeout(self.request_timeout, receiver).await {
-            Ok(Ok(result)) => result?,
-            Ok(Err(_)) => return Err(ClientError::WorkerExited),
-            Err(_) => {
-                self.pending.lock().remove(&id);
-                return Err(ClientError::Timeout(id));
-            }
+        let _registration = PendingRegistration {
+            pending: Arc::clone(&self.pending),
+            id: id.clone(),
         };
+        let deadline = tokio::time::Instant::now() + self.request_timeout;
+        // The permit stays with the blocking write even after caller timeout.
+        // A stalled pipe can occupy at most one blocking task per client.
+        let exchange = async {
+            let permit = Arc::clone(&self.writer)
+                .acquire_owned()
+                .await
+                .map_err(|error| ClientError::Transport(error.to_string()))?;
+            let process = Arc::clone(&self.process);
+            tauri::async_runtime::spawn_blocking(move || {
+                let _permit = permit;
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(ClientError::Transport("request expired before pipe write".into()));
+                }
+                process
+                    .write(&encoded)
+                    .map_err(|error| ClientError::Transport(error.to_string()))
+            })
+            .await
+            .map_err(|error| ClientError::Transport(error.to_string()))??;
+            receiver.await.map_err(|_| ClientError::WorkerExited)?
+        };
+        let result = tokio::time::timeout_at(deadline, exchange).await;
+        self.pending.lock().remove(&id);
+        let result = result.map_err(|_| ClientError::Timeout(id))??;
 
         serde_json::from_value(result).map_err(|error| ClientError::Decode(error.to_string()))
     }
@@ -340,6 +369,46 @@ mod tests {
     struct FakeChild {
         writes: Arc<Mutex<Vec<Vec<u8>>>>,
         kills: Arc<AtomicUsize>,
+    }
+
+    struct SlowChild;
+
+    impl ManagedChild for SlowChild {
+        fn pid(&self) -> u32 {
+            43
+        }
+        fn write(&mut self, _bytes: &[u8]) -> Result<()> {
+            std::thread::sleep(Duration::from_millis(400));
+            Ok(())
+        }
+        fn kill(self: Box<Self>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn blocked_write_has_a_deadline_and_does_not_block_state_queries() {
+        let process = Arc::new(WorkerProcess::new());
+        let (_events, receiver) = mpsc::channel(4);
+        process.attach(receiver, Box::new(SlowChild)).unwrap();
+        let client = WorkerClient::new(Arc::clone(&process), Duration::from_millis(50));
+        let started = std::time::Instant::now();
+        let result = client
+            .request::<_, Value>(RequestMethod::Hello, EmptyParams::default())
+            .await;
+        assert!(matches!(result, Err(ClientError::Timeout(_))));
+        assert!(started.elapsed() < Duration::from_millis(300));
+        assert!(process.is_running());
+        assert!(client.pending.lock().is_empty());
+        assert_eq!(client.writer.available_permits(), 0);
+        let second = client
+            .request::<_, Value>(RequestMethod::Hello, EmptyParams::default())
+            .await;
+        assert!(matches!(second, Err(ClientError::Timeout(_))));
+        assert!(client.pending.lock().is_empty());
+        tokio::time::sleep(Duration::from_millis(450)).await;
+        assert_eq!(client.writer.available_permits(), 1);
+        process.stop().unwrap();
     }
 
     impl ManagedChild for FakeChild {

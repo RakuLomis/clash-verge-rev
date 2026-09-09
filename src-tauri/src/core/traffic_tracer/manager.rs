@@ -27,6 +27,40 @@ const WORKER_READY_TIMEOUT: Duration = Duration::from_secs(30);
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(7);
 const PROCESS_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
 
+// Diagnostic only: never use this file as ownership or completion authority.
+// Lifecycle serialization makes the per-process temporary path single-writer.
+async fn record_start_checkpoint(root: &Path, attempt: &str, stage: &str) {
+    let root = root.to_path_buf();
+    let payload = serde_json::json!({
+        "schema_version": 2,
+        "supervisor_pid": std::process::id(),
+        "attempt_id": attempt,
+        "output_root": root,
+        "stage": stage,
+        "updated_at": chrono::Utc::now(),
+    });
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        let temporary = root.join(format!(".worker-startup-{}.tmp", std::process::id()));
+        let result = fs::write(&temporary, payload.to_string())
+            .and_then(|_| fs::rename(&temporary, root.join(".worker-startup.json")));
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        // Preserve the previous startup after restart, without unbounded history.
+        // This is diagnostic data only, never a recovery ownership authority.
+        let journal = root.join(".worker-lifecycle.jsonl");
+        if fs::metadata(&journal).is_ok_and(|metadata| metadata.len() >= 1024 * 1024) {
+            if fs::rename(&journal, root.join(".worker-lifecycle.previous.jsonl")).is_err() {
+                return; // Do not grow an unbounded journal when rotation fails.
+            }
+        }
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(journal) {
+            let _ = writeln!(file, "{payload}");
+        }
+    })
+    .await;
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum WorkerManagerState {
@@ -128,26 +162,38 @@ impl WorkerManager {
             bail!("TrafficTracer Session root must be an absolute path");
         }
         self.begin_start()?;
+        let attempt = format!("{}-{}", std::process::id(), chrono::Utc::now().timestamp_micros());
+        record_start_checkpoint(session_root, &attempt, "preparing_event_bridge").await;
 
         let client = Arc::new(WorkerClient::new(Arc::clone(&self.process), DEFAULT_REQUEST_TIMEOUT));
         let bridge = self.process.bridge_to_tauri(app_handle.clone());
         let monitor = self.spawn_exit_monitor();
         let mut readiness = self.process.subscribe();
+        record_start_checkpoint(session_root, &attempt, "spawning_worker").await;
 
-        if let Err(error) = self
-            .process
-            .start(app_handle, session_root, controller_endpoint, controller_secret)
-        {
+        let process = Arc::clone(&self.process);
+        let handle = app_handle.clone();
+        let root = session_root.to_path_buf();
+        let endpoint = controller_endpoint.to_owned();
+        let secret = controller_secret.to_owned();
+        let spawned = tauri::async_runtime::spawn_blocking(move || process.start(&handle, &root, &endpoint, &secret))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|result| result);
+        if let Err(error) = spawned {
+            record_start_checkpoint(session_root, &attempt, "spawn_failed").await;
             bridge.abort();
             monitor.abort();
             self.fail_start(error.to_string());
             return Err(error);
         }
 
+        record_start_checkpoint(session_root, &attempt, "waiting_for_ready").await;
         let recovery = match wait_for_worker_ready(&mut readiness, session_root).await {
             Ok(recovery) => recovery,
             Err(error) => {
-                let _ = self.process.stop();
+                record_start_checkpoint(session_root, &attempt, "ready_failed").await;
+                let _ = self.stop_process().await;
                 bridge.abort();
                 monitor.abort();
                 self.fail_start(error.to_string());
@@ -155,8 +201,10 @@ impl WorkerManager {
             }
         };
 
+        record_start_checkpoint(session_root, &attempt, "waiting_for_hello").await;
         if let Err(error) = client.hello().await {
-            let _ = self.process.stop();
+            record_start_checkpoint(session_root, &attempt, "hello_failed").await;
+            let _ = self.stop_process().await;
             bridge.abort();
             monitor.abort();
             self.fail_start(error.to_string());
@@ -168,6 +216,7 @@ impl WorkerManager {
         *self.monitor.lock() = Some(monitor);
         *self.session_root.lock() = Some(session_root.to_path_buf());
         *self.recovery.lock() = Some(recovery);
+        record_start_checkpoint(session_root, &attempt, "handshake_complete").await;
         self.finish_start()
     }
 
@@ -229,6 +278,11 @@ impl WorkerManager {
 
     pub async fn graceful_stop(&self) -> Result<bool> {
         let _lifecycle = self.lifecycle.lock().await;
+        let diagnostic_root = self.session_root.lock().clone();
+        let attempt = format!("stop-{}-{}", std::process::id(), chrono::Utc::now().timestamp_micros());
+        if let Some(root) = &diagnostic_root {
+            record_start_checkpoint(root, &attempt, "shutdown_requested").await;
+        }
         if !self.process.is_running() {
             self.reset_stopped();
             return Ok(true);
@@ -252,10 +306,45 @@ impl WorkerManager {
         };
         let exited = acknowledged && wait_for_process_exit(&self.process, PROCESS_EXIT_TIMEOUT).await;
         if self.process.is_running() {
-            let _ = self.process.stop()?;
+            if let Err(error) = self.stop_process().await {
+                if let Some(root) = &diagnostic_root {
+                    record_start_checkpoint(root, &attempt, "shutdown_failed").await;
+                }
+                return Err(error);
+            }
         }
         self.reset_stopped();
+        if let Some(root) = &diagnostic_root {
+            record_start_checkpoint(root, &attempt, "exit_confirmed").await;
+        }
         Ok(acknowledged && exited)
+    }
+
+    async fn stop_process(&self) -> Result<()> {
+        // Subscribe before killing: dropping the child handle is not proof of
+        // process exit. Never switch workspaces until the matching exit arrives.
+        let mut events = self.process.subscribe();
+        let Some(instance) = self.process.instance_id() else {
+            return Ok(());
+        };
+        let process = Arc::clone(&self.process);
+        tokio::time::timeout(
+            PROCESS_EXIT_TIMEOUT,
+            tauri::async_runtime::spawn_blocking(move || process.stop()),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("WORKER_STOP_TIMEOUT: workspace switch blocked for instance {instance}"))???;
+        tokio::time::timeout(PROCESS_EXIT_TIMEOUT, async {
+            loop {
+                match events.recv().await {
+                    Ok(WorkerEvent::Exited { instance_id, .. }) if instance_id == instance => return Ok(()),
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(error) => return Err(anyhow::anyhow!(error)),
+                }
+            }
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("WORKER_EXIT_UNCONFIRMED: workspace switch blocked for instance {instance}"))?
     }
 
     pub fn recovery(&self) -> Option<WorkerRecoveryReport> {
@@ -553,6 +642,268 @@ mod tests {
     use super::*;
     use crate::core::traffic_tracer::worker::ManagedChild;
 
+    struct TestRoot(PathBuf);
+    impl TestRoot {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "tt-cleanup-test-{}-{}",
+                std::process::id(),
+                chrono::Utc::now().timestamp_nanos_opt().unwrap()
+            ));
+            fs::create_dir(&root).unwrap();
+            Self(root)
+        }
+    }
+    impl Drop for TestRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn completed_pipeline(root: &Path) -> super::super::pipeline::PipelineManifest {
+        use super::super::pipeline::*;
+        let mut manifest = PipelineManifest::create(
+            "test-owner".into(),
+            root.to_owned(),
+            PipelineConfigSnapshot {
+                path: root.join("sites.yaml"),
+                sha256: "a".repeat(64),
+            },
+            vec![PipelineTarget {
+                index: 0,
+                url: "https://example.com/".into(),
+                domain: "example.com".into(),
+                duration_seconds: 8,
+                network: "all".into(),
+                run_label: "test".into(),
+                wait_load_timeout: 30,
+                page_type: "page".into(),
+                playback: None,
+            }],
+            serde_json::json!({}),
+            vec![(
+                PipelineCandidate {
+                    profile_uid: "test-profile".into(),
+                    profile_fingerprint: "b".repeat(64),
+                    profile_fingerprint_kind: PIPELINE_FINGERPRINT_SEMANTIC_V2.into(),
+                    recorded_at: None,
+                    selection_group: "test-group".into(),
+                    requested_node: "test-node".into(),
+                },
+                vec!["one".into(), "two".into()],
+            )],
+            2,
+            PipelinePolicy {
+                continue_on_run_failure: true,
+                restore_original_state: true,
+            },
+            PipelineRestore {
+                profile_uid: None,
+                profile_fingerprint: None,
+                terminal_state: None,
+                selections: vec![],
+                checks: vec![],
+                state: RestoreState::Restored,
+                error: None,
+            },
+        )
+        .unwrap();
+        manifest.state = PipelineState::CompletedWithDegraded;
+        manifest.stage = PipelineStage::Finished;
+        manifest.runs[0].state = PipelineRunState::Completed;
+        manifest.runs[1].state = PipelineRunState::Degraded;
+        for (i, run) in manifest.runs.iter_mut().enumerate() {
+            run.session_ids = vec![format!("saved-session-{i}")];
+            run.stage = PipelineStage::Finished;
+        }
+        manifest.persist().unwrap();
+        manifest
+    }
+
+    struct CleanupChild {
+        mode: &'static str,
+        events: mpsc::Sender<CommandEvent>,
+        writes: Arc<AtomicUsize>,
+        kills: Arc<AtomicUsize>,
+    }
+    impl ManagedChild for CleanupChild {
+        fn pid(&self) -> u32 {
+            4242
+        }
+        fn write(&mut self, _: &[u8]) -> AnyResult<()> {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+            Ok(()) // Deliberately never acknowledge shutdown.
+        }
+        fn kill(self: Box<Self>) -> AnyResult<()> {
+            self.kills.fetch_add(1, Ordering::SeqCst);
+            if self.mode == "kill_error" {
+                anyhow::bail!("injected kill failure")
+            }
+            if self.mode == "exit" {
+                self.events.try_send(CommandEvent::Terminated(
+                    tauri_plugin_shell::process::TerminatedPayload {
+                        code: None,
+                        signal: Some(9),
+                    },
+                ))?;
+            }
+            Ok(())
+        }
+    }
+
+    async fn cleanup_case(mode: &'static str, has_job: bool, expected_lock: bool) {
+        use super::super::pipeline::PipelineManifest;
+        let root = TestRoot::new();
+        let original = completed_pipeline(&root.0);
+        let artifact = root.0.join("saved-analysis.json");
+        fs::write(&artifact, b"unchanged-analysis").unwrap();
+        let manager = WorkerManager::new();
+        let writes = Arc::new(AtomicUsize::new(0));
+        let kills = Arc::new(AtomicUsize::new(0));
+        let (events, receiver) = mpsc::channel(8);
+        manager
+            .process
+            .attach(
+                receiver,
+                Box::new(CleanupChild {
+                    mode,
+                    events: events.clone(),
+                    writes: writes.clone(),
+                    kills: kills.clone(),
+                }),
+            )
+            .unwrap();
+        *manager.state.lock() = if mode == "idle" {
+            WorkerManagerState::Ready
+        } else {
+            WorkerManagerState::Failed {
+                message: "injected".into(),
+            }
+        };
+        *manager.active_job.lock() = has_job.then(|| "unfinished-job".into());
+        if mode == "no_response" {
+            *manager.client.lock() = Some(Arc::new(WorkerClient::new(
+                manager.process.clone(),
+                Duration::from_secs(1),
+            )));
+        }
+        let lock = CaptureLock::new();
+        lock.acquire_owned("pipeline", "test-owner", "test capture").unwrap();
+        let path = root.0.join("pipeline-manifest.json");
+        let _held_lifecycle = if mode == "lifecycle_stall" {
+            Some(manager.lifecycle.lock().await)
+        } else {
+            None
+        };
+        let retained = crate::cmd::traffic_tracer::finish_pipeline_worker(
+            &path,
+            "test-owner",
+            &manager,
+            &lock,
+            Duration::from_millis(100),
+        )
+        .await;
+        assert_eq!(retained, expected_lock, "mode={mode}");
+        assert_eq!(lock.snapshot().locked, expected_lock);
+        if expected_lock {
+            assert_eq!(lock.snapshot().job_id.as_deref(), Some("test-owner"));
+            assert!(lock.acquire_owned("pipeline", "new-owner", "new capture").is_err());
+        }
+        let saved = PipelineManifest::load(&path).unwrap();
+        assert_eq!(saved.runs, original.runs);
+        assert_eq!(saved.state, original.state);
+        assert_eq!(saved.stage, original.stage);
+        assert_eq!(fs::read(artifact).unwrap(), b"unchanged-analysis");
+        assert_eq!(saved.cleanup.as_ref().unwrap().capture_lock_retained, expected_lock);
+        assert_eq!(
+            saved.cleanup.unwrap().state,
+            if mode == "idle" { "completed" } else { "warning" }
+        );
+        if mode == "idle" {
+            assert_eq!(kills.load(Ordering::SeqCst), 0);
+        }
+        if mode == "no_response" {
+            assert_eq!(writes.load(Ordering::SeqCst), 1);
+        }
+        // Terminate only the fake event stream; no OS process was created.
+        let _ = events
+            .send(CommandEvent::Terminated(
+                tauri_plugin_shell::process::TerminatedPayload {
+                    code: Some(0),
+                    signal: None,
+                },
+            ))
+            .await;
+    }
+
+    #[tokio::test]
+    async fn supervisor_cleanup_preserves_idle_worker_and_results() {
+        cleanup_case("idle", false, false).await;
+    }
+    #[tokio::test]
+    async fn supervisor_cleanup_nonresponsive_worker_retains_lock() {
+        cleanup_case("no_response", true, true).await;
+    }
+    #[tokio::test]
+    async fn supervisor_cleanup_failed_kill_without_job_id_retains_lock() {
+        cleanup_case("kill_error", false, true).await;
+    }
+    #[tokio::test]
+    async fn supervisor_cleanup_missing_exit_retains_lock() {
+        cleanup_case("no_exit", true, true).await;
+    }
+    #[tokio::test]
+    async fn supervisor_cleanup_confirmed_forced_exit_releases_lock() {
+        cleanup_case("exit", true, false).await;
+    }
+
+    #[tokio::test]
+    async fn supervisor_cleanup_lifecycle_stall_retains_lock_without_job_id() {
+        cleanup_case("lifecycle_stall", false, true).await;
+    }
+
+    #[tokio::test]
+    async fn lifecycle_journal_retains_restart_history_and_rotates() {
+        let root = TestRoot::new();
+        record_start_checkpoint(&root.0, "first", "waiting_for_ready").await;
+        record_start_checkpoint(&root.0, "second", "handshake_complete").await;
+        let journal = root.0.join(".worker-lifecycle.jsonl");
+        let text = fs::read_to_string(&journal).unwrap();
+        assert_eq!(text.lines().count(), 2);
+        assert!(text.contains("first") && text.contains("second"));
+        let latest: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.0.join(".worker-startup.json")).unwrap()).unwrap();
+        assert_eq!(latest["attempt_id"], "second");
+        OpenOptions::new()
+            .write(true)
+            .open(&journal)
+            .unwrap()
+            .set_len(1024 * 1024)
+            .unwrap();
+        record_start_checkpoint(&root.0, "third", "shutdown_requested").await;
+        assert_eq!(
+            fs::metadata(root.0.join(".worker-lifecycle.previous.jsonl"))
+                .unwrap()
+                .len(),
+            1024 * 1024
+        );
+        assert_eq!(fs::read_to_string(&journal).unwrap().lines().count(), 1);
+        assert!(fs::read_to_string(&journal).unwrap().contains("third"));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_failed_rotation_does_not_grow_journal() {
+        let root = TestRoot::new();
+        let journal = root.0.join(".worker-lifecycle.jsonl");
+        fs::write(&journal, vec![b' '; 1024 * 1024]).unwrap();
+        fs::create_dir(root.0.join(".worker-lifecycle.previous.jsonl")).unwrap();
+        for _ in 0..3 {
+            record_start_checkpoint(&root.0, "retry", "waiting_for_ready").await;
+        }
+        assert_eq!(fs::metadata(&journal).unwrap().len(), 1024 * 1024);
+        assert!(root.0.join(".worker-startup.json").is_file());
+    }
+
     struct HungChild {
         kills: Arc<AtomicUsize>,
     }
@@ -641,6 +992,40 @@ mod tests {
         assert!(!wait_for_process_exit(&process, Duration::from_millis(20)).await);
         assert!(process.stop().unwrap());
         assert_eq!(kills.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn workspace_stop_waits_for_the_matching_exit() {
+        let manager = WorkerManager::new();
+        let kills = Arc::new(AtomicUsize::new(0));
+        let (sender, receiver) = mpsc::channel::<CommandEvent>(4);
+        manager
+            .process
+            .attach(
+                receiver,
+                Box::new(HungChild {
+                    kills: Arc::clone(&kills),
+                }),
+            )
+            .unwrap();
+        let exit = async {
+            while kills.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            assert!(manager.process.is_running());
+            sender
+                .send(CommandEvent::Terminated(
+                    tauri_plugin_shell::process::TerminatedPayload {
+                        code: None,
+                        signal: Some(9),
+                    },
+                ))
+                .await
+                .unwrap();
+        };
+        let (stopped, _) = tokio::join!(manager.stop_process(), exit);
+        stopped.unwrap();
+        assert!(!manager.process.is_running());
     }
 
     #[test]

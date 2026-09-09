@@ -11,8 +11,10 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TablePagination,
   Typography,
 } from '@mui/material'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import type {
@@ -189,6 +191,17 @@ export function TrafficTracerConnectionResults({
   unavailable = false,
 }: TrafficTracerConnectionResultsProps) {
   const { t } = useTranslation()
+  const [requestPage, setRequestPage] = useState(0)
+  const [connectionPage, setConnectionPage] = useState(0)
+  const pageSize = 50
+  const safeRequestPage = Math.min(
+    requestPage,
+    Math.max(0, Math.ceil(requests.length / pageSize) - 1),
+  )
+  const safeConnectionPage = Math.min(
+    connectionPage,
+    Math.max(0, Math.ceil(connections.length / pageSize) - 1),
+  )
   if (isLoading) {
     return (
       <Stack sx={{ alignItems: 'center', py: 3 }}>
@@ -528,50 +541,73 @@ export function TrafficTracerConnectionResults({
               </TableRow>
             </TableHead>
             <TableBody>
-              {requests.map((request) => (
-                <TableRow key={request.request_id}>
-                  <TableCell>
-                    <Typography variant="caption">
-                      {request.request_id}
-                    </Typography>
-                    <Typography variant="body2" sx={{ wordBreak: 'break-all' }}>
-                      {request.url}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    {request.connection_id ||
-                      request.candidate_connection_ids.join(', ') ||
-                      '—'}
-                  </TableCell>
-                  <TableCell>
-                    {request.network_observation &&
-                    !['network', 'unknown'].includes(
-                      request.network_observation,
-                    ) ? (
-                      <Chip
-                        size="small"
-                        color="info"
-                        label={`non-network · ${request.network_observation}`}
-                      />
-                    ) : (
-                      <Chip
-                        size="small"
-                        color={
-                          request.attribution.status === 'matched'
-                            ? 'success'
-                            : request.attribution.status === 'ambiguous'
-                              ? 'warning'
-                              : 'default'
-                        }
-                        label={`${request.attribution.status} · ${request.attribution.method}`}
-                      />
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
+              {requests
+                .slice(
+                  safeRequestPage * pageSize,
+                  (safeRequestPage + 1) * pageSize,
+                )
+                .map((request) => (
+                  <TableRow key={request.request_id}>
+                    <TableCell>
+                      <Typography variant="caption">
+                        {request.request_id}
+                      </Typography>
+                      <Typography
+                        variant="body2"
+                        sx={{ wordBreak: 'break-all' }}
+                      >
+                        {request.url}
+                      </Typography>
+                    </TableCell>
+                    <TableCell>
+                      {request.connection_id ||
+                        request.candidate_connection_ids.join(', ') ||
+                        '—'}
+                    </TableCell>
+                    <TableCell>
+                      {request.network_observation &&
+                      !['network', 'unknown'].includes(
+                        request.network_observation,
+                      ) ? (
+                        <Chip
+                          size="small"
+                          color="info"
+                          label={`non-network · ${request.network_observation}`}
+                        />
+                      ) : (
+                        <Chip
+                          size="small"
+                          color={
+                            request.attribution.status === 'matched'
+                              ? 'success'
+                              : request.attribution.status === 'ambiguous'
+                                ? 'warning'
+                                : 'default'
+                          }
+                          label={`${request.attribution.status} · ${request.attribution.method}`}
+                        />
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
             </TableBody>
           </Table>
         </TableContainer>
+        {requests.length > pageSize && (
+          <TablePagination
+            component="div"
+            count={requests.length}
+            page={safeRequestPage}
+            rowsPerPage={pageSize}
+            rowsPerPageOptions={[pageSize]}
+            onPageChange={(_, value) => setRequestPage(value)}
+            showFirstButton
+            showLastButton
+            getItemAriaLabel={(type) =>
+              `${type[0].toUpperCase()}${type.slice(1)} request page`
+            }
+          />
+        )}
       </Box>
 
       <Box>
@@ -591,164 +627,189 @@ export function TrafficTracerConnectionResults({
               </TableRow>
             </TableHead>
             <TableBody>
-              {connections.map((connection) => (
-                <TableRow key={connection.connection_id}>
-                  <TableCell>
-                    <Typography variant="caption">
-                      {connection.connection_id}
-                    </Typography>
-                    <Typography
-                      variant="body2"
-                      sx={{ maxWidth: 360, overflowWrap: 'anywhere' }}
-                    >
-                      {connection.primary_url || 'No attributed URL'}
-                    </Typography>
-                    <Typography variant="body2">
-                      {connection.request_ids.length} request(s) ·{' '}
-                      {connection.urls.length} URL(s)
-                    </Typography>
-                    {connection.attribution_scope && (
-                      <Typography variant="caption" sx={{ display: 'block' }}>
-                        Scope: {connection.attribution_scope} · evidence:{' '}
-                        {connection.attribution_evidence?.join(', ') || '—'}
+              {connections
+                .slice(
+                  safeConnectionPage * pageSize,
+                  (safeConnectionPage + 1) * pageSize,
+                )
+                .map((connection) => (
+                  <TableRow key={connection.connection_id}>
+                    <TableCell>
+                      <Typography variant="caption">
+                        {connection.connection_id}
                       </Typography>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {endpoint(connection.pre_flow)}
-                    <Typography variant="caption" sx={{ display: 'block' }}>
-                      app: {connection.application_protocol || 'unknown'}
-                      {connection.attempted_protocols?.length
-                        ? ` · attempted ${connection.attempted_protocols.join(', ')}`
-                        : ''}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    {connection.post_flow
-                      ? endpoint(connection.post_flow)
-                      : postFlowAbsenceLabel(connection)}
-                    {connection.carrier_binding && (
                       <Typography
-                        variant="caption"
-                        sx={{ display: 'block', overflowWrap: 'anywhere' }}
+                        variant="body2"
+                        sx={{ maxWidth: 360, overflowWrap: 'anywhere' }}
                       >
-                        {connection.carrier_binding.mode} carrier{' '}
-                        {connection.carrier_binding.carrier_id} ·{' '}
-                        {connection.carrier_binding.protocol}
-                        {' · '}
-                        {connection.carrier_binding.physical_paths.length}{' '}
-                        physical path(s)
+                        {connection.primary_url || 'No attributed URL'}
                       </Typography>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {connection.egress ? (
-                      <>
-                        <Chip
-                          size="small"
-                          color={egressColor(connection)}
-                          label={egressOutcome(connection)}
-                        />
+                      <Typography variant="body2">
+                        {connection.request_ids.length} request(s) ·{' '}
+                        {connection.urls.length} URL(s)
+                      </Typography>
+                      {connection.attribution_scope && (
                         <Typography variant="caption" sx={{ display: 'block' }}>
-                          {connection.egress.selection_chain.join(' → ') || '—'}
+                          Scope: {connection.attribution_scope} · evidence:{' '}
+                          {connection.attribution_evidence?.join(', ') || '—'}
                         </Typography>
-                      </>
-                    ) : (
-                      '—'
-                    )}
-                    {connection.sharing && (
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {endpoint(connection.pre_flow)}
                       <Typography variant="caption" sx={{ display: 'block' }}>
-                        {[
-                          connection.sharing.request_multiplexed &&
-                            'request multiplexing',
-                          connection.sharing.post_flow_shared &&
-                            'shared post-flow',
-                          connection.sharing.outer_connection_reused &&
-                            'outer reuse',
-                        ]
-                          .filter(Boolean)
-                          .join(' · ') || 'not shared'}
+                        app: {connection.application_protocol || 'unknown'}
+                        {connection.attempted_protocols?.length
+                          ? ` · attempted ${connection.attempted_protocols.join(', ')}`
+                          : ''}
                       </Typography>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {connection.terminal ? (
-                      <>
-                        <Chip
-                          size="small"
-                          color={
-                            connection.terminal.status === 'closed'
-                              ? 'success'
-                              : connection.terminal.status.endsWith('error')
-                                ? 'error'
-                                : 'warning'
-                          }
-                          label={`${connection.terminal.status}${
-                            connection.terminal.stage
-                              ? ` · ${connection.terminal.stage}`
-                              : ''
-                          }`}
-                        />
-                        {connection.terminal.error && (
-                          <Typography
-                            variant="caption"
-                            title={connection.terminal.error}
-                            sx={{
-                              display: 'block',
-                              maxWidth: 280,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            {connection.terminal.error}
-                          </Typography>
-                        )}
-                        {connection.terminal.error_class && (
+                    </TableCell>
+                    <TableCell>
+                      {connection.post_flow
+                        ? endpoint(connection.post_flow)
+                        : postFlowAbsenceLabel(connection)}
+                      {connection.carrier_binding && (
+                        <Typography
+                          variant="caption"
+                          sx={{ display: 'block', overflowWrap: 'anywhere' }}
+                        >
+                          {connection.carrier_binding.mode} carrier{' '}
+                          {connection.carrier_binding.carrier_id} ·{' '}
+                          {connection.carrier_binding.protocol}
+                          {' · '}
+                          {connection.carrier_binding.physical_paths.length}{' '}
+                          physical path(s)
+                        </Typography>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {connection.egress ? (
+                        <>
+                          <Chip
+                            size="small"
+                            color={egressColor(connection)}
+                            label={egressOutcome(connection)}
+                          />
                           <Typography
                             variant="caption"
                             sx={{ display: 'block' }}
                           >
-                            {connection.terminal.error_class} ·{' '}
-                            {connection.terminal.error_class_source || 'legacy'}
+                            {connection.egress.selection_chain.join(' → ') ||
+                              '—'}
                           </Typography>
-                        )}
-                      </>
-                    ) : (
-                      '—'
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Chip
-                      size="small"
-                      color={
-                        connection.match.status === 'matched'
-                          ? 'success'
-                          : connection.match.status === 'ambiguous'
-                            ? 'warning'
-                            : 'default'
-                      }
-                      label={`${connection.match.status} · ${connection.match.method}`}
-                    />
-                    {connection.match.time_evidence?.available && (
-                      <Typography variant="caption" sx={{ display: 'block' }}>
-                        time Δ {connection.match.time_evidence.delta_ms} ms ·{' '}
-                        {connection.match.time_evidence.source}
-                      </Typography>
-                    )}
-                    {connection.match.status === 'ambiguous' && (
-                      <Typography variant="caption" sx={{ display: 'block' }}>
-                        {connection.match.candidates_truncated
-                          ? `${connection.match.candidates.length} shown · ${connection.match.candidate_count ?? connection.match.candidates.length} total candidates`
-                          : `${connection.match.candidates.length} candidates`}
-                      </Typography>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
+                        </>
+                      ) : (
+                        '—'
+                      )}
+                      {connection.sharing && (
+                        <Typography variant="caption" sx={{ display: 'block' }}>
+                          {[
+                            connection.sharing.request_multiplexed &&
+                              'request multiplexing',
+                            connection.sharing.post_flow_shared &&
+                              'shared post-flow',
+                            connection.sharing.outer_connection_reused &&
+                              'outer reuse',
+                          ]
+                            .filter(Boolean)
+                            .join(' · ') || 'not shared'}
+                        </Typography>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {connection.terminal ? (
+                        <>
+                          <Chip
+                            size="small"
+                            color={
+                              connection.terminal.status === 'closed'
+                                ? 'success'
+                                : connection.terminal.status.endsWith('error')
+                                  ? 'error'
+                                  : 'warning'
+                            }
+                            label={`${connection.terminal.status}${
+                              connection.terminal.stage
+                                ? ` · ${connection.terminal.stage}`
+                                : ''
+                            }`}
+                          />
+                          {connection.terminal.error && (
+                            <Typography
+                              variant="caption"
+                              title={connection.terminal.error}
+                              sx={{
+                                display: 'block',
+                                maxWidth: 280,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {connection.terminal.error}
+                            </Typography>
+                          )}
+                          {connection.terminal.error_class && (
+                            <Typography
+                              variant="caption"
+                              sx={{ display: 'block' }}
+                            >
+                              {connection.terminal.error_class} ·{' '}
+                              {connection.terminal.error_class_source ||
+                                'legacy'}
+                            </Typography>
+                          )}
+                        </>
+                      ) : (
+                        '—'
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Chip
+                        size="small"
+                        color={
+                          connection.match.status === 'matched'
+                            ? 'success'
+                            : connection.match.status === 'ambiguous'
+                              ? 'warning'
+                              : 'default'
+                        }
+                        label={`${connection.match.status} · ${connection.match.method}`}
+                      />
+                      {connection.match.time_evidence?.available && (
+                        <Typography variant="caption" sx={{ display: 'block' }}>
+                          time Δ {connection.match.time_evidence.delta_ms} ms ·{' '}
+                          {connection.match.time_evidence.source}
+                        </Typography>
+                      )}
+                      {connection.match.status === 'ambiguous' && (
+                        <Typography variant="caption" sx={{ display: 'block' }}>
+                          {connection.match.candidates_truncated
+                            ? `${connection.match.candidates.length} shown · ${connection.match.candidate_count ?? connection.match.candidates.length} total candidates`
+                            : `${connection.match.candidates.length} candidates`}
+                        </Typography>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
             </TableBody>
           </Table>
         </TableContainer>
+        {connections.length > pageSize && (
+          <TablePagination
+            component="div"
+            count={connections.length}
+            page={safeConnectionPage}
+            rowsPerPage={pageSize}
+            rowsPerPageOptions={[pageSize]}
+            onPageChange={(_, value) => setConnectionPage(value)}
+            showFirstButton
+            showLastButton
+            getItemAriaLabel={(type) =>
+              `${type[0].toUpperCase()}${type.slice(1)} connection page`
+            }
+          />
+        )}
       </Box>
     </Stack>
   )
