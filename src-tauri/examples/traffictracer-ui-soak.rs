@@ -57,9 +57,14 @@ fn soak_heartbeat(
     };
 }
 #[tauri::command]
-async fn tt_ui_heartbeat(active: bool, app_handle: tauri::AppHandle) -> Result<app_lib::traffic_tracer_test_support::DesktopSnapshot, String> {
+async fn tt_ui_heartbeat(
+    active: bool,
+    app_handle: tauri::AppHandle,
+) -> Result<app_lib::traffic_tracer_test_support::DesktopSnapshot, String> {
     // Real read-only desktop monitor; no production capture/profile supervisor.
-    app_lib::traffic_tracer_test_support::tt_ui_heartbeat(active, app_handle).await.map_err(|error| error.to_string())
+    app_lib::traffic_tracer_test_support::tt_ui_heartbeat(active, app_handle)
+        .await
+        .map_err(|error| error.to_string())
 }
 struct FakeChild;
 #[tauri::command]
@@ -150,7 +155,16 @@ fn main() {
         .expect("sample delay in milliseconds");
     assert!(sample_delay_ms <= 1000);
     let fault = std::env::var("TT_SOAK_FAULT").unwrap_or_default();
-    assert!(["", "event_stall", "early_close", "recovery_signal", "mixed_notifications"].contains(&fault.as_str()));
+    assert!(
+        [
+            "",
+            "event_stall",
+            "early_close",
+            "recovery_signal",
+            "mixed_notifications"
+        ]
+        .contains(&fault.as_str())
+    );
     let root = std::env::temp_dir().join(format!(
         "traffictracer-native-soak-{}-{}",
         std::process::id(),

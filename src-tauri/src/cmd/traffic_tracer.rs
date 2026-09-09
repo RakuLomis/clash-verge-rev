@@ -222,11 +222,19 @@ fn start_ui_heartbeat_monitor(state: &'static UiHeartbeatState, app_handle: AppH
                 // The delivery mutex is never held across native emit.
                 if let Err(error) = app_handle.run_on_main_thread(move || {
                     if let Err(error) = handle.emit("traffictracer://desktop-recovery", generation) {
-                        crate::core::traffic_tracer::recovery_delivery::global().lock().dispatch_failed(generation);
-                        logging!(warn, Type::System, "TrafficTracer recovery notification failed: {error}");
+                        crate::core::traffic_tracer::recovery_delivery::global()
+                            .lock()
+                            .dispatch_failed(generation);
+                        logging!(
+                            warn,
+                            Type::System,
+                            "TrafficTracer recovery notification failed: {error}"
+                        );
                     }
                 }) {
-                    crate::core::traffic_tracer::recovery_delivery::global().lock().dispatch_failed(generation);
+                    crate::core::traffic_tracer::recovery_delivery::global()
+                        .lock()
+                        .dispatch_failed(generation);
                     logging!(warn, Type::System, "TrafficTracer recovery dispatch failed: {error}");
                 }
             }
@@ -276,22 +284,30 @@ pub fn ui_desktop_snapshot() -> DesktopSnapshot {
 
 #[tauri::command]
 pub fn tt_progress_ack(sequence: u64) {
-    crate::core::traffic_tracer::progress_delivery::global().lock().acknowledge(sequence);
+    crate::core::traffic_tracer::progress_delivery::global()
+        .lock()
+        .acknowledge(sequence);
 }
 
 #[tauri::command]
 pub fn tt_notification_ack(sequence: u64) {
-    crate::core::traffic_tracer::notification_delivery::global().lock().acknowledge(sequence);
+    crate::core::traffic_tracer::notification_delivery::global()
+        .lock()
+        .acknowledge(sequence);
 }
 
 #[tauri::command]
 pub fn tt_desktop_recovery_ack(generation: u64) {
-    crate::core::traffic_tracer::recovery_delivery::global().lock().acknowledge(generation);
+    crate::core::traffic_tracer::recovery_delivery::global()
+        .lock()
+        .acknowledge(generation);
 }
 
 #[tauri::command]
 pub fn tt_desktop_recovery_snapshot(report: crate::core::traffic_tracer::recovery_delivery::SnapshotReport) {
-    crate::core::traffic_tracer::recovery_delivery::global().lock().snapshot_report(report);
+    crate::core::traffic_tracer::recovery_delivery::global()
+        .lock()
+        .snapshot_report(report);
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

@@ -19,11 +19,13 @@ pub mod utils;
 #[doc(hidden)]
 pub mod traffic_tracer_test_support {
     pub use crate::cmd::traffic_tracer::tt_notification_ack;
-    pub use crate::core::traffic_tracer::notification_delivery;
-    pub use crate::cmd::traffic_tracer::{tt_ui_heartbeat, ui_desktop_snapshot, tt_progress_ack, tt_desktop_recovery_ack, tt_desktop_recovery_snapshot};
-    pub use crate::core::traffic_tracer::recovery_delivery;
-    pub use crate::core::traffic_tracer::progress_delivery;
+    pub use crate::cmd::traffic_tracer::{
+        tt_desktop_recovery_ack, tt_desktop_recovery_snapshot, tt_progress_ack, tt_ui_heartbeat, ui_desktop_snapshot,
+    };
     pub use crate::core::traffic_tracer::desktop_session::DesktopSnapshot;
+    pub use crate::core::traffic_tracer::notification_delivery;
+    pub use crate::core::traffic_tracer::progress_delivery;
+    pub use crate::core::traffic_tracer::recovery_delivery;
     pub use crate::core::traffic_tracer::{
         client::{ClientError, HandshakeState, HelloResult, WorkerClient},
         events::{EVENT_JOB_PROGRESS, FrontendWorkerEvent, NotificationMapper},

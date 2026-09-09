@@ -1,10 +1,10 @@
 use std::{
-    time::Duration,
     path::Path,
     sync::{
         Arc, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
 use anyhow::{Context as _, Result, bail};
@@ -34,11 +34,27 @@ pub struct WorkerExit {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkerEvent {
-    Stdout { instance_id: u64, line: String, journaled: bool },
-    MalformedStdout { instance_id: u64, error: String },
-    Stderr { instance_id: u64, line: String },
-    TransportError { instance_id: u64, error: String },
-    Exited { instance_id: u64, status: WorkerExit },
+    Stdout {
+        instance_id: u64,
+        line: String,
+        journaled: bool,
+    },
+    MalformedStdout {
+        instance_id: u64,
+        error: String,
+    },
+    Stderr {
+        instance_id: u64,
+        line: String,
+    },
+    TransportError {
+        instance_id: u64,
+        error: String,
+    },
+    Exited {
+        instance_id: u64,
+        status: WorkerExit,
+    },
 }
 
 #[doc(hidden)]
@@ -149,7 +165,13 @@ impl WorkerProcess {
             instance_id,
             pid
         );
-        Self::watch_events(Arc::clone(&self.state), self.events.clone(), instance_id, receiver, self.journal.clone());
+        Self::watch_events(
+            Arc::clone(&self.state),
+            self.events.clone(),
+            instance_id,
+            receiver,
+            self.journal.clone(),
+        );
         Ok(instance_id)
     }
 
@@ -286,7 +308,13 @@ impl WorkerProcess {
             instance_id,
             pid
         );
-        Self::watch_events(Arc::clone(&self.state), self.events.clone(), instance_id, receiver, self.journal.clone());
+        Self::watch_events(
+            Arc::clone(&self.state),
+            self.events.clone(),
+            instance_id,
+            receiver,
+            self.journal.clone(),
+        );
         Ok(instance_id)
     }
 
@@ -320,8 +348,14 @@ impl WorkerProcess {
                                         None => false,
                                     }
                                 }).await.unwrap_or(false)
-                            } else { false };
-                            let _ = events.send(WorkerEvent::Stdout { instance_id, line, journaled });
+                            } else {
+                                false
+                            };
+                            let _ = events.send(WorkerEvent::Stdout {
+                                instance_id,
+                                line,
+                                journaled,
+                            });
                         }
                         Err(error) => {
                             let error = error.to_string();
@@ -441,12 +475,18 @@ mod tests {
 
     #[tokio::test]
     async fn journals_notifications_before_broadcast_even_when_a_subscriber_lags() {
-        let root = std::env::temp_dir().join(format!("tt-prebroadcast-test-{}-{}", std::process::id(), chrono::Utc::now().timestamp_micros()));
+        let root = std::env::temp_dir().join(format!(
+            "tt-prebroadcast-test-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_micros()
+        ));
         let process = WorkerProcess::new();
         process.configure_notification_journal(&root).unwrap();
         let mut observer = process.subscribe();
         let (sender, receiver) = mpsc::channel(4);
-        process.attach(receiver, fake_child(42, Arc::new(AtomicUsize::new(0)))).unwrap();
+        process
+            .attach(receiver, fake_child(42, Arc::new(AtomicUsize::new(0))))
+            .unwrap();
         for id in 0..100 {
             let line = serde_json::json!({"type":"notification","method":"worker.log","params":{"id":id}}).to_string();
             sender.send(CommandEvent::Stdout(line.into_bytes())).await.unwrap();
@@ -454,13 +494,23 @@ mod tests {
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             loop {
                 match observer.recv().await {
-                    Ok(WorkerEvent::Stdout { line, journaled, .. }) if line.contains("\"id\":99") => { assert!(journaled); break; }
+                    Ok(WorkerEvent::Stdout { line, journaled, .. }) if line.contains("\"id\":99") => {
+                        assert!(journaled);
+                        break;
+                    }
                     Err(broadcast::error::RecvError::Closed) => panic!("closed before journal completion"),
                     _ => {}
                 }
             }
-        }).await.unwrap();
-        let path = std::fs::read_dir(root.join("diagnostics/worker-notifications")).unwrap().next().unwrap().unwrap().path();
+        })
+        .await
+        .unwrap();
+        let path = std::fs::read_dir(root.join("diagnostics/worker-notifications"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
         let text = std::fs::read_to_string(path).unwrap();
         assert_eq!(text.lines().count(), 100);
         assert!(text.contains("\"id\":0"));

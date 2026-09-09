@@ -32,24 +32,36 @@ impl DesktopState {
     pub fn snapshot(&self, now: Instant) -> DesktopSnapshot {
         let session_lock = match self.observed {
             Some((at, locked)) if now.saturating_duration_since(at) <= Duration::from_secs(6) => {
-                if locked { "locked" } else { "unlocked" }
+                if locked {
+                    "locked"
+                } else {
+                    "unlocked"
+                }
             }
             _ => "unknown",
         };
-        DesktopSnapshot { session_lock, unlock_generation: self.generation }
+        DesktopSnapshot {
+            session_lock,
+            unlock_generation: self.generation,
+        }
     }
 }
 
 #[cfg(any(target_os = "linux", test))]
 fn parse_session(text: &str, uid: u32) -> Option<(String, bool)> {
     let field = |key: &str| text.lines().find_map(|line| line.strip_prefix(key));
-    if field("User=")?.parse::<u32>().ok()? != uid
-        || !matches!(field("Type=")?, "x11" | "wayland") {
+    if field("User=")?.parse::<u32>().ok()? != uid || !matches!(field("Type=")?, "x11" | "wayland") {
         return None;
     }
     let id = field("Id=")?;
-    if id.is_empty() { return None; }
-    let locked = match field("LockedHint=")? { "yes" => true, "no" => false, _ => return None };
+    if id.is_empty() {
+        return None;
+    }
+    let locked = match field("LockedHint=")? {
+        "yes" => true,
+        "no" => false,
+        _ => return None,
+    };
     Some((id.to_owned(), locked))
 }
 
@@ -57,16 +69,36 @@ pub async fn observe() -> Option<(String, bool)> {
     #[cfg(target_os = "linux")]
     {
         let mut command = tokio::process::Command::new("loginctl");
-        command.args(["show-session", "auto", "--no-pager", "-p", "Id", "-p", "User", "-p", "Type", "-p", "LockedHint"])
+        command
+            .args([
+                "show-session",
+                "auto",
+                "--no-pager",
+                "-p",
+                "Id",
+                "-p",
+                "User",
+                "-p",
+                "Type",
+                "-p",
+                "LockedHint",
+            ])
             .kill_on_drop(true);
-        let output = tokio::time::timeout(Duration::from_millis(1500), command.output()).await.ok()?.ok()?;
-        if !output.status.success() { return None; }
+        let output = tokio::time::timeout(Duration::from_millis(1500), command.output())
+            .await
+            .ok()?
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
         // Only the current user's graphical session can suppress UI warnings.
         let uid = unsafe { libc::geteuid() };
         return parse_session(std::str::from_utf8(&output.stdout).ok()?, uid);
     }
     #[cfg(not(target_os = "linux"))]
-    { None }
+    {
+        None
+    }
 }
 
 #[cfg(test)]
