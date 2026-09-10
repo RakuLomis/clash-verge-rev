@@ -892,9 +892,13 @@ export interface AnalysisStorageSummary {
   raw_packet_capture_bytes: number
   netlog_bytes: number
   mihomo_trace_bytes: number
+  trace_snapshot_bytes?: number
+  trace_snapshot_logical_bytes?: number | null
+  trace_archive_bytes?: number
+  trace_snapshot_compression_ratio?: number | null
   capture_metadata_bytes: number
   analysis_result_bytes_before_summary: number
-  compression: 'none'
+  compression: 'none' | 'trace_gzip'
 }
 
 export interface AnalysisNetworkOutcome {
@@ -974,6 +978,12 @@ export interface CoverageSummary {
   warnings?: AnalysisWarning[]
   trace_snapshot?: TraceSnapshotSummary
   storage?: AnalysisStorageSummary
+  packet_coverage?: Array<{
+    session_id: string
+    status: string
+    drops: string
+    errors?: string[]
+  }>
   playback?: {
     provider: 'youtube'
     ad_policy?: 'click_visible_skip'

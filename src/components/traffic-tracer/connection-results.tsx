@@ -435,6 +435,20 @@ export function TrafficTracerConnectionResults({
               label={`Storage: ${byteSize(summary.storage.capture_bytes)} capture · ${byteSize(summary.storage.raw_packet_capture_bytes)} raw PCAP · compression ${summary.storage.compression}`}
             />
           )}
+          {summary.storage?.trace_snapshot_bytes !== undefined && (
+            <Chip
+              variant="outlined"
+              label={`Trace storage: journal ${byteSize(summary.storage.mihomo_trace_bytes)} · snapshot ${byteSize(summary.storage.trace_snapshot_bytes)} stored / ${byteSize(summary.storage.trace_snapshot_logical_bytes ?? summary.storage.trace_snapshot_bytes)} logical · archive ${byteSize(summary.storage.trace_archive_bytes ?? 0)}`}
+            />
+          )}
+          {summary.packet_coverage?.map((coverage) => (
+            <Chip
+              key={coverage.session_id}
+              variant="outlined"
+              color={coverage.status === 'passed' ? 'success' : 'warning'}
+              label={`Packet lifecycle coverage: ${coverage.status} · drops ${coverage.drops}`}
+            />
+          ))}
           {summary.proxy_protocol && (
             <Chip
               variant="outlined"

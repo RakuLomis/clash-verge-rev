@@ -854,6 +854,9 @@ describe('TrafficTracer Complete workspace', () => {
         analysis_result_bytes_before_summary: 1000,
         compression: 'none',
       },
+      packet_coverage: [
+        { session_id: 'session-one', status: 'passed', drops: 'unknown' },
+      ],
       browser_request_failures: {
         total_requests: 3,
         failed_occurrences: 2,
@@ -980,6 +983,12 @@ describe('TrafficTracer Complete workspace', () => {
         unmatched_reasons: { multiple_candidates: 1, missing_post_flow: 1 },
       },
     }
+    summary.storage = {
+      ...summary.storage!,
+      trace_snapshot_bytes: 1024,
+      trace_snapshot_logical_bytes: 10240,
+      trace_archive_bytes: 0,
+    }
     render(
       <TrafficTracerConnectionResults
         summary={summary}
@@ -987,6 +996,14 @@ describe('TrafficTracer Complete workspace', () => {
         connections={connections}
       />,
     )
+    expect(
+      screen.getByText('Packet lifecycle coverage: passed · drops unknown'),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        /Trace storage: journal .*snapshot 1.0 KiB stored \/ 10.0 KiB logical/,
+      ),
+    ).toBeInTheDocument()
     expect(screen.getAllByText('https://cdn.example/one.js')).toHaveLength(2)
     expect(screen.getByText('https://cdn.example/two.js')).toBeInTheDocument()
     expect(screen.getByText(/2 request\(s\).*2 URL\(s\)/)).toBeInTheDocument()

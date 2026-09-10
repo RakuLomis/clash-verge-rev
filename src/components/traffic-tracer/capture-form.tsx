@@ -989,7 +989,8 @@ export function TrafficTracerCaptureForm({
             }
           />
           <Typography variant="caption" color="text.secondary">
-            Analysis always uses a verified snapshot. When unchecked, the full
+            New captures always use a verified, lossless gzip analysis snapshot.
+            This does not compress NetLog or PCAP. When unchecked, the full
             journal is losslessly archived after all core writers close. If
             still in use, it is retained and archival is retried on reanalysis.
           </Typography>
