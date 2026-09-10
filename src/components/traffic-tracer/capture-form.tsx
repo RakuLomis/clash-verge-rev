@@ -976,6 +976,24 @@ export function TrafficTracerCaptureForm({
             </MenuItem>
           </TextField>
 
+          <FormControlLabel
+            label="Keep uncompressed trace journal"
+            control={
+              <Checkbox
+                checked={draft.options.retain_trace_journal ?? true}
+                disabled={captureLocked}
+                onChange={(_, checked) =>
+                  updateOption('retain_trace_journal', checked)
+                }
+              />
+            }
+          />
+          <Typography variant="caption" color="text.secondary">
+            Analysis always uses a verified snapshot. When unchecked, the full
+            journal is losslessly archived after all core writers close. If
+            still in use, it is retained and archival is retried on reanalysis.
+          </Typography>
+
           {captureLocked && (
             <Alert severity="info">
               {t('settings.trafficTracer.locks.captureActive')}{' '}

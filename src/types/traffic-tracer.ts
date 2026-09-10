@@ -60,6 +60,7 @@ export interface CompleteEnvironmentReport {
 }
 
 export interface CaptureOptions {
+  retain_trace_journal?: boolean
   capture_packets: boolean
   collect_cdp: boolean
   collect_netlog: boolean
@@ -354,6 +355,25 @@ export interface PipelineListEntry {
 }
 
 export interface PipelineManifest {
+  aggregate?: {
+    pipeline_id: string
+    updated_at: string
+    planned_cells: number
+    terminal_cells: number
+    candidates: Array<{
+      candidate_ordinal: number
+      cells_planned: number
+      cells_terminal: number
+      completed: number
+      degraded: number
+      failed: number
+      interrupted: number
+      cancelled: number
+      capture_integrity: Omit<PipelineQualityPlane, 'state'>
+      correlation: Omit<PipelineQualityPlane, 'state'>
+      application: Omit<PipelineQualityPlane, 'state'>
+    }>
+  }
   cleanup?: {
     state: 'running' | 'completed' | 'warning'
     updated_at: string
@@ -604,6 +624,7 @@ export interface SessionArtifact {
   path: string
   media_type: string
   size_bytes: number
+  size_semantics?: 'exact' | 'as_of' | null
   sha256?: string | null
   created_at?: string | null
 }

@@ -18,6 +18,7 @@ import { TrafficTracerBatchProgress } from '@/components/traffic-tracer/batch-pr
 import { TrafficTracerCaptureForm } from '@/components/traffic-tracer/capture-form'
 import { TrafficTracerFlowQueryForm } from '@/components/traffic-tracer/flow-query-form'
 import { TrafficTracerJobProgress } from '@/components/traffic-tracer/job-progress'
+import PipelineQualityOverview from '@/components/traffic-tracer/pipeline-quality-overview'
 import { TrafficTracerPipelineQueue } from '@/components/traffic-tracer/pipeline-queue'
 import {
   PIPELINE_MODE_STORAGE_KEY,
@@ -721,12 +722,14 @@ const TrafficTracerPage = () => {
                 </Alert>
               )}
             <Box>
-              {pipeline.state} · {pipeline.stage.replaceAll('_', ' ')} · run{' '}
+              {pipeline.state} · {pipeline.stage.replaceAll('_', ' ')} ·{' '}
+              {pipelineActive ? 'Current task' : 'Last task'}{' '}
               {pipeline.current_run_index !== null
                 ? pipeline.current_run_index + 1
                 : (displayedPipelineRun?.ordinal ?? 0)}
               /{pipeline.runs.length}
             </Box>
+            <PipelineQualityOverview pipeline={pipeline} />
             <Box sx={{ opacity: 0.8 }}>
               Captured {capturedCellCount}/{pipeline.runs.length} cells ·
               analyzed {analyzedCellCount}/{pipeline.runs.length}
@@ -753,196 +756,221 @@ const TrafficTracerPage = () => {
             <Box sx={{ opacity: 0.65, overflowWrap: 'anywhere' }}>
               {pipelineLocator?.output_root}
             </Box>
-            {displayedPipelineRun && (
-              <Stack spacing={0.5} sx={{ mt: 0.75 }}>
-                <Box sx={{ opacity: 0.8 }}>
-                  Candidate {displayedPipelineRun.candidate_ordinal}/
-                  {Math.max(
-                    ...pipeline.runs.map((run) => run.candidate_ordinal),
-                  )}{' '}
-                  · repetition {displayedPipelineRun.repetition_index}/
-                  {displayedPipelineRun.repetition_total}
-                </Box>
-                <Box sx={{ opacity: 0.8 }}>
-                  {displayedPipelineRun.profile_uid} ·{' '}
-                  {displayedPipelineRun.selection_group} ·{' '}
-                  {displayedPipelineRun.requested_node}
-                </Box>
-                <Box sx={{ opacity: 0.8 }}>
-                  Run {displayedPipelineRun.state} ·{' '}
-                  {displayedPipelineRun.stage.replaceAll('_', ' ')}
-                  {pipelineElapsedSeconds !== null &&
-                    ` · elapsed ${pipelineElapsedSeconds}s`}
-                </Box>
-                <Box sx={{ opacity: 0.65 }}>
-                  Last durable checkpoint:{' '}
-                  {new Date(pipeline.updated_at).toLocaleString()}
-                </Box>
-                {displayedPipelineRun.profile_bound_at && (
-                  <Box sx={{ opacity: 0.8, overflowWrap: 'anywhere' }}>
-                    Configuration snapshot:{' '}
-                    {displayedPipelineRun.profile_fingerprint_kind.replaceAll(
-                      '_',
-                      ' ',
-                    )}{' '}
-                    · {displayedPipelineRun.profile_fingerprint.slice(0, 12)} ·{' '}
-                    {new Date(
-                      displayedPipelineRun.profile_bound_at,
-                    ).toLocaleString()}
-                    {displayedPipelineRun.profile_snapshot_changed &&
-                      ' · rebound from queued snapshot'}
+            <details
+              key={`${pipeline.pipeline_id}:${pipelineActive}`}
+              open={pipelineActive}
+            >
+              <summary>
+                {pipelineActive
+                  ? 'Current sample details'
+                  : 'Last sample details (not whole pipeline quality)'}
+              </summary>
+              {displayedPipelineRun && (
+                <Stack spacing={0.5} sx={{ mt: 0.75 }}>
+                  <Box sx={{ opacity: 0.8 }}>
+                    Node #{displayedPipelineRun.candidate_ordinal} ·{' '}
+                    {displayedPipelineRun.observed_protocol ||
+                      displayedPipelineRun.expected_protocol ||
+                      'protocol not observed'}{' '}
+                    · repetition {displayedPipelineRun.repetition_index}/
+                    {displayedPipelineRun.repetition_total}
                   </Box>
-                )}
-                {displayedPipelineRun.evidence?.profile_activation && (
-                  <Box sx={{ opacity: 0.8, overflowWrap: 'anywhere' }}>
-                    Profile activation:{' '}
-                    {displayedPipelineRun.evidence.profile_activation.last_completed_step.replaceAll(
-                      '_',
-                      ' ',
-                    )}
-                    {' · '}
-                    {displayedPipelineRun.evidence.profile_activation
-                      .source_profile_uid ?? 'none'}
-                    {' → '}
-                    {
-                      displayedPipelineRun.evidence.profile_activation
-                        .target_profile_uid
-                    }
-                    {displayedPipelineRun.evidence.profile_activation
-                      .resumed_from_committed_state &&
-                      ' · resumed from committed Profile'}
+                  <Box sx={{ opacity: 0.8 }}>
+                    {displayedPipelineRun.profile_uid} ·{' '}
+                    {displayedPipelineRun.selection_group} ·{' '}
+                    {displayedPipelineRun.requested_node}
                   </Box>
-                )}
-              </Stack>
-            )}
-            {displayedBatch && (
-              <Box sx={{ mt: 1 }}>
-                <Typography variant="body2">
-                  Target{' '}
-                  {Math.min(
-                    (displayedBatchIndex ?? displayedBatch.targets.length - 1) +
-                      1,
-                    displayedBatch.targets.length,
+                  <Box sx={{ opacity: 0.8 }}>
+                    Run {displayedPipelineRun.state} ·{' '}
+                    {displayedPipelineRun.stage.replaceAll('_', ' ')}
+                    {pipelineElapsedSeconds !== null &&
+                      ` · elapsed ${pipelineElapsedSeconds}s`}
+                  </Box>
+                  <Box sx={{ opacity: 0.65 }}>
+                    Last durable checkpoint:{' '}
+                    {new Date(pipeline.updated_at).toLocaleString()}
+                  </Box>
+                  {displayedPipelineRun.profile_bound_at && (
+                    <Box sx={{ opacity: 0.8, overflowWrap: 'anywhere' }}>
+                      Configuration snapshot:{' '}
+                      {displayedPipelineRun.profile_fingerprint_kind.replaceAll(
+                        '_',
+                        ' ',
+                      )}{' '}
+                      · {displayedPipelineRun.profile_fingerprint.slice(0, 12)}{' '}
+                      ·{' '}
+                      {new Date(
+                        displayedPipelineRun.profile_bound_at,
+                      ).toLocaleString()}
+                      {displayedPipelineRun.profile_snapshot_changed &&
+                        ' · rebound from queued snapshot'}
+                    </Box>
                   )}
-                  /{displayedBatch.targets.length} ·{' '}
-                  {displayedBatch.stage.replaceAll('_', ' ')} · attempt{' '}
-                  {displayedBatch.resume.attempt + 1}
-                </Typography>
-                {displayedTarget && (
-                  <Typography
-                    variant="body2"
-                    title={displayedTarget.url}
-                    sx={{ overflowWrap: 'anywhere', opacity: 0.8 }}
-                  >
-                    {displayedTarget.domain} — {displayedTarget.url}
+                  {displayedPipelineRun.evidence?.profile_activation && (
+                    <Box sx={{ opacity: 0.8, overflowWrap: 'anywhere' }}>
+                      Profile activation:{' '}
+                      {displayedPipelineRun.evidence.profile_activation.last_completed_step.replaceAll(
+                        '_',
+                        ' ',
+                      )}
+                      {' · '}
+                      {displayedPipelineRun.evidence.profile_activation
+                        .source_profile_uid ?? 'none'}
+                      {' → '}
+                      {
+                        displayedPipelineRun.evidence.profile_activation
+                          .target_profile_uid
+                      }
+                      {displayedPipelineRun.evidence.profile_activation
+                        .resumed_from_committed_state &&
+                        ' · resumed from committed Profile'}
+                    </Box>
+                  )}
+                </Stack>
+              )}
+              {displayedBatch && (
+                <Box sx={{ mt: 1 }}>
+                  <Typography variant="body2">
+                    Target{' '}
+                    {Math.min(
+                      (displayedBatchIndex ??
+                        displayedBatch.targets.length - 1) + 1,
+                      displayedBatch.targets.length,
+                    )}
+                    /{displayedBatch.targets.length} ·{' '}
+                    {displayedBatch.stage.replaceAll('_', ' ')} · attempt{' '}
+                    {displayedBatch.resume.attempt + 1}
                   </Typography>
-                )}
-              </Box>
-            )}
-            {displayedPipelineRun?.quality && (
-              <Stack
-                direction="row"
-                spacing={0.75}
-                useFlexGap
-                sx={{ mt: 1, flexWrap: 'wrap' }}
-              >
-                {(
-                  [
-                    ['Capture', displayedPipelineRun.quality.capture_integrity],
-                    ['Correlation', displayedPipelineRun.quality.correlation],
-                    ['Application', displayedPipelineRun.quality.application],
-                  ] as const
-                ).map(([label, quality]) => (
-                  <Chip
-                    key={label}
-                    size="small"
-                    label={`${label}: ${quality.state.replaceAll('_', ' ')}`}
-                    color={
-                      quality.state === 'failed'
-                        ? 'error'
-                        : quality.state === 'degraded' ||
-                            quality.state === 'indeterminate'
-                          ? 'warning'
-                          : quality.state === 'passed'
-                            ? 'success'
-                            : 'default'
-                    }
-                  />
-                ))}
-              </Stack>
-            )}
-            {displayedPipelineRun?.evidence?.drain && (
-              <Box sx={{ mt: 1, opacity: 0.8 }}>
-                Connection drain:{' '}
-                {displayedPipelineRun.evidence.drain.state.replaceAll('_', ' ')}
-                {' · '}
-                {displayedPipelineRun.evidence.drain.initial_connections ?? '?'}
-                {' → '}
-                {displayedPipelineRun.evidence.drain.final_connections ?? '?'}
-                {' · '}
-                {displayedPipelineRun.evidence.drain.quiet_millis}ms quiet
-              </Box>
-            )}
-            {displayedPipelineRun?.evidence?.verification && (
-              <Stack
-                direction="row"
-                spacing={0.75}
-                useFlexGap
-                sx={{ mt: 1, flexWrap: 'wrap' }}
-              >
-                {(
-                  [
-                    [
-                      'Node evidence',
-                      displayedPipelineRun.evidence.verification.node_state,
-                    ],
-                    [
-                      'Protocol evidence',
-                      displayedPipelineRun.evidence.verification.protocol_state,
-                    ],
-                  ] as const
-                ).map(([label, state]) => (
-                  <Chip
-                    key={label}
-                    size="small"
-                    label={`${label}: ${state.replaceAll('_', ' ')}`}
-                    color={
-                      state === 'node_drift' || state === 'protocol_mismatch'
-                        ? 'error'
-                        : state === 'observation_unavailable'
-                          ? 'warning'
-                          : 'success'
-                    }
-                  />
-                ))}
-              </Stack>
-            )}
-            {displayedPipelineRun?.evidence?.verification?.details.map(
-              (detail) => (
-                <Box key={detail} sx={{ mt: 0.5, opacity: 0.75 }}>
-                  {detail}
+                  {displayedTarget && (
+                    <Typography
+                      variant="body2"
+                      title={displayedTarget.url}
+                      sx={{ overflowWrap: 'anywhere', opacity: 0.8 }}
+                    >
+                      {displayedTarget.domain} — {displayedTarget.url}
+                    </Typography>
+                  )}
                 </Box>
-              ),
-            )}
-            {displayedPipelineRun?.quality?.application_issues.map((issue) => (
-              <Box
-                key={`${issue.session_id}:${issue.target_url}`}
-                sx={{ mt: 1, overflowWrap: 'anywhere' }}
-              >
-                Application {issue.state}: {issue.reason ?? 'unknown outcome'}
-                {issue.primary_content_millis !== null &&
-                  issue.desired_primary_seconds !== null &&
-                  ` · ${(issue.primary_content_millis / 1000).toFixed(3)}/${issue.desired_primary_seconds}s primary content`}
-                {issue.final_status != null && (
-                  <Box sx={{ opacity: 0.7 }}>
-                    Final HTTP status: {issue.final_status}
+              )}
+              {displayedPipelineRun?.quality && (
+                <Stack
+                  direction="row"
+                  spacing={0.75}
+                  useFlexGap
+                  sx={{ mt: 1, flexWrap: 'wrap' }}
+                >
+                  {(
+                    [
+                      [
+                        'Capture',
+                        displayedPipelineRun.quality.capture_integrity,
+                      ],
+                      ['Correlation', displayedPipelineRun.quality.correlation],
+                      ['Application', displayedPipelineRun.quality.application],
+                    ] as const
+                  ).map(([label, quality]) => (
+                    <Chip
+                      key={label}
+                      size="small"
+                      label={`Sample ${label}: ${quality.state.replaceAll('_', ' ')}`}
+                      color={
+                        quality.state === 'failed'
+                          ? 'error'
+                          : quality.state === 'degraded' ||
+                              quality.state === 'indeterminate'
+                            ? 'warning'
+                            : quality.state === 'passed'
+                              ? 'success'
+                              : 'default'
+                      }
+                    />
+                  ))}
+                </Stack>
+              )}
+              {displayedPipelineRun?.evidence?.drain && (
+                <Box sx={{ mt: 1, opacity: 0.8 }}>
+                  Connection drain:{' '}
+                  {displayedPipelineRun.evidence.drain.state.replaceAll(
+                    '_',
+                    ' ',
+                  )}
+                  {' · '}
+                  {displayedPipelineRun.evidence.drain.initial_connections ??
+                    '?'}
+                  {' → '}
+                  {displayedPipelineRun.evidence.drain.final_connections ?? '?'}
+                  {' · '}
+                  {displayedPipelineRun.evidence.drain.quiet_millis}ms quiet
+                </Box>
+              )}
+              {displayedPipelineRun?.evidence?.verification && (
+                <Stack
+                  direction="row"
+                  spacing={0.75}
+                  useFlexGap
+                  sx={{ mt: 1, flexWrap: 'wrap' }}
+                >
+                  {(
+                    [
+                      [
+                        'Node evidence',
+                        displayedPipelineRun.evidence.verification.node_state,
+                      ],
+                      [
+                        'Protocol evidence',
+                        displayedPipelineRun.evidence.verification
+                          .protocol_state,
+                      ],
+                    ] as const
+                  ).map(([label, state]) => (
+                    <Chip
+                      key={label}
+                      size="small"
+                      label={`${label}: ${state.replaceAll('_', ' ')}`}
+                      color={
+                        state === 'node_drift' || state === 'protocol_mismatch'
+                          ? 'error'
+                          : state === 'observation_unavailable'
+                            ? 'warning'
+                            : 'success'
+                      }
+                    />
+                  ))}
+                </Stack>
+              )}
+              {displayedPipelineRun?.evidence?.verification?.details.map(
+                (detail) => (
+                  <Box key={detail} sx={{ mt: 0.5, opacity: 0.75 }}>
+                    {detail}
                   </Box>
-                )}
-                {issue.final_url && issue.final_url !== issue.target_url && (
-                  <Box sx={{ opacity: 0.7 }}>Final URL: {issue.final_url}</Box>
-                )}
-              </Box>
-            ))}
+                ),
+              )}
+              {displayedPipelineRun?.quality?.application_issues.map(
+                (issue) => (
+                  <Box
+                    key={`${issue.session_id}:${issue.target_url}`}
+                    sx={{ mt: 1, overflowWrap: 'anywhere' }}
+                  >
+                    Application {issue.state}:{' '}
+                    {issue.reason ?? 'unknown outcome'}
+                    {issue.primary_content_millis !== null &&
+                      issue.desired_primary_seconds !== null &&
+                      ` · ${(issue.primary_content_millis / 1000).toFixed(3)}/${issue.desired_primary_seconds}s primary content`}
+                    {issue.final_status != null && (
+                      <Box sx={{ opacity: 0.7 }}>
+                        Final HTTP status: {issue.final_status}
+                      </Box>
+                    )}
+                    {issue.final_url &&
+                      issue.final_url !== issue.target_url && (
+                        <Box sx={{ opacity: 0.7 }}>
+                          Final URL: {issue.final_url}
+                        </Box>
+                      )}
+                  </Box>
+                ),
+              )}
+            </details>
             {pipeline.cleanup && pipeline.cleanup.state !== 'completed' && (
               <Alert
                 severity={

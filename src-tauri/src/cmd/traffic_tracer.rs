@@ -717,6 +717,7 @@ struct TargetConfigPathParams<'a> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CaptureOptions {
+    pub retain_trace_journal: bool,
     pub capture_packets: bool,
     pub collect_cdp: bool,
     pub collect_netlog: bool,
@@ -732,6 +733,7 @@ pub struct CaptureOptions {
 impl Default for CaptureOptions {
     fn default() -> Self {
         Self {
+            retain_trace_journal: true,
             capture_packets: true,
             collect_cdp: true,
             collect_netlog: true,
@@ -4072,7 +4074,7 @@ fn active_pipeline_matches(pipeline_id: &str) -> bool {
 }
 
 #[tauri::command]
-pub fn tt_pipeline_status(pipeline_root: String) -> CmdResult<PipelineManifest> {
+pub fn tt_pipeline_status(pipeline_root: String) -> CmdResult<serde_json::Value> {
     let root = PathBuf::from(pipeline_root);
     if !root.is_absolute() {
         return Err("pipeline_root must be absolute".into());
@@ -4084,7 +4086,10 @@ pub fn tt_pipeline_status(pipeline_root: String) -> CmdResult<PipelineManifest> 
     {
         manifest.persist().stringify_err()?;
     }
-    Ok(manifest)
+    let aggregate = manifest.aggregate();
+    let mut response = serde_json::to_value(&manifest).stringify_err()?;
+    response["aggregate"] = serde_json::to_value(aggregate).stringify_err()?;
+    Ok(response)
 }
 
 #[tauri::command]
@@ -4694,6 +4699,8 @@ pub struct SessionArtifact {
     pub path: String,
     pub media_type: String,
     pub size_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_semantics: Option<String>,
     #[serde(default)]
     pub sha256: Option<String>,
     #[serde(default)]
@@ -5430,6 +5437,7 @@ mod session_tests {
             path: "../outside.html".to_owned(),
             media_type: "text/html".to_owned(),
             size_bytes: 1,
+            size_semantics: None,
             sha256: None,
             created_at: None,
         };
@@ -5463,6 +5471,7 @@ mod session_tests {
                 path,
                 media_type: "application/json".into(),
                 size_bytes: 2,
+                size_semantics: None,
                 sha256: None,
                 created_at: None,
             });
@@ -5565,6 +5574,16 @@ mod session_tests {
 #[cfg(test)]
 mod capture_tests {
     use super::*;
+
+    #[test]
+    fn journal_retention_defaults_on_and_explicit_false_roundtrips() {
+        let defaults: CaptureOptions = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(defaults.retain_trace_journal);
+        let options: CaptureOptions =
+            serde_json::from_value(serde_json::json!({"retain_trace_journal": false})).unwrap();
+        assert!(!options.retain_trace_journal);
+        assert_eq!(serde_json::to_value(options).unwrap()["retain_trace_journal"], false);
+    }
 
     #[test]
     fn semantic_runtime_fingerprint_ignores_mapping_order_and_formatting() {

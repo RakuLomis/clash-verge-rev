@@ -126,6 +126,22 @@ const flow: FlowRecord = {
 }
 
 describe('TrafficTracer Complete workspace', () => {
+  it('defaults journal retention on and persists an explicit opt-out', async () => {
+    const user = userEvent.setup()
+    const first = render(
+      <TrafficTracerCaptureForm onDiagnose={vi.fn()} onSubmit={vi.fn()} />,
+    )
+    const checkbox = screen.getByLabelText('Keep uncompressed trace journal')
+    expect(checkbox).toBeChecked()
+    await user.click(checkbox)
+    expect(checkbox).not.toBeChecked()
+    first.unmount()
+    render(<TrafficTracerCaptureForm onDiagnose={vi.fn()} onSubmit={vi.fn()} />)
+    expect(
+      screen.getByLabelText('Keep uncompressed trace journal'),
+    ).not.toBeChecked()
+  })
+
   it('uses the persisted Verge workspace and does not mirror it to localStorage', async () => {
     localStorage.setItem(
       'traffictracer.captureForm.v1',
@@ -484,6 +500,7 @@ describe('TrafficTracer Complete workspace', () => {
           options: {
             ...defaultCaptureFormDraft.options,
             analyze_after_capture: false,
+            retain_trace_journal: false,
           },
         },
         preview,
@@ -492,7 +509,7 @@ describe('TrafficTracer Complete workspace', () => {
     ).toMatchObject({
       config_sha256: 'b'.repeat(64),
       targets: [{ index: 4 }, { index: 12 }],
-      options: { analyze_after_capture: true },
+      options: { analyze_after_capture: true, retain_trace_journal: false },
       fail_fast: false,
       application_retry: { enabled: true, max_retries: 1 },
     })

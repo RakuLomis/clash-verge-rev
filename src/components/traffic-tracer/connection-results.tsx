@@ -24,6 +24,8 @@ import type {
   RequestIndexRecord,
 } from '@/types/traffic-tracer'
 
+import { CorrelationEvidence } from './correlation-evidence'
+
 export interface TrafficTracerConnectionResultsProps {
   summary?: CoverageSummary
   requests: RequestIndexRecord[]
@@ -298,6 +300,7 @@ export function TrafficTracerConnectionResults({
   )
   return (
     <Stack spacing={2} data-testid="traffic-tracer-connection-results">
+      <CorrelationEvidence coverage={summary?.coverage} requests={requests} />
       {localEndpointCount > 0 && (
         <Alert severity="info">
           Local endpoint probes: {localEndpointCount} · pre-proxy evidence

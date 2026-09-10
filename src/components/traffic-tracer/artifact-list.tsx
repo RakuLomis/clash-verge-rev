@@ -87,6 +87,8 @@ export function TrafficTracerArtifactList({
                     artifact.size_bytes,
                     t('settings.trafficTracer.sessions.unknownSize'),
                   )}
+                  {artifact.size_semantics === 'as_of' &&
+                    ' recorded · append-only journal may grow'}
                 </Typography>
               </Stack>
             </Stack>

@@ -112,6 +112,7 @@ export const defaultCaptureFormDraft: CaptureFormDraft = {
     proxy_protocol_mode: 'observe',
     expected_proxy_protocol: '',
     proxy_selection_group: '',
+    retain_trace_journal: true,
   },
 }
 
