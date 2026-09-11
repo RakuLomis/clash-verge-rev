@@ -861,6 +861,14 @@ const TrafficTracerPage = () => {
                 >
                   {(
                     [
+                      ...(displayedPipelineRun.quality.local_runtime
+                        ? ([
+                            [
+                              'Local runtime',
+                              displayedPipelineRun.quality.local_runtime,
+                            ],
+                          ] as const)
+                        : []),
                       [
                         'Capture',
                         displayedPipelineRun.quality.capture_integrity,
@@ -953,6 +961,10 @@ const TrafficTracerPage = () => {
                   >
                     Application {issue.state}:{' '}
                     {issue.reason ?? 'unknown outcome'}
+                    {issue.origin &&
+                      ` · source ${issue.origin.replaceAll('_', ' ')}`}
+                    {issue.retryable != null &&
+                      ` · ${issue.retryable ? 'retryable' : 'not retryable'}`}
                     {issue.primary_content_millis !== null &&
                       issue.desired_primary_seconds !== null &&
                       ` · ${(issue.primary_content_millis / 1000).toFixed(3)}/${issue.desired_primary_seconds}s primary content`}

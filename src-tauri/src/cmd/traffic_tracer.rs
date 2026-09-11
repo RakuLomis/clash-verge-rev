@@ -2114,7 +2114,10 @@ fn run_quality_requires_attention(quality: &PipelineRunQuality) -> bool {
     ) || matches!(
         quality.application.state.as_str(),
         "failed" | "degraded" | "indeterminate"
-    )
+    ) || quality
+        .local_runtime
+        .as_ref()
+        .is_some_and(|plane| matches!(plane.state.as_str(), "failed" | "degraded" | "indeterminate"))
 }
 
 fn pipeline_run_quality(output_path: &Path, effective_sessions: Option<&HashSet<String>>) -> PipelineRunQuality {
@@ -2142,6 +2145,7 @@ fn pipeline_run_quality(output_path: &Path, effective_sessions: Option<&HashSet<
     let mut summaries = Vec::new();
     scan(output_path, 0, &mut summaries);
     summaries.sort();
+    let mut local_runtime = QualityCounts::default();
     let mut capture = QualityCounts::default();
     let mut correlation = QualityCounts::default();
     let mut application = QualityCounts::default();
@@ -2157,6 +2161,7 @@ fn pipeline_run_quality(output_path: &Path, effective_sessions: Option<&HashSet<
                 continue;
             }
             sessions_total += 1;
+            local_runtime.observe(None, true);
             capture.observe(None, true);
             correlation.observe(None, true);
             application.observe(None, true);
@@ -2171,6 +2176,10 @@ fn pipeline_run_quality(output_path: &Path, effective_sessions: Option<&HashSet<
             continue;
         }
         sessions_total += 1;
+        local_runtime.observe(
+            value.pointer("/local_runtime/state").and_then(Value::as_str),
+            value.get("local_runtime").is_some(),
+        );
         capture.observe(
             value
                 .pointer("/analysis_integrity/page_attributed/state")
@@ -2216,6 +2225,11 @@ fn pipeline_run_quality(output_path: &Path, effective_sessions: Option<&HashSet<
                 .and_then(|item| item.get("reason"))
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            origin: scenario
+                .and_then(|item| item.get("origin"))
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            retryable: scenario.and_then(|item| item.get("retryable")).and_then(Value::as_bool),
             primary_content_millis,
             desired_primary_seconds: scenario
                 .and_then(|item| item.get("desired_primary_seconds"))
@@ -2224,12 +2238,14 @@ fn pipeline_run_quality(output_path: &Path, effective_sessions: Option<&HashSet<
     }
 
     if sessions_total == 0 {
+        local_runtime.observe(None, true);
         capture.observe(None, true);
         correlation.observe(None, true);
         application.observe(None, true);
     }
     PipelineRunQuality {
         sessions_total,
+        local_runtime: Some(local_runtime.finish()),
         capture_integrity: capture.finish(),
         correlation: correlation.finish(),
         application: application.finish(),
@@ -3783,7 +3799,8 @@ fn matrix_application_retry_required(run: &crate::core::traffic_tracer::pipeline
         quality.application_issues.iter().any(|issue| {
             let eligible_state = matches!(issue.state.as_str(), "failed" | "indeterminate")
                 || (issue.state == "degraded" && issue.reason.as_deref() == Some("CRITICAL_RESOURCE_FAILURE_BURST"));
-            eligible_state && issue.reason.as_deref().is_some_and(|reason| REASONS.contains(&reason))
+            let legacy_retryable = issue.reason.as_deref().is_some_and(|reason| REASONS.contains(&reason));
+            eligible_state && issue.retryable.unwrap_or(legacy_retryable)
         })
     })
 }
@@ -5718,6 +5735,7 @@ mod capture_tests {
             "youtube-good",
             serde_json::json!({
                 "session_id": "session-good",
+                "local_runtime": {"state": "passed"},
                 "quality_state": "passed",
                 "analysis_integrity": {"page_attributed": {"state": "passed"}},
                 "scenario_outcome": {
@@ -5732,11 +5750,14 @@ mod capture_tests {
             "youtube-failed",
             serde_json::json!({
                 "session_id": "session-failed",
+                "local_runtime": {"state": "passed"},
                 "quality_state": "passed",
                 "analysis_integrity": {"page_attributed": {"state": "passed"}},
                 "scenario_outcome": {
                     "state": "failed",
                     "reason": "PLAYER_NOT_CREATED",
+                    "origin": "browser_activity",
+                    "retryable": true,
                     "primary_content_seconds": 0.0,
                     "desired_primary_seconds": 25
                 },
@@ -5750,6 +5771,7 @@ mod capture_tests {
             "example",
             serde_json::json!({
                 "session_id": "session-example",
+                "local_runtime": {"state": "passed"},
                 "quality_state": "passed",
                 "analysis_integrity": {"page_attributed": {"state": "passed"}},
                 "activity_outcome": {
@@ -5761,6 +5783,7 @@ mod capture_tests {
 
         let quality = pipeline_run_quality(&root, None);
         assert_eq!(quality.sessions_total, 3);
+        assert_eq!(quality.local_runtime.as_ref().unwrap().state, "passed");
         assert_eq!(quality.capture_integrity.state, "passed");
         assert_eq!(quality.correlation.state, "passed");
         assert_eq!(quality.application.state, "failed");
@@ -5778,6 +5801,11 @@ mod capture_tests {
             Some("https://www.google.com/sorry/")
         );
         assert_eq!(quality.application_issues[0].primary_content_millis, Some(0));
+        assert_eq!(
+            quality.application_issues[0].origin.as_deref(),
+            Some("browser_activity")
+        );
+        assert_eq!(quality.application_issues[0].retryable, Some(true));
         let effective = HashSet::from(["session-good".to_owned(), "session-example".to_owned()]);
         let retried = pipeline_run_quality(&root, Some(&effective));
         assert_eq!(retried.sessions_total, 2);

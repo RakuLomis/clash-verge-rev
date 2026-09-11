@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::schedule::PipelineSchedule;
 
-pub const PIPELINE_SCHEMA_VERSION: u32 = 7;
+pub const PIPELINE_SCHEMA_VERSION: u32 = 8;
 const PIPELINE_MIN_SCHEMA_VERSION: u32 = 1;
 pub const PIPELINE_MANIFEST_NAME: &str = "pipeline-manifest.json";
 pub const PIPELINE_AGGREGATE_NAME: &str = "pipeline-aggregate.json";
@@ -131,6 +131,10 @@ pub struct PipelineApplicationIssue {
     pub final_status: Option<u16>,
     pub state: String,
     pub reason: Option<String>,
+    #[serde(default)]
+    pub origin: Option<String>,
+    #[serde(default)]
+    pub retryable: Option<bool>,
     pub primary_content_millis: Option<u64>,
     pub desired_primary_seconds: Option<u64>,
 }
@@ -139,6 +143,8 @@ pub struct PipelineApplicationIssue {
 #[serde(deny_unknown_fields)]
 pub struct PipelineRunQuality {
     pub sessions_total: usize,
+    #[serde(default)]
+    pub local_runtime: Option<PipelineQualityPlane>,
     pub capture_integrity: PipelineQualityPlane,
     pub correlation: PipelineQualityPlane,
     pub application: PipelineQualityPlane,
@@ -182,6 +188,8 @@ pub struct PipelineCandidateAggregate {
     pub interrupted: usize,
     pub cancelled: usize,
     pub sessions_total: usize,
+    #[serde(default)]
+    pub local_runtime: PipelineAggregateQuality,
     pub capture_integrity: PipelineAggregateQuality,
     pub correlation: PipelineAggregateQuality,
     pub application: PipelineAggregateQuality,
@@ -738,6 +746,7 @@ impl PipelineManifest {
                 interrupted: 0,
                 cancelled: 0,
                 sessions_total: 0,
+                local_runtime: PipelineAggregateQuality::default(),
                 capture_integrity: PipelineAggregateQuality::default(),
                 correlation: PipelineAggregateQuality::default(),
                 application: PipelineAggregateQuality::default(),
@@ -757,6 +766,9 @@ impl PipelineManifest {
                     | PipelineRunState::RetryPending => {}
                 }
                 if let Some(quality) = &run.quality {
+                    if let Some(local_runtime) = &quality.local_runtime {
+                        aggregate.local_runtime.add(local_runtime);
+                    }
                     aggregate.capture_integrity.add(&quality.capture_integrity);
                     aggregate.correlation.add(&quality.correlation);
                     aggregate.application.add(&quality.application);
@@ -765,7 +777,7 @@ impl PipelineManifest {
             candidates.push(aggregate);
         }
         PipelineAggregate {
-            schema_version: 2,
+            schema_version: 3,
             pipeline_id: self.pipeline_id.clone(),
             updated_at: self.updated_at,
             repetitions_per_candidate: self.repetitions_per_candidate,

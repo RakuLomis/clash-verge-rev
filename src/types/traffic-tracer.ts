@@ -262,12 +262,15 @@ export interface PipelineApplicationIssue {
   final_status?: number | null
   state: 'degraded' | 'failed' | 'indeterminate'
   reason: string | null
+  origin?: string | null
+  retryable?: boolean | null
   primary_content_millis: number | null
   desired_primary_seconds: number | null
 }
 
 export interface PipelineRunQuality {
   sessions_total: number
+  local_runtime?: PipelineQualityPlane
   capture_integrity: PipelineQualityPlane
   correlation: PipelineQualityPlane
   application: PipelineQualityPlane
@@ -369,6 +372,7 @@ export interface PipelineManifest {
       failed: number
       interrupted: number
       cancelled: number
+      local_runtime?: Omit<PipelineQualityPlane, 'state'>
       capture_integrity: Omit<PipelineQualityPlane, 'state'>
       correlation: Omit<PipelineQualityPlane, 'state'>
       application: Omit<PipelineQualityPlane, 'state'>
@@ -380,7 +384,7 @@ export interface PipelineManifest {
     message: string | null
     capture_lock_retained: boolean
   }
-  schema_version: 6 | 7
+  schema_version: 6 | 7 | 8
   pipeline_id: string
   state: PipelineState
   stage: PipelineStage
