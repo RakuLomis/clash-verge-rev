@@ -3763,10 +3763,13 @@ async fn execute_pipeline_analysis(
 fn matrix_application_retry_required(run: &crate::core::traffic_tracer::pipeline::PipelineRun) -> bool {
     const REASONS: &[&str] = &[
         "CRITICAL_RESOURCE_FAILURE_BURST",
+        "MAIN_DOCUMENT_CONNECTION_ERROR",
+        "MAIN_DOCUMENT_DNS_ERROR",
         "MAIN_DOCUMENT_NETWORK_ERROR",
         "MAIN_DOCUMENT_NOT_OBSERVED",
         "MAIN_DOCUMENT_RESPONSE_UNKNOWN",
         "MAIN_DOCUMENT_SERVER_ERROR",
+        "MAIN_DOCUMENT_TIMEOUT",
         "MAIN_DOCUMENT_TRANSIENT_HTTP_ERROR",
         "NAVIGATION_COMPLETION_UNCERTAIN",
         "PLAYBACK_STATE_UNKNOWN",

@@ -604,7 +604,7 @@ describe('TrafficTracer Complete workspace', () => {
 
     expect(screen.getByText(/Target 2\/2 · analysis/)).toBeInTheDocument()
     expect(
-      screen.getByText('Playback retry: enabled (max 1 per target) · 1 used'),
+      screen.getByText('Automatic retry: enabled (max 1 per target) · 1 used'),
     ).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Analysis' }))
     expect(

@@ -110,7 +110,7 @@ export function TrafficTracerBatchProgress({
         </Stack>
         <LinearProgress variant="determinate" value={progress} />
         <Typography variant="caption" color="text.secondary">
-          Playback retry:{' '}
+          Automatic retry:{' '}
           {retryEnabled ? 'enabled (max 1 per target)' : 'disabled'}
           {automaticRetries > 0 ? ` · ${automaticRetries} used` : ''}
         </Typography>
@@ -220,9 +220,11 @@ export function TrafficTracerBatchProgress({
                           key={attempt.ordinal}
                           size="small"
                           title={
-                            attempt.application_outcome
-                              ? `${attempt.application_outcome.state}: ${attempt.application_outcome.reason ?? 'no reason'}`
-                              : `Attempt ${attempt.ordinal}`
+                            attempt.error
+                              ? `${attempt.error.code}: ${attempt.error.message}`
+                              : attempt.application_outcome
+                                ? `${attempt.application_outcome.state}: ${attempt.application_outcome.reason ?? 'no reason'}`
+                                : `Attempt ${attempt.ordinal}`
                           }
                           onClick={() => setSessionId(attempt.session_id)}
                         >
