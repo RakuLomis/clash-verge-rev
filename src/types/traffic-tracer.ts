@@ -682,6 +682,7 @@ export interface LayeredCoverage {
   }
   capture_global?: {
     core_logical_flows: LogicalFlowCoverage
+    browser_background_transport_connections?: CoveragePartition
     unmatched_reasons: Record<string, number>
     attribution_scopes?: Record<string, number>
   }
@@ -747,6 +748,13 @@ export interface ConnectionIndexRecord {
   pre_flow: NormalizedFlowTuple
   terminal?: FlowTerminal
   netlog_source_id?: number
+  endpoint_provenance?: {
+    source_id: number
+    source_type: string
+    selection: string
+    evidence: string[]
+    alias_source_ids: number[]
+  }
   mihomo_connection_id?: string
   post_flow: NormalizedFlowTuple | null
   carrier_binding?: CarrierBindingRecord
@@ -862,6 +870,10 @@ export interface AnalysisQuality extends AnalysisPageQuality {
       with_post_flow: number
       missing_post_flow: number
       errors: number
+    }
+    browser_background?: {
+      transport_correlation: CoveragePartition
+      pcap_extraction: AnalysisPageQuality['pcap_extraction']
     }
   }
 }

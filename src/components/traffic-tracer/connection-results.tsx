@@ -680,6 +680,13 @@ export function TrafficTracerConnectionResults({
                           ? ` · attempted ${connection.attempted_protocols.join(', ')}`
                           : ''}
                       </Typography>
+                      {connection.endpoint_provenance && (
+                        <Typography variant="caption" sx={{ display: 'block' }}>
+                          endpoint: {connection.endpoint_provenance.source_type}{' '}
+                          #{connection.endpoint_provenance.source_id} ·{' '}
+                          {connection.endpoint_provenance.selection}
+                        </Typography>
+                      )}
                     </TableCell>
                     <TableCell>
                       {connection.post_flow
