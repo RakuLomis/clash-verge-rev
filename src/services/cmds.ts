@@ -665,6 +665,12 @@ export function getTrafficTracerPipeline(pipelineRoot: string) {
   })
 }
 
+export function reconcileTrafficTracerPipeline(pipelineRoot: string) {
+  return invoke<TrafficTracer.PipelineManifest>('tt_pipeline_reconcile', {
+    pipelineRoot,
+  })
+}
+
 export function interruptTrafficTracerPipeline(pipelineId: string) {
   return invoke<TrafficTracer.PipelineManifest>('tt_pipeline_interrupt', {
     pipelineId,

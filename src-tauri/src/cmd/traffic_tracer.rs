@@ -30,10 +30,10 @@ use crate::{
             manager::{WorkerManager, WorkerManagerState, WorkerRecoveryReport, WorkerRecoveryStatus},
             pipeline::{
                 PIPELINE_FINGERPRINT_SEMANTIC_V2, PIPELINE_MANIFEST_NAME, PIPELINE_MAX_REPETITIONS,
-                PipelineApplicationIssue, PipelineCandidate, PipelineCleanup, PipelineConfigSnapshot,
-                PipelineConnectionDrain, PipelineError, PipelineManifest, PipelinePolicy, PipelineProfileActivation,
-                PipelineProfileActivationStep, PipelineProxySnapshot, PipelineQualityPlane, PipelineRestore,
-                PipelineRestoreCheck, PipelineRunEvidence, PipelineRunQuality, PipelineRunState,
+                PipelineAnalysisGeneration, PipelineApplicationIssue, PipelineCandidate, PipelineCleanup,
+                PipelineConfigSnapshot, PipelineConnectionDrain, PipelineError, PipelineManifest, PipelinePolicy,
+                PipelineProfileActivation, PipelineProfileActivationStep, PipelineProxySnapshot, PipelineQualityPlane,
+                PipelineRestore, PipelineRestoreCheck, PipelineRunEvidence, PipelineRunQuality, PipelineRunState,
                 PipelineRunVerification, PipelineSelection, PipelineStage, PipelineState, PipelineTarget, RestoreState,
             },
             protocol::{JOB_SCHEMA_VERSION, RequestMethod},
@@ -2150,6 +2150,7 @@ fn pipeline_run_quality(output_path: &Path, effective_sessions: Option<&HashSet<
     let mut correlation = QualityCounts::default();
     let mut application = QualityCounts::default();
     let mut application_issues = Vec::new();
+    let mut analysis_generations = Vec::new();
     let mut sessions_total = 0;
 
     for path in &summaries {
@@ -2176,6 +2177,15 @@ fn pipeline_run_quality(output_path: &Path, effective_sessions: Option<&HashSet<
             continue;
         }
         sessions_total += 1;
+        if let (Some(session_id), Some(generation_id)) = (
+            value.get("session_id").and_then(Value::as_str),
+            value.get("analysis_generation_id").and_then(Value::as_str),
+        ) {
+            analysis_generations.push(PipelineAnalysisGeneration {
+                session_id: session_id.to_owned(),
+                generation_id: generation_id.to_owned(),
+            });
+        }
         local_runtime.observe(
             value.pointer("/local_runtime/state").and_then(Value::as_str),
             value.get("local_runtime").is_some(),
@@ -2243,8 +2253,10 @@ fn pipeline_run_quality(output_path: &Path, effective_sessions: Option<&HashSet<
         correlation.observe(None, true);
         application.observe(None, true);
     }
+    analysis_generations.sort_by(|left, right| left.session_id.cmp(&right.session_id));
     PipelineRunQuality {
         sessions_total,
+        analysis_generations,
         local_runtime: Some(local_runtime.finish()),
         capture_integrity: capture.finish(),
         correlation: correlation.finish(),
@@ -4106,6 +4118,74 @@ pub fn tt_pipeline_status(pipeline_root: String) -> CmdResult<serde_json::Value>
     {
         manifest.persist().stringify_err()?;
     }
+    let aggregate = manifest.aggregate();
+    let mut response = serde_json::to_value(&manifest).stringify_err()?;
+    response["aggregate"] = serde_json::to_value(aggregate).stringify_err()?;
+    Ok(response)
+}
+
+#[tauri::command]
+pub async fn tt_pipeline_reconcile(pipeline_root: String) -> CmdResult<serde_json::Value> {
+    let root = PathBuf::from(pipeline_root);
+    if !root.is_absolute() {
+        return Err("pipeline_root must be absolute".into());
+    }
+    if pipeline_runtime().active.lock().is_some() {
+        return Err("cannot reconcile analyses while a TrafficTracer pipeline is active".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || reconcile_pipeline_analyses(root))
+        .await
+        .map_err(|error| format!("pipeline reconciliation task failed: {error}"))?
+}
+
+fn reconcile_pipeline_analyses(root: PathBuf) -> CmdResult<serde_json::Value> {
+    let path = root.join(PIPELINE_MANIFEST_NAME);
+    let mut manifest = PipelineManifest::load(&path).stringify_err()?;
+    if !manifest.state.terminal() {
+        return Err("only a terminal TrafficTracer pipeline can reconcile existing analyses".into());
+    }
+    for run in &mut manifest.runs {
+        let attempts = run
+            .attempts
+            .iter()
+            .map(|attempt| {
+                (
+                    attempt.ordinal,
+                    attempt.session_ids.clone(),
+                    attempt
+                        .evidence
+                        .as_ref()
+                        .and_then(|evidence| evidence.verification.as_ref())
+                        .is_some_and(verification_requires_attention),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (ordinal, session_ids, verification_attention) in attempts {
+            if session_ids.is_empty() {
+                continue;
+            }
+            let effective = session_ids.iter().cloned().collect::<HashSet<_>>();
+            let quality = pipeline_run_quality(&run.output_path, Some(&effective));
+            if quality.sessions_total != effective.len() {
+                return Err(format!(
+                    "PIPELINE_RECONCILE_ANALYSIS_MISSING: run {} attempt {} has {}/{} analysis summaries",
+                    run.ordinal,
+                    ordinal,
+                    quality.sessions_total,
+                    effective.len()
+                )
+                .into());
+            }
+            let state = if run_quality_requires_attention(&quality) || verification_attention {
+                PipelineRunState::Degraded
+            } else {
+                PipelineRunState::Completed
+            };
+            run.reconcile_attempt_quality(ordinal, state, quality).stringify_err()?;
+        }
+    }
+    manifest.finalize_matrix().stringify_err()?;
+    manifest.persist().stringify_err()?;
     let aggregate = manifest.aggregate();
     let mut response = serde_json::to_value(&manifest).stringify_err()?;
     response["aggregate"] = serde_json::to_value(aggregate).stringify_err()?;

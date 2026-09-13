@@ -241,7 +241,36 @@ export interface PipelineRun {
   evidence?: PipelineRunEvidence
   application_retry_attempt: number
   prior_session_ids: string[]
+  attempts: PipelineRunAttempt[]
+  selected_attempt: number | null
   resume_attempt: number
+  started_at: string | null
+  completed_at: string | null
+}
+
+export interface PipelineRunAttempt {
+  ordinal: number
+  state:
+    | 'completed'
+    | 'degraded'
+    | 'failed'
+    | 'interrupted'
+    | 'skipped'
+    | 'cancelled'
+  observed_protocol: string
+  session_ids: string[]
+  batch_id: string | null
+  analysis_job_id?: string
+  quality?: PipelineRunQuality
+  evidence?: PipelineRunEvidence
+  error: { code: string; message: string } | null
+  selected: boolean
+  selection_reason?:
+    | 'only_attempt'
+    | 'latest_attempt_improved_quality'
+    | 'prior_attempt_retained_quality_tie'
+    | 'prior_attempt_retained_retry_regressed'
+    | 'legacy_manifest_projection'
   started_at: string | null
   completed_at: string | null
 }
@@ -270,6 +299,10 @@ export interface PipelineApplicationIssue {
 
 export interface PipelineRunQuality {
   sessions_total: number
+  analysis_generations: {
+    session_id: string
+    generation_id: string
+  }[]
   local_runtime?: PipelineQualityPlane
   capture_integrity: PipelineQualityPlane
   correlation: PipelineQualityPlane
@@ -363,6 +396,7 @@ export interface PipelineManifest {
     updated_at: string
     planned_cells: number
     terminal_cells: number
+    attempts_total: number
     candidates: Array<{
       candidate_ordinal: number
       cells_planned: number
@@ -372,6 +406,8 @@ export interface PipelineManifest {
       failed: number
       interrupted: number
       cancelled: number
+      sessions_total: number
+      attempts_total: number
       local_runtime?: Omit<PipelineQualityPlane, 'state'>
       capture_integrity: Omit<PipelineQualityPlane, 'state'>
       correlation: Omit<PipelineQualityPlane, 'state'>
@@ -384,7 +420,7 @@ export interface PipelineManifest {
     message: string | null
     capture_lock_retained: boolean
   }
-  schema_version: 6 | 7 | 8
+  schema_version: 6 | 7 | 8 | 9
   pipeline_id: string
   state: PipelineState
   stage: PipelineStage

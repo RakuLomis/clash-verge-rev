@@ -196,6 +196,7 @@ mod app_init {
             cmd::tt_pipeline_current_candidate,
             cmd::tt_pipeline_start,
             cmd::tt_pipeline_status,
+            cmd::tt_pipeline_reconcile,
             cmd::tt_pipeline_list,
             cmd::tt_pipeline_resume,
             cmd::tt_pipeline_retry_restore,

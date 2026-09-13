@@ -35,6 +35,7 @@ import {
   getTrafficTracerPipeline,
   interruptTrafficTracerPipeline,
   listTrafficTracerPipelines,
+  reconcileTrafficTracerPipeline,
   retryTrafficTracerPipelineRestore,
   resumeTrafficTracerPipeline,
   startTrafficTracerPipeline,
@@ -490,6 +491,24 @@ const TrafficTracerPage = () => {
     }
   }
 
+  const handleReconcilePipeline = async () => {
+    if (!pipelineLocator || pipelineRequestFenceRef.current.pending) return
+    updatePipelineActionPending(true)
+    try {
+      const reconciled = await reconcileTrafficTracerPipeline(
+        pipelineLocator.output_root,
+      )
+      setPipeline(reconciled)
+      clearStartFailure()
+      showNotice.success('Existing pipeline analyses reconciled.')
+    } catch (error) {
+      recordStartFailure(error, 'pipeline.reconcile')
+      showNotice.error(error)
+    } finally {
+      updatePipelineActionPending(false)
+    }
+  }
+
   const handlePipelineStop = async (cancel: boolean) => {
     if (!pipeline || pipelineRequestFenceRef.current.pending) return
     updatePipelineActionPending(true)
@@ -786,6 +805,20 @@ const TrafficTracerPage = () => {
                     {pipelineElapsedSeconds !== null &&
                       ` · elapsed ${pipelineElapsedSeconds}s`}
                   </Box>
+                  {displayedPipelineRun.selected_attempt !== null &&
+                    displayedPipelineRun.selected_attempt !== undefined && (
+                      <Box sx={{ opacity: 0.8 }}>
+                        Selected attempt #
+                        {displayedPipelineRun.selected_attempt}/
+                        {displayedPipelineRun.attempts?.length ?? 1}
+                        {displayedPipelineRun.attempts?.find(
+                          (attempt) => attempt.selected,
+                        )?.selection_reason &&
+                          ` · ${displayedPipelineRun.attempts
+                            .find((attempt) => attempt.selected)!
+                            .selection_reason!.replaceAll('_', ' ')}`}
+                      </Box>
+                    )}
                   <Box sx={{ opacity: 0.65 }}>
                     Last durable checkpoint:{' '}
                     {new Date(pipeline.updated_at).toLocaleString()}
@@ -982,6 +1015,34 @@ const TrafficTracerPage = () => {
                   </Box>
                 ),
               )}
+              {(displayedPipelineRun?.attempts?.length ?? 0) > 1 && (
+                <details>
+                  <summary>
+                    Attempt history ({displayedPipelineRun!.attempts.length})
+                  </summary>
+                  <Stack spacing={0.5} sx={{ mt: 0.75 }}>
+                    {displayedPipelineRun!.attempts.map((attempt) => (
+                      <Box
+                        key={attempt.ordinal}
+                        sx={{ opacity: attempt.selected ? 1 : 0.72 }}
+                      >
+                        Attempt #{attempt.ordinal} · {attempt.state}
+                        {attempt.selected && ' · selected'}
+                        {' · '}application{' '}
+                        {attempt.quality?.application.state ?? 'unavailable'}
+                        {' · '}capture{' '}
+                        {attempt.quality?.capture_integrity.state ??
+                          'unavailable'}
+                        {' · '}correlation{' '}
+                        {attempt.quality?.correlation.state ?? 'unavailable'}
+                        {' · '}Sessions {attempt.session_ids.length}
+                        {attempt.error &&
+                          ` · ${attempt.error.code}: ${attempt.error.message}`}
+                      </Box>
+                    ))}
+                  </Stack>
+                </details>
+              )}
             </details>
             {pipeline.cleanup && pipeline.cleanup.state !== 'completed' && (
               <Alert
@@ -1060,6 +1121,24 @@ const TrafficTracerPage = () => {
               >
                 Retry restoration
               </Button>
+            )}
+            {pipelineTerminal.has(pipeline.state) && (
+              <Box sx={{ mt: 1 }}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  disabled={
+                    pipelineActionPending || Boolean(captureLock?.locked)
+                  }
+                  onClick={() => void handleReconcilePipeline()}
+                >
+                  Reconcile existing analyses
+                </Button>
+                <Box sx={{ mt: 0.5, opacity: 0.65 }}>
+                  Reads current analysis generations and refreshes attempt
+                  selection. It does not recapture traffic or start analysis.
+                </Box>
+              </Box>
             )}
             {!pipelineTerminal.has(pipeline.state) && (
               <Stack direction="row" spacing={1} sx={{ mt: 1 }}>

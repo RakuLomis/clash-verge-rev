@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::schedule::PipelineSchedule;
 
-pub const PIPELINE_SCHEMA_VERSION: u32 = 8;
+pub const PIPELINE_SCHEMA_VERSION: u32 = 9;
 const PIPELINE_MIN_SCHEMA_VERSION: u32 = 1;
 pub const PIPELINE_MANIFEST_NAME: &str = "pipeline-manifest.json";
 pub const PIPELINE_AGGREGATE_NAME: &str = "pipeline-aggregate.json";
@@ -141,8 +141,17 @@ pub struct PipelineApplicationIssue {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct PipelineAnalysisGeneration {
+    pub session_id: String,
+    pub generation_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PipelineRunQuality {
     pub sessions_total: usize,
+    #[serde(default)]
+    pub analysis_generations: Vec<PipelineAnalysisGeneration>,
     #[serde(default)]
     pub local_runtime: Option<PipelineQualityPlane>,
     pub capture_integrity: PipelineQualityPlane,
@@ -189,6 +198,8 @@ pub struct PipelineCandidateAggregate {
     pub cancelled: usize,
     pub sessions_total: usize,
     #[serde(default)]
+    pub attempts_total: usize,
+    #[serde(default)]
     pub local_runtime: PipelineAggregateQuality,
     pub capture_integrity: PipelineAggregateQuality,
     pub correlation: PipelineAggregateQuality,
@@ -207,6 +218,8 @@ pub struct PipelineAggregate {
     pub terminal_cells: usize,
     pub planned_runs: usize,
     pub terminal_runs: usize,
+    #[serde(default)]
+    pub attempts_total: usize,
     pub candidates: Vec<PipelineCandidateAggregate>,
 }
 
@@ -432,6 +445,10 @@ pub struct PipelineRun {
     pub application_retry_attempt: u8,
     #[serde(default)]
     pub prior_session_ids: Vec<String>,
+    #[serde(default)]
+    pub attempts: Vec<PipelineRunAttempt>,
+    #[serde(default)]
+    pub selected_attempt: Option<u8>,
     pub error: Option<PipelineError>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality: Option<PipelineRunQuality>,
@@ -440,6 +457,226 @@ pub struct PipelineRun {
     pub resume_attempt: u32,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PipelineRunAttempt {
+    pub ordinal: u8,
+    pub state: PipelineRunState,
+    pub observed_protocol: String,
+    #[serde(default)]
+    pub session_ids: Vec<String>,
+    pub batch_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_job_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<PipelineRunQuality>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<PipelineRunEvidence>,
+    pub error: Option<PipelineError>,
+    pub selected: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_reason: Option<String>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+fn quality_state_score(state: &str) -> u8 {
+    match state {
+        "passed" => 5,
+        "degraded" => 4,
+        "not_applicable" => 3,
+        "indeterminate" => 2,
+        "failed" => 1,
+        _ => 0,
+    }
+}
+
+fn attempt_score(attempt: &PipelineRunAttempt) -> (u8, u8, u8, u8, u8, u8) {
+    let quality = attempt.quality.as_ref();
+    let local_runtime = quality
+        .and_then(|item| item.local_runtime.as_ref())
+        .map_or(0, |plane| quality_state_score(&plane.state));
+    let capture_integrity = quality.map_or(0, |item| quality_state_score(&item.capture_integrity.state));
+    let application = quality.map_or(0, |item| quality_state_score(&item.application.state));
+    let main_document_completed = quality.is_some_and(|item| {
+        item.application.state == "passed"
+            || item
+                .application_issues
+                .iter()
+                .any(|issue| issue.final_status.is_some_and(|status| (200..300).contains(&status)))
+    }) as u8;
+    let correlation = quality.map_or(0, |item| quality_state_score(&item.correlation.state));
+    let terminal = match attempt.state {
+        PipelineRunState::Completed => 5,
+        PipelineRunState::Degraded => 4,
+        PipelineRunState::Cancelled | PipelineRunState::Interrupted => 2,
+        PipelineRunState::Failed | PipelineRunState::Skipped => 1,
+        _ => 0,
+    };
+    (
+        local_runtime,
+        capture_integrity,
+        application,
+        main_document_completed,
+        correlation,
+        terminal,
+    )
+}
+
+impl PipelineRun {
+    fn validate_attempt_history(&self) -> Result<()> {
+        if self.attempts.is_empty() {
+            if self.selected_attempt.is_some() {
+                bail!("pipeline run selected_attempt requires attempt history");
+            }
+            return Ok(());
+        }
+        for (index, attempt) in self.attempts.iter().enumerate() {
+            let expected = u8::try_from(index + 1).context("pipeline attempt ordinal overflow")?;
+            if attempt.ordinal != expected {
+                bail!("pipeline attempt ordinals must be contiguous");
+            }
+            if !attempt.state.terminal() {
+                bail!("pipeline attempt history may only contain terminal attempts");
+            }
+        }
+        let selected = self
+            .attempts
+            .iter()
+            .filter(|attempt| attempt.selected)
+            .collect::<Vec<_>>();
+        if selected.len() != 1 {
+            bail!("pipeline attempt history must select exactly one attempt");
+        }
+        let selected = selected[0];
+        if self.selected_attempt != Some(selected.ordinal) {
+            bail!("pipeline selected_attempt does not match attempt history");
+        }
+        if matches!(
+            self.state,
+            PipelineRunState::Completed
+                | PipelineRunState::Degraded
+                | PipelineRunState::Failed
+                | PipelineRunState::Skipped
+        ) && (self.state != selected.state
+            || self.session_ids != selected.session_ids
+            || self.batch_id != selected.batch_id
+            || self.analysis_job_id != selected.analysis_job_id
+            || self.observed_protocol != selected.observed_protocol
+            || self.quality != selected.quality
+            || self.evidence != selected.evidence
+            || self.error != selected.error)
+        {
+            bail!("pipeline terminal run is not a projection of its selected attempt");
+        }
+        Ok(())
+    }
+
+    fn record_attempt(&mut self, state: PipelineRunState, error: Option<PipelineError>, completed_at: DateTime<Utc>) {
+        let ordinal = self.application_retry_attempt.saturating_add(1);
+        let attempt = PipelineRunAttempt {
+            ordinal,
+            state,
+            observed_protocol: self.observed_protocol.clone(),
+            session_ids: self.session_ids.clone(),
+            batch_id: self.batch_id.clone(),
+            analysis_job_id: self.analysis_job_id.clone(),
+            quality: self.quality.clone(),
+            evidence: self.evidence.clone(),
+            error,
+            selected: false,
+            selection_reason: None,
+            started_at: self.started_at,
+            completed_at: Some(completed_at),
+        };
+        if let Some(index) = self.attempts.iter().position(|existing| existing.ordinal == ordinal) {
+            self.attempts[index] = attempt;
+        } else {
+            self.attempts.push(attempt);
+            self.attempts.sort_by_key(|item| item.ordinal);
+        }
+        self.select_best_attempt();
+    }
+
+    fn select_best_attempt(&mut self) {
+        let Some(best_index) = self
+            .attempts
+            .iter()
+            .enumerate()
+            .fold(None, |best: Option<usize>, (index, attempt)| match best {
+                None => Some(index),
+                Some(best_index) if attempt_score(attempt) > attempt_score(&self.attempts[best_index]) => Some(index),
+                Some(best_index) => Some(best_index),
+            })
+        else {
+            self.selected_attempt = None;
+            return;
+        };
+        let latest_ordinal = self.attempts.iter().map(|item| item.ordinal).max().unwrap_or(1);
+        let best_ordinal = self.attempts[best_index].ordinal;
+        let reason = if self.attempts.len() == 1 {
+            "only_attempt"
+        } else if best_ordinal == latest_ordinal {
+            "latest_attempt_improved_quality"
+        } else if attempt_score(&self.attempts[best_index])
+            == self
+                .attempts
+                .iter()
+                .find(|item| item.ordinal == latest_ordinal)
+                .map(attempt_score)
+                .unwrap_or_default()
+        {
+            "prior_attempt_retained_quality_tie"
+        } else {
+            "prior_attempt_retained_retry_regressed"
+        };
+        for attempt in &mut self.attempts {
+            attempt.selected = attempt.ordinal == best_ordinal;
+            attempt.selection_reason = attempt.selected.then(|| reason.to_owned());
+        }
+        let selected = self.attempts[best_index].clone();
+        self.selected_attempt = Some(selected.ordinal);
+        self.state = selected.state;
+        self.stage = PipelineStage::Finished;
+        self.session_ids = selected.session_ids.clone();
+        self.batch_id = selected.batch_id.clone();
+        self.analysis_job_id = selected.analysis_job_id.clone();
+        self.observed_protocol = selected.observed_protocol.clone();
+        self.quality = selected.quality.clone();
+        self.evidence = selected.evidence.clone();
+        self.error = selected.error.clone();
+        self.started_at = selected.started_at;
+        self.completed_at = selected.completed_at;
+        self.prior_session_ids = self
+            .attempts
+            .iter()
+            .filter(|attempt| attempt.ordinal != selected.ordinal)
+            .flat_map(|attempt| attempt.session_ids.iter().cloned())
+            .collect();
+    }
+
+    pub fn reconcile_attempt_quality(
+        &mut self,
+        ordinal: u8,
+        state: PipelineRunState,
+        quality: PipelineRunQuality,
+    ) -> Result<()> {
+        if !matches!(state, PipelineRunState::Completed | PipelineRunState::Degraded) {
+            bail!("reconciled analysis state must be completed or degraded");
+        }
+        let attempt = self
+            .attempts
+            .iter_mut()
+            .find(|attempt| attempt.ordinal == ordinal)
+            .context("pipeline attempt was not found for reconciliation")?;
+        attempt.state = state;
+        attempt.quality = Some(quality);
+        attempt.error = None;
+        self.select_best_attempt();
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -558,6 +795,8 @@ impl PipelineManifest {
                     analysis_job_id: None,
                     application_retry_attempt: 0,
                     prior_session_ids: Vec::new(),
+                    attempts: Vec::new(),
+                    selected_attempt: None,
                     error: None,
                     quality: None,
                     evidence: None,
@@ -673,6 +912,8 @@ impl PipelineManifest {
                         analysis_job_id: None,
                         application_retry_attempt: 0,
                         prior_session_ids: Vec::new(),
+                        attempts: Vec::new(),
+                        selected_attempt: None,
                         output_path: output_root.join("runs").join(format!(
                             "{:04}_repeat-{:02}_target-{:03}_candidate-{:02}_{}",
                             ordinal,
@@ -746,6 +987,7 @@ impl PipelineManifest {
                 interrupted: 0,
                 cancelled: 0,
                 sessions_total: 0,
+                attempts_total: 0,
                 local_runtime: PipelineAggregateQuality::default(),
                 capture_integrity: PipelineAggregateQuality::default(),
                 correlation: PipelineAggregateQuality::default(),
@@ -753,6 +995,7 @@ impl PipelineManifest {
             };
             for run in candidate_runs {
                 aggregate.sessions_total += run.session_ids.len();
+                aggregate.attempts_total += run.attempts.len();
                 match run.state {
                     PipelineRunState::Completed => aggregate.completed += 1,
                     PipelineRunState::Degraded => aggregate.degraded += 1,
@@ -786,6 +1029,7 @@ impl PipelineManifest {
             terminal_cells: self.runs.iter().filter(|run| run.state.terminal()).count(),
             planned_runs: self.runs.len(),
             terminal_runs: self.runs.iter().filter(|run| run.state.terminal()).count(),
+            attempts_total: self.runs.iter().map(|run| run.attempts.len()).sum(),
             candidates,
         }
     }
@@ -837,6 +1081,55 @@ impl PipelineManifest {
         }
         if loaded_schema_version < 7 {
             manifest.schedule = PipelineSchedule::default();
+        }
+        if loaded_schema_version < 9 {
+            for run in &mut manifest.runs {
+                run.attempts.clear();
+                run.selected_attempt = None;
+                let has_current_attempt = !run.session_ids.is_empty() || run.state.terminal();
+                if !run.prior_session_ids.is_empty() {
+                    run.attempts.push(PipelineRunAttempt {
+                        ordinal: 1,
+                        state: PipelineRunState::Degraded,
+                        observed_protocol: run.observed_protocol.clone(),
+                        session_ids: run.prior_session_ids.clone(),
+                        batch_id: None,
+                        analysis_job_id: None,
+                        quality: None,
+                        evidence: None,
+                        error: None,
+                        selected: !has_current_attempt,
+                        selection_reason: (!has_current_attempt).then(|| "legacy_manifest_projection".into()),
+                        started_at: None,
+                        completed_at: None,
+                    });
+                    if !has_current_attempt {
+                        run.selected_attempt = Some(1);
+                    }
+                }
+                if has_current_attempt {
+                    let ordinal = run.application_retry_attempt.saturating_add(1);
+                    run.attempts.push(PipelineRunAttempt {
+                        ordinal,
+                        state: run.state,
+                        observed_protocol: run.observed_protocol.clone(),
+                        session_ids: run.session_ids.clone(),
+                        batch_id: run.batch_id.clone(),
+                        analysis_job_id: run.analysis_job_id.clone(),
+                        quality: run.quality.clone(),
+                        evidence: run.evidence.clone(),
+                        error: run.error.clone(),
+                        selected: true,
+                        selection_reason: Some("legacy_manifest_projection".into()),
+                        started_at: run.started_at,
+                        completed_at: run.completed_at,
+                    });
+                    run.selected_attempt = Some(ordinal);
+                }
+            }
+        }
+        for run in &manifest.runs {
+            run.validate_attempt_history()?;
         }
         let candidate_count = manifest.runs.iter().map(|run| run.candidate_ordinal).max().unwrap_or(0);
         manifest
@@ -1051,10 +1344,15 @@ impl PipelineManifest {
         if self.runs[index].state != PipelineRunState::Analyzing {
             bail!("pipeline analysis is not active");
         }
-        self.runs[index].state = state;
-        self.runs[index].stage = PipelineStage::Finished;
-        self.runs[index].error = error;
-        self.runs[index].completed_at = Some(Utc::now());
+        let completed_at = Utc::now();
+        if matches!(state, PipelineRunState::Interrupted | PipelineRunState::Cancelled) {
+            self.runs[index].state = state;
+            self.runs[index].stage = PipelineStage::Finished;
+            self.runs[index].error = error;
+            self.runs[index].completed_at = Some(completed_at);
+        } else {
+            self.runs[index].record_attempt(state, error, completed_at);
+        }
         self.stage = PipelineStage::Checkpoint;
         self.updated_at = Utc::now();
         Ok(())
@@ -1071,13 +1369,19 @@ impl PipelineManifest {
         if max_retries == 0 || run.application_retry_attempt >= max_retries {
             bail!("pipeline application retry budget is exhausted");
         }
-        run.prior_session_ids.append(&mut run.session_ids);
+        let completed_at = Utc::now();
+        run.record_attempt(PipelineRunState::Degraded, None, completed_at);
+        run.prior_session_ids = run.session_ids.clone();
         run.application_retry_attempt += 1;
         run.state = PipelineRunState::RetryPending;
         run.stage = PipelineStage::CaptureWave;
         run.batch_id = None;
         run.analysis_job_id = None;
+        run.session_ids.clear();
+        run.quality = None;
+        run.evidence = None;
         run.error = None;
+        run.started_at = None;
         run.completed_at = None;
         self.stage = PipelineStage::CaptureWave;
         self.updated_at = Utc::now();
@@ -1125,10 +1429,15 @@ impl PipelineManifest {
         let Some(index) = self.current_run_index.take() else {
             bail!("pipeline has no active run");
         };
-        self.runs[index].state = state;
-        self.runs[index].stage = PipelineStage::Finished;
-        self.runs[index].error = error;
-        self.runs[index].completed_at = Some(Utc::now());
+        let completed_at = Utc::now();
+        if matches!(state, PipelineRunState::Interrupted | PipelineRunState::Cancelled) {
+            self.runs[index].state = state;
+            self.runs[index].stage = PipelineStage::Finished;
+            self.runs[index].error = error;
+            self.runs[index].completed_at = Some(completed_at);
+        } else {
+            self.runs[index].record_attempt(state, error, completed_at);
+        }
         self.stage = PipelineStage::Checkpoint;
         self.updated_at = Utc::now();
         Ok(())
@@ -1291,6 +1600,103 @@ mod tests {
         }
     }
 
+    fn quality(application_state: &str, final_status: Option<u16>) -> PipelineRunQuality {
+        let plane = |state: &str| PipelineQualityPlane {
+            state: state.into(),
+            passed: usize::from(state == "passed"),
+            degraded: usize::from(state == "degraded"),
+            failed: usize::from(state == "failed"),
+            indeterminate: usize::from(state == "indeterminate"),
+            not_applicable: usize::from(state == "not_applicable"),
+        };
+        PipelineRunQuality {
+            sessions_total: 1,
+            analysis_generations: vec![PipelineAnalysisGeneration {
+                session_id: "session".into(),
+                generation_id: "generation".into(),
+            }],
+            local_runtime: Some(plane("passed")),
+            capture_integrity: plane("passed"),
+            correlation: plane("passed"),
+            application: plane(application_state),
+            application_issues: (application_state != "passed")
+                .then(|| PipelineApplicationIssue {
+                    session_id: "session".into(),
+                    target_url: "https://example.com/".into(),
+                    final_url: Some("https://example.com/".into()),
+                    final_status,
+                    state: application_state.into(),
+                    reason: Some("fixture".into()),
+                    origin: Some("remote_network".into()),
+                    retryable: Some(true),
+                    primary_content_millis: None,
+                    desired_primary_seconds: None,
+                })
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    fn single_matrix() -> PipelineManifest {
+        PipelineManifest::create_matrix(
+            "6ea29d49-4f0e-4f9b-8a88-0ad095c50b78".into(),
+            PathBuf::from("/tmp/pipeline"),
+            PipelineConfigSnapshot {
+                path: PathBuf::from("/tmp/sites.yaml"),
+                sha256: "b".repeat(64),
+            },
+            vec![target()],
+            serde_json::json!({}),
+            vec![candidate("one")],
+            vec!["e107516f-335d-42f5-b9f4-f71c081c41e7".into()],
+            1,
+            PipelinePolicy {
+                continue_on_run_failure: true,
+                restore_original_state: true,
+            },
+            PipelineRestore {
+                profile_uid: None,
+                profile_fingerprint: None,
+                terminal_state: None,
+                selections: vec![],
+                checks: vec![],
+                state: RestoreState::Pending,
+                error: None,
+            },
+            PipelineSchedule::matrix(
+                1,
+                1,
+                crate::core::traffic_tracer::schedule::PipelineCandidateOrderPolicy::Fixed,
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn analyzed_initial_for_retry(application_state: &str, final_status: Option<u16>) -> PipelineManifest {
+        let mut manifest = single_matrix();
+        assert_eq!(manifest.begin_next_capture(1).unwrap(), Some(0));
+        manifest.finish_capture(vec!["session-initial".into()]).unwrap();
+        assert_eq!(manifest.begin_next_analysis(1).unwrap(), Some(0));
+        manifest.runs[0].quality = Some(quality(application_state, final_status));
+        manifest.schedule_application_retry(1).unwrap();
+        manifest
+    }
+
+    fn finish_retry(manifest: &mut PipelineManifest, application_state: &str, final_status: Option<u16>) {
+        assert_eq!(manifest.begin_next_capture(1).unwrap(), Some(0));
+        manifest.finish_capture(vec!["session-retry".into()]).unwrap();
+        assert_eq!(manifest.begin_next_analysis(1).unwrap(), Some(0));
+        manifest.runs[0].quality = Some(quality(application_state, final_status));
+        let state = if application_state == "passed" {
+            PipelineRunState::Completed
+        } else {
+            PipelineRunState::Degraded
+        };
+        manifest.finish_analysis(state, None).unwrap();
+    }
+
     #[test]
     fn creates_ordered_runs_and_rejects_duplicate_identity() {
         let build = |candidates| {
@@ -1336,6 +1742,180 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn retry_that_improves_application_quality_becomes_selected() {
+        let mut manifest = analyzed_initial_for_retry("degraded", Some(200));
+        finish_retry(&mut manifest, "passed", Some(200));
+
+        let run = &manifest.runs[0];
+        assert_eq!(run.selected_attempt, Some(2));
+        assert_eq!(run.session_ids, vec!["session-retry"]);
+        assert_eq!(run.prior_session_ids, vec!["session-initial"]);
+        assert_eq!(run.state, PipelineRunState::Completed);
+        assert_eq!(run.attempts.len(), 2);
+        assert_eq!(
+            run.attempts[1].selection_reason.as_deref(),
+            Some("latest_attempt_improved_quality")
+        );
+    }
+
+    #[test]
+    fn retry_that_regresses_to_indeterminate_does_not_replace_initial_attempt() {
+        let mut manifest = analyzed_initial_for_retry("degraded", Some(200));
+        finish_retry(&mut manifest, "indeterminate", None);
+
+        let run = &manifest.runs[0];
+        assert_eq!(run.selected_attempt, Some(1));
+        assert_eq!(run.session_ids, vec!["session-initial"]);
+        assert_eq!(run.prior_session_ids, vec!["session-retry"]);
+        assert_eq!(run.state, PipelineRunState::Degraded);
+        assert_eq!(
+            run.attempts[0].selection_reason.as_deref(),
+            Some("prior_attempt_retained_retry_regressed")
+        );
+    }
+
+    #[test]
+    fn equal_quality_retry_uses_deterministic_earlier_attempt_tie_break() {
+        let mut manifest = analyzed_initial_for_retry("degraded", Some(200));
+        finish_retry(&mut manifest, "degraded", Some(200));
+
+        let run = &manifest.runs[0];
+        assert_eq!(run.selected_attempt, Some(1));
+        assert_eq!(
+            run.attempts[0].selection_reason.as_deref(),
+            Some("prior_attempt_retained_quality_tie")
+        );
+    }
+
+    #[test]
+    fn failed_retry_capture_cannot_replace_analyzed_initial_attempt() {
+        let mut manifest = analyzed_initial_for_retry("degraded", Some(200));
+        assert_eq!(manifest.begin_next_capture(1).unwrap(), Some(0));
+        manifest
+            .finish_run(
+                PipelineRunState::Failed,
+                Some(PipelineError {
+                    code: "RETRY_CAPTURE_FAILED".into(),
+                    message: "fixture".into(),
+                }),
+            )
+            .unwrap();
+
+        let run = &manifest.runs[0];
+        assert_eq!(run.selected_attempt, Some(1));
+        assert_eq!(run.session_ids, vec!["session-initial"]);
+        assert_eq!(run.state, PipelineRunState::Degraded);
+        assert_eq!(run.attempts.len(), 2);
+    }
+
+    #[test]
+    fn interrupted_retry_keeps_current_batch_resumable() {
+        let mut manifest = analyzed_initial_for_retry("degraded", Some(200));
+        assert_eq!(manifest.begin_next_capture(1).unwrap(), Some(0));
+        manifest.runs[0].batch_id = Some("e38c26b7-789c-4aa0-b1bb-e3d5916390af".into());
+        manifest
+            .finish_run(
+                PipelineRunState::Interrupted,
+                Some(PipelineError {
+                    code: "PIPELINE_SUPERVISOR_RESTARTED".into(),
+                    message: "fixture".into(),
+                }),
+            )
+            .unwrap();
+
+        assert_eq!(manifest.runs[0].state, PipelineRunState::Interrupted);
+        assert_eq!(
+            manifest.runs[0].batch_id.as_deref(),
+            Some("e38c26b7-789c-4aa0-b1bb-e3d5916390af")
+        );
+        assert_eq!(manifest.begin_next_capture(1).unwrap(), Some(0));
+        assert_eq!(manifest.runs[0].resume_attempt, 1);
+        assert_eq!(
+            manifest.runs[0].batch_id.as_deref(),
+            Some("e38c26b7-789c-4aa0-b1bb-e3d5916390af")
+        );
+    }
+
+    #[test]
+    fn schema_eight_retry_migrates_and_reconciles_without_double_counting_cell() {
+        let root = std::env::temp_dir().join(format!("traffictracer-pipeline-v8-retry-{}", std::process::id()));
+        let mut manifest = single_matrix();
+        manifest.schema_version = 8;
+        manifest.state = PipelineState::CompletedWithDegraded;
+        manifest.stage = PipelineStage::Finished;
+        let run = &mut manifest.runs[0];
+        run.state = PipelineRunState::Degraded;
+        run.stage = PipelineStage::Finished;
+        run.application_retry_attempt = 1;
+        run.prior_session_ids = vec!["session-initial".into()];
+        run.session_ids = vec!["session-retry".into()];
+        run.quality = Some(quality("indeterminate", None));
+        run.attempts.clear();
+        run.selected_attempt = None;
+        manifest.output_root = root.clone();
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(PIPELINE_MANIFEST_NAME);
+        fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+        let mut loaded = PipelineManifest::load(&path).unwrap();
+        assert_eq!(loaded.schema_version, 9);
+        assert_eq!(loaded.runs[0].attempts.len(), 2);
+        assert_eq!(loaded.runs[0].selected_attempt, Some(2));
+        loaded.runs[0]
+            .reconcile_attempt_quality(1, PipelineRunState::Degraded, quality("degraded", Some(200)))
+            .unwrap();
+        loaded.runs[0]
+            .reconcile_attempt_quality(2, PipelineRunState::Degraded, quality("indeterminate", None))
+            .unwrap();
+
+        let run = &loaded.runs[0];
+        assert_eq!(run.selected_attempt, Some(1));
+        assert_eq!(run.session_ids, vec!["session-initial"]);
+        assert_eq!(run.prior_session_ids, vec!["session-retry"]);
+        assert_eq!(run.quality.as_ref().unwrap().application.state, "degraded");
+        let aggregate = loaded.aggregate();
+        assert_eq!(aggregate.planned_cells, 1);
+        assert_eq!(aggregate.terminal_cells, 1);
+        assert_eq!(aggregate.attempts_total, 2);
+        assert_eq!(aggregate.candidates[0].sessions_total, 1);
+        assert_eq!(aggregate.candidates[0].attempts_total, 2);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn schema_eight_retry_pending_remains_resumable_after_migration() {
+        let root = std::env::temp_dir().join(format!(
+            "traffictracer-pipeline-v8-retry-pending-{}",
+            std::process::id()
+        ));
+        let mut manifest = single_matrix();
+        manifest.schema_version = 8;
+        manifest.state = PipelineState::Interrupted;
+        manifest.stage = PipelineStage::Finished;
+        let run = &mut manifest.runs[0];
+        run.state = PipelineRunState::RetryPending;
+        run.stage = PipelineStage::CaptureWave;
+        run.application_retry_attempt = 1;
+        run.prior_session_ids = vec!["session-initial".into()];
+        run.session_ids.clear();
+        run.quality = None;
+        run.attempts.clear();
+        run.selected_attempt = None;
+        manifest.output_root = root.clone();
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join(PIPELINE_MANIFEST_NAME);
+        fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+        let mut loaded = PipelineManifest::load(&path).unwrap();
+        assert_eq!(loaded.runs[0].selected_attempt, Some(1));
+        assert_eq!(loaded.runs[0].attempts.len(), 1);
+        assert_eq!(loaded.begin_next_capture(1).unwrap(), Some(0));
+        assert_eq!(loaded.runs[0].state, PipelineRunState::Running);
+        assert_eq!(loaded.runs[0].application_retry_attempt, 1);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
