@@ -191,6 +191,15 @@ export function TrafficTracerFlowDetail({
               </Alert>
             )}
 
+            {flow.proxy_semantics && (
+              <Alert severity="info">
+                Runtime adapter {flow.proxy_semantics.adapter_instance_id} ·{' '}
+                protocol {flow.proxy_semantics.protocol} · config generation{' '}
+                {flow.proxy_semantics.config_generation} · snapshot{' '}
+                {flow.proxy_semantics.snapshot_id.slice(0, 19)}…
+              </Alert>
+            )}
+
             <Box>
               <Typography variant="subtitle2" sx={{ mb: 0.75 }}>
                 {t('settings.trafficTracer.flows.detail.correlation')}

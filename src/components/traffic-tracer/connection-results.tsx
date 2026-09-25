@@ -462,6 +462,18 @@ export function TrafficTracerConnectionResults({
               label={`Proxy protocol: expected ${summary.proxy_protocol.expected_protocol || 'auto'} · observed ${summary.proxy_protocol.observed_protocols.join(', ') || 'none'} · ${summary.proxy_protocol.consistency}`}
             />
           )}
+          {summary.proxy_semantics &&
+            summary.proxy_semantics.state !== 'unavailable' && (
+              <Chip
+                variant="outlined"
+                color={
+                  summary.proxy_semantics.state === 'passed'
+                    ? 'success'
+                    : 'warning'
+                }
+                label={`Runtime semantics: ${summary.proxy_semantics.protocol || 'unscoped'} · ${summary.proxy_semantics.state} · coverage ${summary.proxy_semantics.coverage?.status || 'unknown'}`}
+              />
+            )}
           {summary.inbound && (
             <Chip
               variant="outlined"
@@ -716,6 +728,16 @@ export function TrafficTracerConnectionResults({
                           {' · '}
                           {connection.carrier_binding.physical_paths.length}{' '}
                           physical path(s)
+                        </Typography>
+                      )}
+                      {connection.proxy_semantics && (
+                        <Typography
+                          variant="caption"
+                          sx={{ display: 'block', overflowWrap: 'anywhere' }}
+                        >
+                          semantics: {connection.proxy_semantics.protocol} · gen{' '}
+                          {connection.proxy_semantics.config_generation} ·{' '}
+                          {connection.proxy_semantics.adapter_instance_id}
                         </Typography>
                       )}
                       {connection.egress_evidence_kind && (

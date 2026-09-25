@@ -774,6 +774,14 @@ export interface CarrierBindingRecord {
   physical_paths: NormalizedFlowTuple[]
 }
 
+export interface ProxySemanticsReference {
+  snapshot_id: string
+  config_generation: number
+  adapter_instance_id: string
+  protocol: string
+  behavior_fingerprint: string
+}
+
 export type EgressEvidenceKind =
   | 'exclusive_socket'
   | 'shared_carrier'
@@ -808,6 +816,7 @@ export interface ConnectionIndexRecord {
   mihomo_connection_id?: string
   post_flow: NormalizedFlowTuple | null
   carrier_binding?: CarrierBindingRecord
+  proxy_semantics?: ProxySemanticsReference
   shared: boolean
   sharing?: {
     request_multiplexed: boolean
@@ -1014,6 +1023,15 @@ export interface CoverageSummary {
     consistency: string
     proxy_dial_events?: number
   }
+  proxy_semantics?: {
+    state: string
+    protocol?: string
+    config_generation?: number | null
+    adapter_instance_id?: string
+    behavior_fingerprint?: string
+    coverage?: { status?: string }
+    artifact?: string
+  }
   inbound?: {
     mode?: string
     interface?: string
@@ -1118,6 +1136,7 @@ export interface FlowRecord {
   conn_id?: string | null
   outer_conn_id?: string | null
   carrier_binding?: CarrierBindingRecord
+  proxy_semantics?: ProxySemanticsReference
   carrier_state?:
     | 'exclusive_bound'
     | 'shared_bound'
