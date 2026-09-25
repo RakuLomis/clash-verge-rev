@@ -513,6 +513,19 @@ export function TrafficTracerConnectionResults({
               }
             />
           )}
+          {pageQuality?.egress_evidence && (
+            <Chip
+              variant="outlined"
+              color={
+                pageQuality.egress_evidence.carrier_binding_unavailable > 0 ||
+                pageQuality.egress_evidence.carrier_path_unavailable > 0 ||
+                pageQuality.egress_evidence.egress_unavailable > 0
+                  ? 'warning'
+                  : 'success'
+              }
+              label={`Egress evidence: ${pageQuality.egress_evidence.exclusive_socket} exclusive · ${pageQuality.egress_evidence.shared_carrier} shared carrier · ${pageQuality.egress_evidence.carrier_binding_unavailable} binding missing · ${pageQuality.egress_evidence.carrier_path_unavailable} path missing`}
+            />
+          )}
           {pageQuality?.pcap_extraction.requested === false && (
             <Chip
               variant="outlined"
@@ -703,6 +716,11 @@ export function TrafficTracerConnectionResults({
                           {' · '}
                           {connection.carrier_binding.physical_paths.length}{' '}
                           physical path(s)
+                        </Typography>
+                      )}
+                      {connection.egress_evidence_kind && (
+                        <Typography variant="caption" sx={{ display: 'block' }}>
+                          evidence: {connection.egress_evidence_kind}
                         </Typography>
                       )}
                     </TableCell>

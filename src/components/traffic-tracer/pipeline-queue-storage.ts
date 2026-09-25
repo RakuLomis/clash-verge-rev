@@ -1,5 +1,7 @@
 import type { PipelineCandidate } from '@/types/traffic-tracer'
 
+import { pipelineCandidateIdentity } from './pipeline-selector'
+
 export const PIPELINE_QUEUE_STORAGE_KEY = 'traffictracer.pipelineQueue.v2'
 const LEGACY_PIPELINE_QUEUE_STORAGE_KEY = 'traffictracer.pipelineQueue.v1'
 export const PIPELINE_MODE_STORAGE_KEY = 'traffictracer.pipelineMode.v1'
@@ -38,11 +40,7 @@ export function restoredPipelineCandidates(): PipelineCandidate[] {
         !item.requested_node
       )
         return []
-      const identity = [
-        item.profile_uid,
-        item.selection_group,
-        item.requested_node,
-      ].join('::')
+      const identity = pipelineCandidateIdentity(item)
       if (seen.has(identity)) return []
       seen.add(identity)
       return [

@@ -774,6 +774,16 @@ export interface CarrierBindingRecord {
   physical_paths: NormalizedFlowTuple[]
 }
 
+export type EgressEvidenceKind =
+  | 'exclusive_socket'
+  | 'shared_carrier'
+  | 'explicit_no_socket'
+  | 'failed_before_socket'
+  | 'local_not_applicable'
+  | 'carrier_binding_unavailable'
+  | 'carrier_path_unavailable'
+  | 'egress_unavailable'
+
 export interface ConnectionIndexRecord {
   connection_id: string
   protocol: FlowNetwork
@@ -830,6 +840,7 @@ export interface ConnectionIndexRecord {
     | 'capture_unattributed'
     | 'local_internal'
   attribution_evidence?: string[]
+  egress_evidence_kind?: EgressEvidenceKind
   post_flow_disposition?:
     | 'with_post_flow'
     | 'explicit_no_socket'
@@ -888,6 +899,13 @@ export interface AnalysisPageQuality {
     unavailable: number
     not_applicable_local_endpoint?: number
     not_applicable_outcome?: number
+  }
+  egress_evidence?: {
+    exclusive_socket: number
+    shared_carrier: number
+    carrier_binding_unavailable: number
+    carrier_path_unavailable: number
+    egress_unavailable: number
   }
   pcap_extraction: {
     requested: boolean

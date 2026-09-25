@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter as _, Url};
-use tauri_plugin_mihomo::models::Proxies;
+use tauri_plugin_mihomo::models::{Proxies, ProxyType};
 
 use super::{CmdResult, StringifyErr as _};
 use crate::{
@@ -1056,18 +1056,13 @@ pub async fn tt_pipeline_current_candidate(request: PipelineCurrentCandidateRequ
         .get_proxies()
         .await
         .map_err(|error| format!("CONTROLLER_UNAVAILABLE: {error}"))?;
+    validate_pipeline_candidate_runtime(&proxies, &request.selection_group, &request.requested_node)
+        .map_err(|error| error.render())?;
     let group = proxies.proxies.get(request.selection_group.as_str()).ok_or_else(|| {
         smartstring::alias::String::from("pipeline selector group is not present in the active runtime")
     })?;
     if group.now.as_deref() != Some(request.requested_node.as_str()) {
         return Err("pipeline requested node is not the selector's current node".into());
-    }
-    if !group
-        .all
-        .as_ref()
-        .is_some_and(|nodes| nodes.iter().any(|node| node.as_str() == request.requested_node))
-    {
-        return Err("pipeline requested node is not selectable from the runtime group".into());
     }
 
     let profile_fingerprint = effective_runtime_fingerprint()?;
@@ -1641,6 +1636,58 @@ fn normalize_proxy_protocol(value: &str) -> String {
         .filter(|character| !matches!(character, '-' | '_'))
         .flat_map(char::to_lowercase)
         .collect()
+}
+
+fn validate_pipeline_candidate_runtime(
+    proxies: &Proxies,
+    selection_group: &str,
+    requested_node: &str,
+) -> Result<(), PipelineBarrierError> {
+    let group = proxies.proxies.get(selection_group).ok_or_else(|| {
+        PipelineBarrierError::new(
+            "PIPELINE_SELECTOR_NOT_FOUND",
+            format!("selector {selection_group:?} is absent from the active runtime"),
+        )
+    })?;
+    if group.proxy_type != ProxyType::Selector {
+        return Err(PipelineBarrierError::new(
+            "PIPELINE_SELECTOR_TYPE_UNSUPPORTED",
+            format!(
+                "pipeline group {selection_group:?} is {:?}, not a manual Selector",
+                group.proxy_type
+            ),
+        ));
+    }
+    if !group
+        .all
+        .as_ref()
+        .is_some_and(|nodes| nodes.iter().any(|node| node == requested_node))
+    {
+        return Err(PipelineBarrierError::new(
+            "PIPELINE_NODE_NOT_SELECTABLE",
+            format!("queued node {requested_node:?} is not selectable from {selection_group:?}"),
+        ));
+    }
+
+    let requested = proxies.proxies.get(requested_node).ok_or_else(|| {
+        PipelineBarrierError::new(
+            "PIPELINE_NODE_NOT_FOUND",
+            format!("queued node {requested_node:?} is absent from the active runtime"),
+        )
+    })?;
+    if matches!(
+        requested.proxy_type,
+        ProxyType::URLTest | ProxyType::Fallback | ProxyType::LoadBalance
+    ) {
+        return Err(PipelineBarrierError::new(
+            "PIPELINE_NODE_NOT_DETERMINISTIC",
+            format!(
+                "queued node {requested_node:?} is an automatic {:?} group; choose a concrete node",
+                requested.proxy_type
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn proxy_snapshot_from_runtime(
@@ -2645,20 +2692,8 @@ pub async fn tt_pipeline_start(
             .iter()
             .filter(|candidate| candidate.profile_uid == active_profile)
         {
-            let group = proxies.proxies.get(candidate.selection_group.as_str()).ok_or_else(|| {
-                smartstring::alias::String::from(
-                    "PIPELINE_SELECTOR_NOT_FOUND: selector is absent from the active runtime",
-                )
-            })?;
-            if !group
-                .all
-                .as_ref()
-                .is_some_and(|nodes| nodes.iter().any(|node| node == &candidate.requested_node))
-            {
-                return Err(
-                    "PIPELINE_NODE_NOT_SELECTABLE: queued node is absent from the active runtime selector".into(),
-                );
-            }
+            validate_pipeline_candidate_runtime(&proxies, &candidate.selection_group, &candidate.requested_node)
+                .map_err(|error| error.render())?;
         }
     }
     let mut restore_groups = std::collections::HashSet::new();
@@ -2910,17 +2945,8 @@ async fn execute_pipeline_run(
         .get_proxies()
         .await
         .map_err(|error| format!("CONTROLLER_UNAVAILABLE: {error}"))?;
-    let group = proxies
-        .proxies
-        .get(run.selection_group.as_str())
-        .ok_or_else(|| "SELECTOR_NOT_FOUND: selector is absent from the active runtime".to_owned())?;
-    if !group
-        .all
-        .as_ref()
-        .is_some_and(|nodes| nodes.iter().any(|node| node.as_str() == run.requested_node))
-    {
-        return Err("NODE_NOT_SELECTABLE: requested node is absent from selector".into());
-    }
+    validate_pipeline_candidate_runtime(&proxies, &run.selection_group, &run.requested_node)
+        .map_err(|error| error.render())?;
     handle::Handle::mihomo()
         .await
         .select_node_for_group(&run.selection_group, &run.requested_node)
@@ -3537,6 +3563,13 @@ async fn materialize_pipeline_candidate(
         .map_err(|error| error.render())?;
     let fingerprint =
         effective_runtime_fingerprint().map_err(|error| format!("PROFILE_FINGERPRINT_UNAVAILABLE: {error}"))?;
+    let proxies = handle::Handle::mihomo()
+        .await
+        .get_proxies()
+        .await
+        .map_err(|error| format!("CONTROLLER_UNAVAILABLE: {error}"))?;
+    validate_pipeline_candidate_runtime(&proxies, &candidate.selection_group, &candidate.requested_node)
+        .map_err(|error| error.render())?;
     handle::Handle::mihomo()
         .await
         .select_node_for_group(&candidate.selection_group, &candidate.requested_node)
@@ -5735,6 +5768,65 @@ mod capture_tests {
         assert_eq!(snapshot.resolved_chain, ["edge", "leaf"]);
         assert_eq!(snapshot.resolved_leaf, "leaf");
         assert_eq!(snapshot.protocol, "hysteria2");
+    }
+
+    fn pipeline_validation_runtime() -> Proxies {
+        serde_json::from_value(serde_json::json!({
+            "proxies": {
+                "Yu-VPS": {
+                    "name":"Yu-VPS",
+                    "type":"Selector",
+                    "now":"out-vless-tls",
+                    "all":["自动选择", "故障转移", "nested-selector", "out-vless-tls"]
+                },
+                "自动选择": {
+                    "name":"自动选择",
+                    "type":"URLTest",
+                    "now":"out-vless-tls",
+                    "all":["out-vless-tls"]
+                },
+                "故障转移": {
+                    "name":"故障转移",
+                    "type":"Fallback",
+                    "now":"out-vless-tls",
+                    "all":["out-vless-tls"]
+                },
+                "nested-selector": {
+                    "name":"nested-selector",
+                    "type":"Selector",
+                    "now":"out-vless-tls",
+                    "all":["out-vless-tls"]
+                },
+                "out-vless-tls": {"name":"out-vless-tls", "type":"Vless"}
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn pipeline_runtime_validation_accepts_manual_selector_and_concrete_node() {
+        let proxies = pipeline_validation_runtime();
+        assert!(validate_pipeline_candidate_runtime(&proxies, "Yu-VPS", "out-vless-tls").is_ok());
+        assert!(validate_pipeline_candidate_runtime(&proxies, "Yu-VPS", "nested-selector").is_ok());
+    }
+
+    #[test]
+    fn pipeline_runtime_validation_rejects_automatic_groups() {
+        let proxies = pipeline_validation_runtime();
+        let selector_error = validate_pipeline_candidate_runtime(&proxies, "自动选择", "out-vless-tls").unwrap_err();
+        assert_eq!(selector_error.code, "PIPELINE_SELECTOR_TYPE_UNSUPPORTED");
+
+        let url_test_error = validate_pipeline_candidate_runtime(&proxies, "Yu-VPS", "自动选择").unwrap_err();
+        assert_eq!(url_test_error.code, "PIPELINE_NODE_NOT_DETERMINISTIC");
+        let fallback_error = validate_pipeline_candidate_runtime(&proxies, "Yu-VPS", "故障转移").unwrap_err();
+        assert_eq!(fallback_error.code, "PIPELINE_NODE_NOT_DETERMINISTIC");
+    }
+
+    #[test]
+    fn pipeline_runtime_validation_rejects_missing_members() {
+        let proxies = pipeline_validation_runtime();
+        let error = validate_pipeline_candidate_runtime(&proxies, "Yu-VPS", "missing").unwrap_err();
+        assert_eq!(error.code, "PIPELINE_NODE_NOT_SELECTABLE");
     }
 
     #[test]

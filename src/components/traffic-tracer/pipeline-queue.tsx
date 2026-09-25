@@ -6,15 +6,16 @@ import {
   Checkbox,
   FormControlLabel,
   IconButton,
+  MenuItem,
   Paper,
   Stack,
   TextField,
   Typography,
 } from '@mui/material'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
-import { useCurrentProxy } from '@/hooks/use-current-proxy'
 import { useProfiles } from '@/hooks/use-profiles'
+import { useProxiesData } from '@/providers/app-data-context'
 import { snapshotTrafficTracerPipelineCandidate } from '@/services/cmds'
 import { showNotice } from '@/services/notice-service'
 import type { PipelineCandidate } from '@/types/traffic-tracer'
@@ -25,6 +26,11 @@ import {
   PIPELINE_QUEUE_STORAGE_KEY,
   PIPELINE_REPETITIONS_STORAGE_KEY,
 } from './pipeline-queue-storage'
+import {
+  pipelineCandidateIdentity,
+  pipelineCandidateRuntimeIssue,
+  pipelineSelectorGroups,
+} from './pipeline-selector'
 
 interface Props {
   enabled: boolean
@@ -48,8 +54,38 @@ export function TrafficTracerPipelineQueue({
   onChange,
 }: Props) {
   const { current } = useProfiles()
-  const { currentProxy, primaryGroupName } = useCurrentProxy()
+  const { proxies } = useProxiesData()
   const [adding, setAdding] = useState(false)
+  const [selectedSelectors, setSelectedSelectors] = useState<
+    Record<string, string>
+  >({})
+  const selectors = useMemo(() => pipelineSelectorGroups(proxies), [proxies])
+  const rememberedSelector = current?.uid
+    ? selectedSelectors[current.uid]
+    : undefined
+  const selectedSelector =
+    selectors.find((group) => group.name === rememberedSelector) ??
+    (selectors.length === 1 ? selectors[0] : null)
+  const selectionGroup = selectedSelector?.name ?? ''
+  const requestedNode = selectedSelector?.now ?? ''
+  const currentProxy = requestedNode
+    ? proxies?.records?.[requestedNode]
+    : undefined
+  const currentIssue =
+    selectionGroup && requestedNode
+      ? pipelineCandidateRuntimeIssue(proxies, selectionGroup, requestedNode)
+      : null
+  const invalidCurrentCandidates = proxies
+    ? candidates.filter(
+        (candidate) =>
+          candidate.profile_uid === current?.uid &&
+          pipelineCandidateRuntimeIssue(
+            proxies,
+            candidate.selection_group,
+            candidate.requested_node,
+          ) !== null,
+      )
+    : []
 
   const update = (next: PipelineCandidate[]) => {
     localStorage.setItem(PIPELINE_QUEUE_STORAGE_KEY, JSON.stringify(next))
@@ -57,19 +93,19 @@ export function TrafficTracerPipelineQueue({
   }
 
   const addCurrent = async () => {
-    if (!current?.uid || !primaryGroupName || !currentProxy?.name) return
+    if (!current?.uid || !selectionGroup || !requestedNode || currentIssue)
+      return
     setAdding(true)
     try {
       const candidate = await snapshotTrafficTracerPipelineCandidate({
         profile_uid: current.uid,
-        selection_group: primaryGroupName,
-        requested_node: currentProxy.name,
+        selection_group: selectionGroup,
+        requested_node: requestedNode,
       })
       const duplicate = candidates.some(
         (item) =>
-          item.profile_uid === candidate.profile_uid &&
-          item.selection_group === candidate.selection_group &&
-          item.requested_node === candidate.requested_node,
+          pipelineCandidateIdentity(item) ===
+          pipelineCandidateIdentity(candidate),
       )
       if (duplicate) {
         showNotice.info('This Profile, selector and node is already queued.')
@@ -100,7 +136,7 @@ export function TrafficTracerPipelineQueue({
               }}
             />
           }
-          label="Profile / node pipeline"
+          label="Profile / concrete node pipeline"
         />
         <Typography variant="body2" color="text.secondary">
           Queue effective Profile and node pairs. Each repetition captures in
@@ -109,6 +145,86 @@ export function TrafficTracerPipelineQueue({
         </Typography>
         {enabled && (
           <>
+            <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
+              <TextField
+                select
+                size="small"
+                label="Pipeline selector"
+                value={selectedSelector?.name ?? ''}
+                disabled={disabled || selectors.length === 0}
+                onChange={(event) => {
+                  if (!current?.uid) return
+                  setSelectedSelectors((existing) => ({
+                    ...existing,
+                    [current.uid]: event.target.value,
+                  }))
+                }}
+                sx={{ minWidth: 230 }}
+              >
+                {selectors.length > 1 && (
+                  <MenuItem value="" disabled>
+                    Select a manual selector
+                  </MenuItem>
+                )}
+                {selectors.map((selector) => (
+                  <MenuItem key={selector.name} value={selector.name}>
+                    {selector.name}
+                  </MenuItem>
+                ))}
+              </TextField>
+              <Box sx={{ minWidth: 0 }}>
+                <Typography variant="body2" noWrap>
+                  Current node: {requestedNode || 'not selected'}
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {currentProxy?.type
+                    ? `Runtime type: ${currentProxy.type}`
+                    : 'Choose a concrete node in the selected group.'}
+                </Typography>
+              </Box>
+            </Stack>
+            {selectors.length === 0 && (
+              <Alert severity="error">
+                No manual Selector is available in the active Profile. URLTest,
+                Fallback and LoadBalance groups cannot define a reproducible
+                pipeline candidate.
+              </Alert>
+            )}
+            {selectors.length > 1 && !selectedSelector && (
+              <Alert severity="warning">
+                This Profile has multiple manual selectors. Choose the one
+                TrafficTracer should freeze before adding a node.
+              </Alert>
+            )}
+            {currentIssue && <Alert severity="warning">{currentIssue}</Alert>}
+            {invalidCurrentCandidates.length > 0 && (
+              <Alert
+                severity="error"
+                action={
+                  <Button
+                    size="small"
+                    color="inherit"
+                    disabled={disabled}
+                    onClick={() => {
+                      const invalid = new Set(
+                        invalidCurrentCandidates.map(pipelineCandidateIdentity),
+                      )
+                      update(
+                        candidates.filter(
+                          (candidate) =>
+                            !invalid.has(pipelineCandidateIdentity(candidate)),
+                        ),
+                      )
+                    }}
+                  >
+                    Remove invalid
+                  </Button>
+                }
+              >
+                {invalidCurrentCandidates.length} stored candidate(s) use an
+                automatic or unavailable group and cannot be started safely.
+              </Alert>
+            )}
             <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
               <TextField
                 size="small"
@@ -161,8 +277,10 @@ export function TrafficTracerPipelineQueue({
                   disabled ||
                   adding ||
                   !current?.uid ||
-                  !primaryGroupName ||
-                  !currentProxy?.name
+                  !selectionGroup ||
+                  !requestedNode ||
+                  Boolean(currentIssue) ||
+                  invalidCurrentCandidates.length > 0
                 }
                 onClick={() => void addCurrent()}
               >
@@ -186,7 +304,7 @@ export function TrafficTracerPipelineQueue({
               >
                 {candidates.map((candidate, index) => (
                   <Stack
-                    key={`${candidate.profile_uid}\u0000${candidate.selection_group}\u0000${candidate.requested_node}`}
+                    key={pipelineCandidateIdentity(candidate)}
                     direction="row"
                     spacing={1}
                     sx={{
