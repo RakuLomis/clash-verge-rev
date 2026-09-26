@@ -677,6 +677,31 @@ impl PipelineRun {
         self.select_best_attempt();
         Ok(())
     }
+
+    pub fn attach_recovered_attempt_sessions(&mut self, ordinal: u8, session_ids: Vec<String>) -> Result<()> {
+        if session_ids.is_empty()
+            || session_ids.iter().any(|session_id| session_id.is_empty())
+            || session_ids.iter().collect::<HashSet<_>>().len() != session_ids.len()
+        {
+            bail!("recovered Session identities must be non-empty and unique");
+        }
+        let attempt = self
+            .attempts
+            .iter_mut()
+            .find(|attempt| attempt.ordinal == ordinal)
+            .context("pipeline attempt was not found for Session recovery")?;
+        if attempt.state != PipelineRunState::Failed {
+            bail!("only a failed pipeline attempt can recover Session identities");
+        }
+        if !attempt.session_ids.is_empty() && attempt.session_ids != session_ids {
+            bail!("pipeline attempt already references different Sessions");
+        }
+        attempt.session_ids = session_ids.clone();
+        if attempt.selected {
+            self.session_ids = session_ids;
+        }
+        self.validate_attempt_history()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1883,6 +1908,32 @@ mod tests {
         assert_eq!(aggregate.candidates[0].sessions_total, 1);
         assert_eq!(aggregate.candidates[0].attempts_total, 2);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn failed_attempt_can_attach_audited_recovered_session_identity() {
+        let mut manifest = single_matrix();
+        assert_eq!(manifest.begin_next_capture(1).unwrap(), Some(0));
+        manifest
+            .finish_run(
+                PipelineRunState::Failed,
+                Some(PipelineError {
+                    code: "CONTRACT_VALIDATION_FAILED".into(),
+                    message: "artifact role rejected".into(),
+                }),
+            )
+            .unwrap();
+        let run = &mut manifest.runs[0];
+        assert!(run.session_ids.is_empty());
+        assert!(run.attempts[0].session_ids.is_empty());
+
+        run.attach_recovered_attempt_sessions(1, vec!["recovered-session".into()])
+            .unwrap();
+
+        assert_eq!(run.session_ids, vec!["recovered-session"]);
+        assert_eq!(run.attempts[0].session_ids, vec!["recovered-session"]);
+        assert_eq!(run.state, PipelineRunState::Failed);
+        assert_eq!(run.selected_attempt, Some(1));
     }
 
     #[test]

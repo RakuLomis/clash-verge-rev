@@ -33,8 +33,9 @@ use crate::{
                 PipelineAnalysisGeneration, PipelineApplicationIssue, PipelineCandidate, PipelineCleanup,
                 PipelineConfigSnapshot, PipelineConnectionDrain, PipelineError, PipelineManifest, PipelinePolicy,
                 PipelineProfileActivation, PipelineProfileActivationStep, PipelineProxySnapshot, PipelineQualityPlane,
-                PipelineRestore, PipelineRestoreCheck, PipelineRunEvidence, PipelineRunQuality, PipelineRunState,
-                PipelineRunVerification, PipelineSelection, PipelineStage, PipelineState, PipelineTarget, RestoreState,
+                PipelineRestore, PipelineRestoreCheck, PipelineRun, PipelineRunEvidence, PipelineRunQuality,
+                PipelineRunState, PipelineRunVerification, PipelineSelection, PipelineStage, PipelineState,
+                PipelineTarget, RestoreState,
             },
             protocol::{JOB_SCHEMA_VERSION, RequestMethod},
             schedule::{PipelineCandidateOrderPolicy, PipelineSchedule, PipelineScheduleMode},
@@ -2086,6 +2087,31 @@ fn verification_requires_attention(verification: &PipelineRunVerification) -> bo
     verification.node_state != "passed" || verification.protocol_state != "passed"
 }
 
+fn batch_terminal_failure(status: &Value) -> String {
+    let error = status
+        .pointer("/batch/children")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|child| child.get("error"))
+        .find(|error| error.is_object());
+    let code = error
+        .and_then(|value| value.get("code"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("BATCH_CHILD_FAILED");
+    let message = error
+        .and_then(|value| value.get("message"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Batch child failed without an error message");
+    if message.strip_prefix(code).is_some_and(|suffix| suffix.starts_with(':')) {
+        message.to_owned()
+    } else {
+        format!("{code}: {message}")
+    }
+}
+
 fn pipeline_run_error(message: String) -> PipelineError {
     let code = message
         .split_once(':')
@@ -3267,6 +3293,14 @@ async fn execute_pipeline_run(
                 .batch_id
                 .as_deref()
                 .and_then(|batch_id| batch_effective_sessions(&run.output_path, batch_id));
+            if let Some(session_ids) = &effective_sessions {
+                let mut session_ids = session_ids.iter().cloned().collect::<Vec<_>>();
+                session_ids.sort();
+                manifest.runs[index].session_ids = session_ids;
+            }
+            if state == "failed" {
+                return Err(batch_terminal_failure(&status));
+            }
             if run.target_index.is_some() {
                 return Ok(match state {
                     "completed" if effective_sessions.is_some() => PipelineRunState::Captured,
@@ -4157,6 +4191,112 @@ pub fn tt_pipeline_status(pipeline_root: String) -> CmdResult<serde_json::Value>
     Ok(response)
 }
 
+const FINALIZATION_REPAIR_WARNING: &str = "RECOVERED_AFTER_ARTIFACT_CONTRACT_FAILURE";
+
+fn collect_session_manifests(directory: &Path, manifests: &mut Vec<PathBuf>) -> Result<(), String> {
+    for entry in fs::read_dir(directory).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let kind = entry.file_type().map_err(|error| error.to_string())?;
+        if kind.is_dir() {
+            collect_session_manifests(&entry.path(), manifests)?;
+        } else if kind.is_file() && name == "manifest.json" {
+            manifests.push(entry.path());
+        }
+    }
+    Ok(())
+}
+
+fn recovered_finalization_session_ids(
+    run: &PipelineRun,
+    target: &PipelineTarget,
+) -> Result<Option<Vec<String>>, String> {
+    if !run.session_ids.is_empty() || run.state != PipelineRunState::Failed {
+        return Ok(None);
+    }
+    let Some(selected_ordinal) = run.selected_attempt else {
+        return Ok(None);
+    };
+    let selected = run
+        .attempts
+        .iter()
+        .find(|attempt| attempt.ordinal == selected_ordinal)
+        .ok_or_else(|| "selected pipeline attempt is missing".to_owned())?;
+    if !selected.session_ids.is_empty() || selected.state != PipelineRunState::Failed {
+        return Ok(None);
+    }
+    let Some(batch_id) = selected.batch_id.as_deref().or(run.batch_id.as_deref()) else {
+        return Ok(None);
+    };
+    let batch_path = run
+        .output_path
+        .join(".batches")
+        .join(batch_id)
+        .join("batch-manifest.json");
+    let batch: Value = serde_json::from_slice(&fs::read(&batch_path).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    let expected_failure = batch
+        .get("children")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|child| child.get("attempts").and_then(Value::as_array).into_iter().flatten())
+        .filter_map(|attempt| attempt.get("error"))
+        .any(|error| {
+            error.get("code").and_then(Value::as_str) == Some("CONTRACT_VALIDATION_FAILED")
+                && error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .is_some_and(|message| message.contains("session_v2/artifacts/") && message.contains("/role"))
+        });
+    if !expected_failure {
+        return Ok(None);
+    }
+
+    let mut manifests = Vec::new();
+    collect_session_manifests(&run.output_path, &mut manifests)?;
+    if manifests.len() != 1 {
+        return Err(format!(
+            "recovered run {} must contain exactly one Session manifest; found {}",
+            run.ordinal,
+            manifests.len()
+        ));
+    }
+    let value: Value = serde_json::from_slice(&fs::read(&manifests[0]).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    let warnings = value.get("warnings").and_then(Value::as_array);
+    let repaired = warnings.is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| item.as_str() == Some(FINALIZATION_REPAIR_WARNING))
+    });
+    let has_semantics = value.get("artifacts").and_then(Value::as_array).is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| item.get("role").and_then(Value::as_str) == Some("proxy_semantics"))
+    });
+    if value.get("state").and_then(Value::as_str) != Some("completed")
+        || !repaired
+        || !has_semantics
+        || value.pointer("/target/url").and_then(Value::as_str) != Some(target.url.as_str())
+        || value.pointer("/target/domain").and_then(Value::as_str) != Some(target.domain.as_str())
+    {
+        return Err(format!(
+            "run {} does not contain an audited recovered Session",
+            run.ordinal
+        ));
+    }
+    let session_id = value
+        .get("session_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "recovered Session identity is missing".to_owned())?;
+    Ok(Some(vec![session_id.to_owned()]))
+}
+
 #[tauri::command]
 pub async fn tt_pipeline_reconcile(pipeline_root: String) -> CmdResult<serde_json::Value> {
     let root = PathBuf::from(pipeline_root);
@@ -4177,7 +4317,25 @@ fn reconcile_pipeline_analyses(root: PathBuf) -> CmdResult<serde_json::Value> {
     if !manifest.state.terminal() {
         return Err("only a terminal TrafficTracer pipeline can reconcile existing analyses".into());
     }
-    for run in &mut manifest.runs {
+    for index in 0..manifest.runs.len() {
+        if manifest.runs[index].session_ids.is_empty() {
+            let target_index = manifest.runs[index]
+                .target_index
+                .ok_or_else(|| "pipeline run target identity is missing".to_owned())?;
+            let target = manifest
+                .targets
+                .iter()
+                .find(|target| target.index == target_index)
+                .cloned()
+                .ok_or_else(|| "pipeline run target was not found".to_owned())?;
+            if let Some(session_ids) = recovered_finalization_session_ids(&manifest.runs[index], &target)? {
+                let ordinal = manifest.runs[index].selected_attempt.expect("checked above");
+                manifest.runs[index]
+                    .attach_recovered_attempt_sessions(ordinal, session_ids)
+                    .stringify_err()?;
+            }
+        }
+        let run = &mut manifest.runs[index];
         let attempts = run
             .attempts
             .iter()
@@ -6438,6 +6596,142 @@ mod tests {
         let serialized = serde_json::to_string(&first).unwrap();
         assert!(!serialized.contains("private-node"));
         assert!(!serialized.contains("private-password"));
+    }
+
+    #[test]
+    fn batch_terminal_failure_preserves_child_error() {
+        let status = serde_json::json!({
+            "batch": {
+                "children": [{
+                    "error": {
+                        "code": "CONTRACT_VALIDATION_FAILED",
+                        "message": "session artifact role was rejected"
+                    }
+                }]
+            }
+        });
+
+        assert_eq!(
+            batch_terminal_failure(&status),
+            "CONTRACT_VALIDATION_FAILED: session artifact role was rejected"
+        );
+        assert_eq!(
+            pipeline_run_error(batch_terminal_failure(&status)).code,
+            "CONTRACT_VALIDATION_FAILED"
+        );
+
+        let prefixed = serde_json::json!({
+            "batch": {
+                "children": [{
+                    "error": {
+                        "code": "CONTRACT_VALIDATION_FAILED",
+                        "message": "CONTRACT_VALIDATION_FAILED: role was rejected"
+                    }
+                }]
+            }
+        });
+        assert_eq!(
+            batch_terminal_failure(&prefixed),
+            "CONTRACT_VALIDATION_FAILED: role was rejected"
+        );
+    }
+
+    #[test]
+    fn repaired_session_is_attached_only_with_matching_audit_evidence() {
+        let root = std::env::temp_dir().join(format!(
+            "traffictracer-finalization-repair-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let batch_id = "123e4567-e89b-42d3-a456-426614174010";
+        let session_id = "123e4567-e89b-42d3-a456-426614174011";
+        fs::create_dir_all(root.join(".batches").join(batch_id)).unwrap();
+        fs::create_dir_all(root.join("example.com/page")).unwrap();
+        fs::write(
+            root.join(".batches").join(batch_id).join("batch-manifest.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "children": [{
+                    "attempts": [{
+                        "error": {
+                            "code": "CONTRACT_VALIDATION_FAILED",
+                            "message": "session_v2/artifacts/3/role: value is not one of the allowed values"
+                        }
+                    }]
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("example.com/page/manifest.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "state": "completed",
+                "session_id": session_id,
+                "target": {
+                    "url": "https://example.com/",
+                    "domain": "example.com"
+                },
+                "warnings": [FINALIZATION_REPAIR_WARNING],
+                "artifacts": [{"role": "proxy_semantics"}]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let run: PipelineRun = serde_json::from_value(serde_json::json!({
+            "ordinal": 1,
+            "run_id": "123e4567-e89b-42d3-a456-426614174012",
+            "profile_uid": "profile",
+            "profile_fingerprint": "a".repeat(64),
+            "selection_group": "selector",
+            "requested_node": "node",
+            "state": "failed",
+            "stage": "finished",
+            "resolved_chain": [],
+            "resolved_leaf": null,
+            "expected_protocol": "ss",
+            "observed_protocol": "ss",
+            "batch_id": batch_id,
+            "output_path": root,
+            "attempts": [{
+                "ordinal": 1,
+                "state": "failed",
+                "observed_protocol": "ss",
+                "session_ids": [],
+                "batch_id": batch_id,
+                "error": null,
+                "selected": true,
+                "started_at": null,
+                "completed_at": "2026-09-25T16:00:00Z"
+            }],
+            "selected_attempt": 1,
+            "error": null,
+            "resume_attempt": 0,
+            "started_at": null,
+            "completed_at": "2026-09-25T16:00:00Z"
+        }))
+        .unwrap();
+        let target = PipelineTarget {
+            index: 0,
+            url: "https://example.com/".into(),
+            domain: "example.com".into(),
+            duration_seconds: 10,
+            network: "all".into(),
+            run_label: "page".into(),
+            wait_load_timeout: 30,
+            page_type: "page".into(),
+            playback: None,
+        };
+
+        assert_eq!(
+            recovered_finalization_session_ids(&run, &target).unwrap(),
+            Some(vec![session_id.to_owned()])
+        );
+        let mismatched = PipelineTarget {
+            url: "https://other.example/".into(),
+            ..target
+        };
+        assert!(recovered_finalization_session_ids(&run, &mismatched).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
